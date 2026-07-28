@@ -111,7 +111,7 @@ async def claim(ctx, quest_id: int):
 
     cursor.execute(
         """
-        SELECT id, name, type, completed
+        SELECT id, name, type, assigned_to, completed
         FROM quests
         WHERE id = ?
         """,
@@ -123,14 +123,16 @@ async def claim(ctx, quest_id: int):
         await ctx.send(f"Sprig cannot find quest #{quest_id} 👀")
         return
 
-    quest_id, name, qtype, completed = quest
+    quest_id, name, qtype, assigned_to, completed = quest
 
     if completed:
         await ctx.send(f"Quest #{quest_id} is already completed! ✨")
         return
 
-    if qtype != "open":
-        await ctx.send(f"Quest #{quest_id} is not claimable!")
+    if assigned_to:
+        await ctx.send(
+            f"Quest #{quest_id} is assigned and does not need to be claimed!"
+        )
         return
 
     cursor.execute(
@@ -185,15 +187,14 @@ async def done(ctx, quest_id: int):
         return
 
     # Assigned quests can only be completed by the assigned person.
-    if qtype == "assigned" and assigned_to:
-        if assigned_to != user_id:
-            await ctx.send(
-                f"🚫 Quest #{quest_id} is assigned to someone else!"
-            )
-            return
+    if assigned_to and assigned_to != user_id:
+    await ctx.send(
+        f"🚫 Quest #{quest_id} is assigned to someone else!"
+    )
+    return
 
     # Open quests must first be claimed by the person completing them.
-    if qtype == "open":
+    if not assigned_to:
         cursor.execute(
             "SELECT user_id FROM claims WHERE quest_id = ?",
             (quest_id,)
@@ -325,7 +326,7 @@ async def quests(ctx):
         claimed_by
     ) in quest_rows:
 
-        if qtype == "assigned" and assigned_to:
+        if assigned_to:
             status = f"assigned to {assigned_to}"
         elif claimed_by:
             status = f"claimed by {claimed_by}"
