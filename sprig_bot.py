@@ -70,6 +70,27 @@ WHERE assigned_to LIKE '<@%>'
 """)
 db.commit()
 
+async def get_member_name(ctx, user_id):
+    if not user_id:
+        return None
+
+    try:
+        member_id = int(user_id)
+    except (TypeError, ValueError):
+        return str(user_id)
+
+    # Try the local Discord cache first.
+    member = ctx.guild.get_member(member_id)
+
+    # Ask Discord directly if the member is not cached.
+    if member is None:
+        try:
+            member = await ctx.guild.fetch_member(member_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return f"Unknown user ({user_id})"
+
+    return member.display_name
+
 # --- Helper ---
 def get_or_create_user(user_id):
     cursor.execute("INSERT OR IGNORE INTO users (id) VALUES (?)", (user_id,))
@@ -326,10 +347,13 @@ async def quests(ctx):
         claimed_by
     ) in quest_rows:
 
+        assigned_name = await get_member_name(ctx, assigned_to)
+        claimed_name = await get_member_name(ctx, claimed_by)
+
         if assigned_to:
-            status = f"assigned to {assigned_to}"
+            status = f"assigned to {assigned_name}"
         elif claimed_by:
-            status = f"claimed by {claimed_by}"
+            status = f"claimed by {claimed_name}"
         else:
             status = "open"
 
