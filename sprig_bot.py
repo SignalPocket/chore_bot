@@ -201,12 +201,26 @@ def calculate_reset_after(completed_at, frequency):
 
     if frequency == "daily":
         reset_date = local_time.date() + timedelta(days=1)
+        reset_time = datetime.combine(
+            reset_date,
+            datetime.min.time(),
+            tzinfo=QUEST_TIMEZONE,
+        )
 
     elif frequency == "weekly":
-        days_until_monday = (7 - local_time.weekday()) % 7
-        if days_until_monday == 0:
-            days_until_monday = 7
-        reset_date = local_time.date() + timedelta(days=days_until_monday)
+        # Weekly quests reset at the household handoff boundary:
+        # Sunday at 6:00 PM in QUEST_TIMEZONE.
+        days_until_sunday = (6 - local_time.weekday()) % 7
+        reset_date = local_time.date() + timedelta(days=days_until_sunday)
+        reset_time = datetime.combine(
+            reset_date,
+            datetime.min.time().replace(hour=18),
+            tzinfo=QUEST_TIMEZONE,
+        )
+
+        # If this Sunday's reset has already happened, use next Sunday.
+        if reset_time <= local_time:
+            reset_time += timedelta(days=7)
 
     elif frequency == "monthly":
         if local_time.month == 12:
@@ -221,14 +235,15 @@ def calculate_reset_after(completed_at, frequency):
                 day=1,
             )
 
+        reset_time = datetime.combine(
+            reset_date,
+            datetime.min.time(),
+            tzinfo=QUEST_TIMEZONE,
+        )
+
     else:
         return None
 
-    reset_time = datetime.combine(
-        reset_date,
-        datetime.min.time(),
-        tzinfo=QUEST_TIMEZONE,
-    )
     return reset_time.isoformat()
 
 
