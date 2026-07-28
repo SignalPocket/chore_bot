@@ -188,10 +188,10 @@ async def done(ctx, quest_id: int):
 
     # Assigned quests can only be completed by the assigned person.
     if assigned_to and assigned_to != user_id:
-    await ctx.send(
-        f"🚫 Quest #{quest_id} is assigned to someone else!"
-    )
-    return
+        await ctx.send(
+            f"🚫 Quest #{quest_id} is assigned to someone else!"
+        )
+        return
 
     # Open quests must first be claimed by the person completing them.
     if not assigned_to:
