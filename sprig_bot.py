@@ -1,6 +1,7 @@
 import os
 import sqlite3
 from datetime import datetime, timedelta
+from difflib import get_close_matches
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -46,7 +47,11 @@ FREQUENCY_ALIASES = {
 
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents,
+    help_command=None,
+)
 
 db = sqlite3.connect(BASE_DIR / "sprig.db")
 cursor = db.cursor()
@@ -1096,6 +1101,298 @@ async def leaderboard(ctx):
 @bot.command()
 async def hello(ctx):
     await ctx.send("Sprig says hello!! ☁️✨")
+
+
+# --- Sprig help system ---
+
+HELP_COMMANDS = {
+    "quests": {
+        "summary": "Show every quest that is currently available.",
+        "usage": "!quests",
+        "examples": ["!quests"],
+        "details": [
+            "The board shows quest numbers, frequency, points, category, "
+            "difficulty, and claim or assignment status.",
+            "Use the quest number with commands such as `!claim 2` and "
+            "`!done 2`.",
+        ],
+    },
+    "quest": {
+        "summary": "Show all details for one quest.",
+        "usage": "!quest NUMBER",
+        "examples": ["!quest 2"],
+        "details": [
+            "Shows the quest's schedule, points, category, difficulty, "
+            "status, notes, last completion, and next reset.",
+        ],
+    },
+    "claim": {
+        "summary": "Reserve an open quest for yourself.",
+        "usage": "!claim NUMBER",
+        "examples": ["!claim 2"],
+        "details": [
+            "Assigned quests do not need to be claimed.",
+            "Only the person who claimed an open quest can complete it.",
+        ],
+    },
+    "unclaim": {
+        "summary": "Release a quest that you previously claimed.",
+        "usage": "!unclaim NUMBER",
+        "examples": ["!unclaim 2"],
+        "details": [
+            "Only the person who claimed the quest can release it.",
+        ],
+    },
+    "done": {
+        "summary": "Complete a quest and collect its points.",
+        "usage": "!done NUMBER",
+        "examples": ["!done 2"],
+        "details": [
+            "Open quests must be claimed first.",
+            "Assigned quests can only be completed by their assigned member.",
+            "Recurring quests return automatically at their next reset.",
+        ],
+    },
+    "addquest": {
+        "summary": "Create a new quest.",
+        "usage": '!addquest "NAME" FREQUENCY POINTS [@MEMBER]',
+        "examples": [
+            '!addquest "Afternoon dishes" daily 5',
+            '!addquest "Take out recycling" weekly 10 @ginaria',
+            '!addquest "Clean the garage" one-time 25',
+        ],
+        "details": [
+            "Put multiword quest names in quotation marks.",
+            "Frequencies: `daily`, `weekly`, `monthly`, `one-time`.",
+            "Leave off the member mention to make the quest open to everyone.",
+            "New quests start in the `general` category with `normal` "
+            "difficulty.",
+        ],
+    },
+    "editquest": {
+        "summary": "Change one field on an existing quest.",
+        "usage": "!editquest NUMBER FIELD VALUE",
+        "examples": [
+            "!editquest 2 category kitchen",
+            "!editquest 2 difficulty easy",
+            "!editquest 2 points 10",
+            "!editquest 2 frequency weekly",
+            "!editquest 2 assigned_to @ginaria",
+            "!editquest 2 assigned_to open",
+            "!editquest 2 notes Empty the dishwasher and wipe the counter.",
+        ],
+        "details": [
+            "Editable fields: `name`, `frequency`, `points`, `assigned_to`, "
+            "`category`, `difficulty`, and `notes`.",
+            "Difficulties: `easy`, `normal`, `hard`, `epic`.",
+            "Use `open` for `assigned_to` to remove an assignment.",
+            "Use `clear` for `notes` to erase the notes.",
+        ],
+    },
+    "resetquest": {
+        "summary": "Reopen a completed quest immediately.",
+        "usage": "!resetquest NUMBER",
+        "examples": ["!resetquest 2"],
+        "details": [
+            "Clears the quest's completion state, next reset, and claim.",
+            "This is a manual override. Daily, weekly, and monthly quests "
+            "normally reset by themselves.",
+        ],
+    },
+    "deletequest": {
+        "summary": "Permanently delete a quest.",
+        "usage": "!deletequest NUMBER",
+        "examples": ["!deletequest 2"],
+        "details": [
+            "This also removes any active claim on the quest.",
+            "Deletion cannot currently be undone through Discord.",
+        ],
+    },
+    "points": {
+        "summary": "Show your total points and current streak.",
+        "usage": "!points",
+        "examples": ["!points"],
+        "details": [
+            "Your streak increases when you complete quests on consecutive "
+            "days.",
+            "Completing more than one quest on the same day does not increase "
+            "the streak more than once.",
+        ],
+    },
+    "leaderboard": {
+        "summary": "Show the five highest point totals.",
+        "usage": "!leaderboard",
+        "examples": ["!leaderboard"],
+        "details": [
+            "Only members who have completed at least one quest appear.",
+        ],
+    },
+    "hello": {
+        "summary": "Ask Sprig to say hello.",
+        "usage": "!hello",
+        "examples": ["!hello"],
+        "details": ["A tiny botanical systems check."],
+    },
+    "help": {
+        "summary": "Open Sprig's guide or inspect one command category.",
+        "usage": "!help [COMMAND or CATEGORY]",
+        "examples": [
+            "!help",
+            "!help claim",
+            "!help editquest",
+            "!help management",
+        ],
+        "details": [
+            "Categories: `playing`, `management`, `progress`, and `other`.",
+        ],
+    },
+}
+
+HELP_CATEGORIES = {
+    "playing": {
+        "title": "🎯 Playing",
+        "description": "Find, reserve, release, and complete quests.",
+        "commands": ["quests", "quest", "claim", "unclaim", "done"],
+    },
+    "management": {
+        "title": "🛠️ Quest Management",
+        "description": "Create, edit, reopen, and remove quests.",
+        "commands": [
+            "addquest",
+            "editquest",
+            "resetquest",
+            "deletequest",
+        ],
+    },
+    "progress": {
+        "title": "🏆 Progress",
+        "description": "Check points, streaks, and rankings.",
+        "commands": ["points", "leaderboard"],
+    },
+    "other": {
+        "title": "🌿 Other",
+        "description": "General Sprig commands.",
+        "commands": ["help", "hello"],
+    },
+}
+
+
+def help_command_lines(command_names):
+    return "\n".join(
+        f"`!{name}` — {HELP_COMMANDS[name]['summary']}"
+        for name in command_names
+    )
+
+
+@bot.command(name="help")
+async def custom_help(ctx, *, topic: str = None):
+    """Show Sprig's command guide."""
+    if not topic:
+        embed = discord.Embed(
+            title="🌱 Sprig's Quest Guide",
+            description=(
+                "Use quest **numbers** for everyday commands. "
+                "Try `!help COMMAND` for examples and details."
+            ),
+        )
+
+        for category in HELP_CATEGORIES.values():
+            embed.add_field(
+                name=category["title"],
+                value=help_command_lines(category["commands"]),
+                inline=False,
+            )
+
+        embed.add_field(
+            name="🕰️ Automatic Resets",
+            value=(
+                "`daily` — midnight each day\n"
+                "`weekly` — Sunday at 6:00 PM\n"
+                "`monthly` — first day of the month\n"
+                "`one-time` — never resets automatically"
+            ),
+            inline=False,
+        )
+
+        embed.add_field(
+            name="💡 First Steps",
+            value=(
+                "1. Run `!quests`\n"
+                "2. Reserve an open quest with `!claim NUMBER`\n"
+                "3. Finish it with `!done NUMBER`"
+            ),
+            inline=False,
+        )
+
+        embed.set_footer(
+            text="Examples: !help addquest • !help done • !help management"
+        )
+        await ctx.send(embed=embed)
+        return
+
+    lookup = topic.strip().lower().lstrip("!")
+
+    if lookup in HELP_CATEGORIES:
+        category = HELP_CATEGORIES[lookup]
+        embed = discord.Embed(
+            title=category["title"],
+            description=category["description"],
+        )
+        embed.add_field(
+            name="Commands",
+            value=help_command_lines(category["commands"]),
+            inline=False,
+        )
+        embed.set_footer(text="Use !help COMMAND for full examples.")
+        await ctx.send(embed=embed)
+        return
+
+    command_info = HELP_COMMANDS.get(lookup)
+
+    if command_info is None:
+        choices = list(HELP_COMMANDS) + list(HELP_CATEGORIES)
+        matches = get_close_matches(lookup, choices, n=3, cutoff=0.45)
+
+        suggestion = ""
+        if matches:
+            suggestion = (
+                "\n\nDid you mean: "
+                + ", ".join(f"`!help {match}`" for match in matches)
+                + "?"
+            )
+
+        await ctx.send(
+            f"Sprig cannot find help for `{topic}`. "
+            "Use `!help` to see everything."
+            f"{suggestion}"
+        )
+        return
+
+    embed = discord.Embed(
+        title=f"🌿 !{lookup}",
+        description=command_info["summary"],
+    )
+    embed.add_field(
+        name="Usage",
+        value=f"`{command_info['usage']}`",
+        inline=False,
+    )
+    embed.add_field(
+        name="Examples",
+        value="\n".join(
+            f"`{example}`" for example in command_info["examples"]
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Good to Know",
+        value="\n".join(
+            f"• {detail}" for detail in command_info["details"]
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Use !help to return to the full guide.")
+    await ctx.send(embed=embed)
 
 
 # --- Friendly command errors ---
