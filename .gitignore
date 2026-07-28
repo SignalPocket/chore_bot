@@ -1,0 +1,6 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+sprig.db
+chore_bot.env
