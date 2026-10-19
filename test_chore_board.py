@@ -21,7 +21,7 @@ class Response:
         self.payload = None
         self.acknowledged = False
 
-    async def defer(self):
+    async def defer(self, **kwargs):
         self.acknowledged = True
 
     async def send_message(self, *args, **kwargs):
@@ -40,6 +40,7 @@ class Interaction:
         self.guild_id, self.channel_id = 1, 2
         self.guild = SimpleNamespace(get_member=lambda uid: SimpleNamespace(display_name=f"Person {uid}"))
         self.response = Response()
+        self.followup = SimpleNamespace(send=self.response.send_message)
         self.result = None
 
     async def edit_original_response(self, **kwargs):
@@ -664,8 +665,30 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await view.interaction_check(event))
             self.assertFalse(await view.interaction_check(Interaction(20)))
             await next(c for c in view.children if c.label=='Next week').callback(event)
-            self.assertEqual(event.response.payload['view'].offset,1)
-            self.assertIn('Next week',event.response.payload['embed'].description)
+            self.assertEqual(event.result['view'].offset,1)
+            self.assertIn('Next week',event.result['embed'].description)
+
+    async def test_roster_fetches_uncached_member_nickname(self):
+        guild=SimpleNamespace(get_member=lambda uid:None,fetch_member=AsyncMock(return_value=SimpleNamespace(display_name='Katie nickname')))
+        view=await self.ui.responsibility_view(10,guild)
+        self.assertIn('Katie nickname',str(view.embed.to_dict()))
+        self.assertNotIn('Account 10',str(view.embed.to_dict()))
+        guild.fetch_member.assert_awaited_once_with(10)
+
+    async def test_roster_uses_existing_user_lookup_when_member_unavailable(self):
+        error=discord.Forbidden(SimpleNamespace(status=403,reason='Forbidden'),'No access')
+        guild=SimpleNamespace(get_member=lambda uid:None,fetch_member=AsyncMock(side_effect=error))
+        with patch.object(self.app.bot,'get_user',return_value=None),patch.object(self.app.bot,'fetch_user',new=AsyncMock(return_value=SimpleNamespace(display_name='Known user'))) as fetch:
+            view=await self.ui.responsibility_view(10,guild)
+            self.assertIn('Known user',str(view.embed.to_dict()))
+            fetch.assert_awaited_once_with(10)
+
+    async def test_roster_keeps_readable_fallback_when_discord_lookup_fails(self):
+        error=discord.NotFound(SimpleNamespace(status=404,reason='Not Found'),'Gone')
+        guild=SimpleNamespace(get_member=lambda uid:None,fetch_member=AsyncMock(side_effect=error))
+        with patch.object(self.app.bot,'get_user',return_value=None),patch.object(self.app.bot,'fetch_user',new=AsyncMock(side_effect=error)):
+            view=await self.ui.responsibility_view(10,guild)
+            self.assertIn('Unknown user (10)',str(view.embed.to_dict()))
 
     async def test_roster_paginates_and_missing_members_have_fallback(self):
         with self.clock('2026-10-19T10:00:00'):

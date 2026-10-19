@@ -252,13 +252,20 @@ def install(namespace):
             result.append((str(owner) if owner else None,qid,name,frequency,kind,status))
         return result
 
+    async def responsibility_view(owner,guild,offset=0,page=0):
+        names={}
+        context=SimpleNamespace(guild=guild)
+        for uid in {r[0] for r in responsibility_rows(offset) if r[0]}:
+            names[uid]=await namespace['get_member_name'](context,uid)
+        return ResponsibilityView(owner,guild,offset,page,names)
+
     class ResponsibilityView(SafeView):
-        def __init__(self,owner,guild,offset=0,page=0):
+        def __init__(self,owner,guild,offset=0,page=0,names=None):
             super().__init__(timeout=600)
             self.owner,self.guild,self.offset=owner,guild,offset
             def display(uid):
                 member=guild.get_member(int(uid)) if uid else None
-                return discord.utils.escape_markdown(member.display_name if member else (f'Account {uid}' if uid else 'Nobody signed up'))[:100]
+                return discord.utils.escape_markdown((names or {}).get(uid) or (member.display_name if member else (f'Account {uid}' if uid else 'Nobody signed up')))[:100]
             entries=sorted(responsibility_rows(offset),key=lambda r:(r[0] is None,display(r[0]).casefold(),r[2].casefold(),r[1]))
             self.entries=entries
             self.page=min(max(page,0),max((len(entries)-1)//8,0))
@@ -290,8 +297,9 @@ def install(namespace):
             return True
 
         async def show(self,interaction,offset=None,page=None):
-            view=ResponsibilityView(self.owner,interaction.guild,self.offset if offset is None else offset,self.page if page is None else page)
-            await interaction.response.edit_message(embed=view.embed,view=view,allowed_mentions=discord.AllowedMentions.none())
+            await interaction.response.defer()
+            view=await responsibility_view(self.owner,interaction.guild,self.offset if offset is None else offset,self.page if page is None else page)
+            await interaction.edit_original_response(embed=view.embed,view=view,allowed_mentions=discord.AllowedMentions.none())
 
     class WeeklyView(SafeView):
         def __init__(self, owner, offset=0, page=0, selected=None, notice=""):
@@ -718,8 +726,9 @@ def install(namespace):
 
         @discord.ui.button(label="Who’s doing what?", custom_id="sprig:responsibilities:v1", row=1)
         async def responsibility_button(self,interaction,button):
-            view=ResponsibilityView(interaction.user.id,interaction.guild)
-            await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+            await interaction.response.defer(ephemeral=True,thinking=True)
+            view=await responsibility_view(interaction.user.id,interaction.guild)
+            await interaction.followup.send(embed=view.embed,view=view,ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
 
         @discord.ui.button(label="Help", custom_id="sprig:help:v1", row=1)
         async def help_button(self, interaction, button):
@@ -868,4 +877,4 @@ def install(namespace):
             bot.tree.add_command(bot.tree.get_command('chores'),guild=discord.Object(id=int(saved[0])),override=True)
 
     bot.setup_hook = setup_hook
-    return SimpleNamespace(responsibility_rows=responsibility_rows, ResponsibilityView=ResponsibilityView, Launcher=Launcher, PersonalView=PersonalView, WeeklyView=WeeklyView, HouseholdSetup=HouseholdSetup, AddChoreModal=AddChoreModal, AddChoreMenu=AddChoreMenu, RemoveChoreView=RemoveChoreView, EditChoreView=EditChoreView, EditChoreModal=EditChoreModal, RepeatMenu=RepeatMenu, WeekdayMenu=WeekdayMenu, update_chore=update_chore, ready=timing.ready, completion_reset=timing.completion_reset, timing=timing, is_archived=is_archived, create_chore=create_chore, snapshot=snapshot, rows=rows, week_key=week_key, available=available, weekly_owner=weekly_owner, signup=signup)
+    return SimpleNamespace(responsibility_view=responsibility_view, responsibility_rows=responsibility_rows, ResponsibilityView=ResponsibilityView, Launcher=Launcher, PersonalView=PersonalView, WeeklyView=WeeklyView, HouseholdSetup=HouseholdSetup, AddChoreModal=AddChoreModal, AddChoreMenu=AddChoreMenu, RemoveChoreView=RemoveChoreView, EditChoreView=EditChoreView, EditChoreModal=EditChoreModal, RepeatMenu=RepeatMenu, WeekdayMenu=WeekdayMenu, update_chore=update_chore, ready=timing.ready, completion_reset=timing.completion_reset, timing=timing, is_archived=is_archived, create_chore=create_chore, snapshot=snapshot, rows=rows, week_key=week_key, available=available, weekly_owner=weekly_owner, signup=signup)
