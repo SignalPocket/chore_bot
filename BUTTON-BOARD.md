@@ -1,5 +1,15 @@
 # Sprig's button chore board
 
+## Fresh controls without jumping through chat history — prepared update
+
+**/chores** opens a fully private set of chore buttons at the current chat position. Only the caller sees the panel, lists, and confirmations. **!chores** also opens fresh buttons at the current position, but Discord text commands require an ordinary public starter message; every subsequent button action responds privately. It explicitly tells users to use /chores for zero public bot messages. Command messages and old panels are not deleted automatically.
+
+Both entry points work in channels of the configured household server where the caller already has access to the canonical chores channel and message history. The existing pinned panel and !board link remain available. Fresh controls expire after ten minutes or a restart; open a new panel when needed.
+
+After an approved deployment/restart, an administrator runs **!enableprivatechores** once in the household server to register /chores. Registration is explicit, not performed automatically at startup. It refuses to sync if doing so would remove unrelated existing server slash commands. The local slash-command handler is restored on restart without remote synchronization. All registration/posting approval rules remain in force for assistant actions.
+
+**41 offline tests passed**, including fresh controls, private slash responses and follow-ups, existing channel access, and safe command registration. No live slash registration, push, or deployment has occurred for this prepared update.
+
 ## Find the board — prepared shortcut
 
 Anyone in the household server can type `!board` from any channel to get a link to the saved existing panel. It does not repost the board or alter chores. The person must already be able to view the chores channel and its message history; it does not reveal another server's board. If setup is missing or pending, it asks the household to inspect setup without creating a duplicate.

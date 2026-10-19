@@ -125,7 +125,18 @@ def install(namespace):
 
     def allowed(interaction):
         saved = location()
-        return saved and str(interaction.guild_id) == saved[0] and str(interaction.channel_id) == saved[1]
+        if not saved or saved[2]=='pending' or str(interaction.guild_id)!=saved[0]:
+            return False
+        if str(interaction.channel_id)==saved[1]:
+            return True
+        # Fresh private panels can be opened elsewhere in the household server,
+        # but never bypass permission to the canonical chores channel.
+        getter=getattr(interaction.guild,'get_channel',None)
+        channel=getter(int(saved[1])) if getter else None
+        if channel is None:
+            return False
+        permissions=channel.permissions_for(interaction.user)
+        return permissions.view_channel and permissions.read_message_history
 
     class SafeView(discord.ui.View):
         async def on_error(self, interaction, error, item):
@@ -579,8 +590,8 @@ def install(namespace):
             await interaction.response.edit_message(embed=view.embed,view=view)
 
     class Launcher(SafeView):
-        def __init__(self):
-            super().__init__(timeout=None)
+        def __init__(self,timeout=None):
+            super().__init__(timeout=timeout)
 
         async def interaction_check(self, interaction):
             if not allowed(interaction):
@@ -628,6 +639,39 @@ def install(namespace):
         async def edit_button(self,interaction,button):
             view=EditChoreView(interaction.user.id)
             await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True)
+
+    @bot.hybrid_command(name='chores',description='Open your chore buttons here, privately when using /chores')
+    @commands.guild_only()
+    async def chores(ctx):
+        """A fresh local entry point; slash responses and all button actions are private."""
+        private=bool(ctx.interaction)
+        check=SimpleNamespace(guild_id=ctx.guild.id if ctx.guild else None,channel_id=ctx.channel.id,guild=ctx.guild,user=ctx.author)
+        if not allowed(check):
+            await ctx.send("Use the household server with access to the chores channel. Check panel setup if it hasn't been completed.",ephemeral=private)
+            return
+        text='🌱 **Your chore controls** — choose a button below. Only you see the follow-up lists and confirmations. Reopen after 10 minutes or a restart.'
+        if not private:
+            text+='\nThis starter message is public. Use **/chores** for a fully private panel without a channel message.'
+        await ctx.send(text,view=Launcher(timeout=600),ephemeral=private,allowed_mentions=discord.AllowedMentions.none())
+
+    @bot.command(name='enableprivatechores')
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_guild=True)
+    async def enableprivatechores(ctx):
+        """One-time explicit registration of /chores in the household guild."""
+        saved=location()
+        if not saved or saved[2]=='pending' or str(ctx.guild.id)!=saved[0]:
+            await ctx.send('Finish household panel setup in this server first.')
+            return
+        guild=discord.Object(id=int(saved[0]))
+        existing=await bot.tree.fetch_commands(guild=guild)
+        local_names={command.name for command in bot.tree.get_commands(guild=guild)} | {'chores'}
+        if any(command.name not in local_names for command in existing):
+            await ctx.send("Other server commands aren't represented in this bot's command tree. Nothing synced, so they won't be overwritten.")
+            return
+        bot.tree.add_command(bot.tree.get_command('chores'),guild=guild,override=True)
+        await bot.tree.sync(guild=guild)
+        await ctx.send('Enabled **/chores** in this household server. It opens a fully private panel. No chores or board messages were changed.')
 
     @bot.command(name="board")
     @commands.guild_only()
@@ -694,6 +738,11 @@ def install(namespace):
     async def setup_hook():
         await previous_setup()
         bot.add_view(Launcher())
+        saved=location()
+        if saved and saved[2]!='pending':
+            # Register the local handler after restarts; do not sync remotely
+            # until an administrator explicitly enables the slash command.
+            bot.tree.add_command(bot.tree.get_command('chores'),guild=discord.Object(id=int(saved[0])),override=True)
 
     bot.setup_hook = setup_hook
     return SimpleNamespace(Launcher=Launcher, PersonalView=PersonalView, WeeklyView=WeeklyView, HouseholdSetup=HouseholdSetup, AddChoreModal=AddChoreModal, AddChoreMenu=AddChoreMenu, RemoveChoreView=RemoveChoreView, EditChoreView=EditChoreView, EditChoreModal=EditChoreModal, WeekdayMenu=WeekdayMenu, update_chore=update_chore, ready=timing.ready, completion_reset=timing.completion_reset, timing=timing, is_archived=is_archived, create_chore=create_chore, snapshot=snapshot, rows=rows, week_key=week_key, available=available, weekly_owner=weekly_owner, signup=signup)

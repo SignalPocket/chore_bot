@@ -8,7 +8,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 from datetime import datetime
 
 HERE = Path(__file__).resolve().parent
@@ -490,6 +490,52 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         await self.app.bot.get_command('board').callback(SimpleNamespace(send=send))
         self.assertEqual(self.db.execute('SELECT message_id FROM chore_board').fetchone(),('pending',))
         self.assertIn('check setup',messages[0])
+
+    async def test_chores_prefix_opens_controls_here_without_jump(self):
+        messages=[]
+        async def send(content,**kwargs):
+            messages.append((content,kwargs))
+        channel=SimpleNamespace(permissions_for=lambda user:SimpleNamespace(view_channel=True,read_message_history=True))
+        ctx=SimpleNamespace(interaction=None,guild=SimpleNamespace(id=1,get_channel=lambda cid:channel),channel=SimpleNamespace(id=99),author=SimpleNamespace(id=10),send=send)
+        await self.app.bot.get_command('chores').callback(ctx)
+        content,options=messages[0]
+        self.assertNotIn('https://discord.com/',content)
+        self.assertIn('starter message is public',content)
+        self.assertFalse(options['ephemeral'])
+        self.assertIn('Open chores',[c.label for c in options['view'].children])
+        self.assertEqual(options['view'].timeout,600)
+
+    async def test_slash_chores_is_private_and_actions_stay_private(self):
+        messages=[]
+        async def send(content,**kwargs):
+            messages.append((content,kwargs))
+        ctx=SimpleNamespace(interaction=object(),guild=SimpleNamespace(id=1),channel=SimpleNamespace(id=2),author=SimpleNamespace(id=10),send=send)
+        await self.app.bot.get_command('chores').callback(ctx)
+        self.assertTrue(messages[0][1]['ephemeral'])
+        event=Interaction()
+        await messages[0][1]['view'].open_list(event,'open')
+        self.assertTrue(event.response.payload[1]['ephemeral'])
+
+    async def test_private_panel_does_not_bypass_hidden_channel(self):
+        hidden=SimpleNamespace(permissions_for=lambda user:SimpleNamespace(view_channel=False,read_message_history=False))
+        event=Interaction()
+        event.channel_id=99
+        event.guild.get_channel=lambda cid:hidden
+        self.assertFalse(await self.ui.Launcher().interaction_check(event))
+        self.assertTrue(event.response.payload[1]['ephemeral'])
+
+    async def test_slash_enable_does_not_remove_other_remote_commands(self):
+        messages=[]
+        async def send(content,**kwargs):
+            messages.append(content)
+        ctx=SimpleNamespace(guild=SimpleNamespace(id=1),send=send)
+        with patch.object(self.app.bot.tree,'fetch_commands',new=AsyncMock(return_value=[SimpleNamespace(name='unrelated')])),patch.object(self.app.bot.tree,'sync',new=AsyncMock()) as sync:
+            await self.app.bot.get_command('enableprivatechores').callback(ctx)
+            sync.assert_not_awaited()
+        with patch.object(self.app.bot.tree,'fetch_commands',new=AsyncMock(return_value=[])),patch.object(self.app.bot.tree,'sync',new=AsyncMock()) as sync:
+            await self.app.bot.get_command('enableprivatechores').callback(ctx)
+            sync.assert_awaited_once()
+        self.assertIsNotNone(self.app.bot.tree.get_command('chores',guild=discord.Object(id=1)))
 
 
 if __name__ == "__main__":
