@@ -706,6 +706,15 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(ids),27)
             self.assertEqual(len(set(ids)),27)
 
+    async def test_dashboard_layout_is_consistent_for_saved_and_fresh_panels(self):
+        expected=[('My chores',0),('Open chores',0),('Weekly sign-ups',0),('Who’s doing what?',1),('Help',1),('Add chore',2),('Edit chore',2),('Remove chore',2),('Household setup',2)]
+        for timeout in [None,600]:
+            view=self.ui.Launcher(timeout=timeout)
+            self.assertEqual([(c.label,c.row) for c in view.children],expected)
+            self.assertEqual([c.label for c in view.children if c.style==discord.ButtonStyle.primary],['My chores'])
+            self.assertTrue(all(c.style==discord.ButtonStyle.secondary for c in view.children if c.label!='My chores'))
+            self.assertEqual(len({c.custom_id for c in view.children}),9)
+
     async def test_help_button_is_persistent_private_and_changes_no_data(self):
         before = list(self.db.iterdump())
         view = self.ui.Launcher()

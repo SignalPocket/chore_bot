@@ -109,3 +109,7 @@ The private household overview shows This week / Next week, people’s assigned 
 New chores start at **5 points**. The Add form is prefilled with 5; a blank points field in Add or Edit means 5. An explicit 0 is still allowed. Editing a chore keeps its existing point value prefilled. Changes affect future completions, not points already earned.
 
 The responsibility overview resolves display names using the existing command lookup: cached guild member, fetched guild member (server nickname), then cached/fetched Discord user. It waits privately while looking up uncached names. Only failed Discord lookups show an Unknown user fallback.
+
+## Dashboard layout
+
+The saved dashboard and fresh panels use the same three rows: My chores / Open chores / Weekly sign-ups; Who’s doing what? / Help; Add chore / Edit chore / Remove chore / Household setup. My chores is blue; other entry buttons are neutral gray. The existing button IDs, privacy, and permissions are preserved. After deployment, !refreshchoreboard applies the layout and welcome text to the existing saved message; /chores opens the new layout immediately.

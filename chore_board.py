@@ -692,8 +692,11 @@ def install(namespace):
             await interaction.response.edit_message(embed=view.embed,view=view)
 
     HELP_HINT = 'Need help? Tap **Help** below for the button guide, or type **!help** for command help.'
-    BOARD_TEXT = ('🌱 **Household chores**\nTap **Open chores** to sign up. Tap **My chores** to mark your work **Done**.\n'
-                  'Your list is private; changes are saved for everyone.\n' + HELP_HINT)
+    BOARD_TEXT = ('🌱 **Sprig · household chores**\n'
+                  'A little care for our shared space.\n\n'
+                  '**Your day** · Open **My chores** to finish a task, or **Open chores** to pick one up.\n'
+                  '**Plan together** · Reserve your week or see who’s doing what.\n\n'
+                  'Button replies are private. Your changes stay saved for the household.\n' + HELP_HINT)
 
     def help_embed():
         embed = discord.Embed(title='How to use Sprig', description='Use the buttons to manage chores. This guide is private; everyone with access to the household panel can open it.')
@@ -713,6 +716,17 @@ def install(namespace):
     class Launcher(SafeView):
         def __init__(self,timeout=None):
             super().__init__(timeout=timeout)
+            # Keep both the persistent dashboard and fresh panels in the same order.
+            layout=[('My chores',0),('Open chores',0),('Weekly sign-ups',0),
+                    ('Who’s doing what?',1),('Help',1),
+                    ('Add chore',2),('Edit chore',2),('Remove chore',2),('Household setup',2)]
+            buttons={item.label:item for item in self.children}
+            self.clear_items()
+            for label,row in layout:
+                item=buttons[label]
+                item.row=row
+                item.style=discord.ButtonStyle.primary if label=='My chores' else discord.ButtonStyle.secondary
+                self.add_item(item)
 
         async def interaction_check(self, interaction):
             if not allowed(interaction):
@@ -780,8 +794,7 @@ def install(namespace):
         if not allowed(check):
             await ctx.send("Use the household server with access to the chores channel. Check panel setup if it hasn't been completed.",ephemeral=private)
             return
-        text='🌱 **Your chore controls** — choose a button below. Only you see the follow-up lists and confirmations. Reopen after 10 minutes or a restart.'
-        text+='\n' + HELP_HINT
+        text=BOARD_TEXT + '\nReopen **/chores** after 10 minutes or a restart.'
         if not private:
             text+='\nThis starter message is public. Use **/chores** for a fully private panel without a channel message.'
         await ctx.send(text,view=Launcher(timeout=600),ephemeral=private,allowed_mentions=discord.AllowedMentions.none())
