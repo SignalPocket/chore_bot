@@ -580,6 +580,9 @@ async def editquest(ctx, quest_id: int, field: str, *, value: str):
 async def claim(ctx, quest_id: int):
     reset_due_quests()
     user_id = str(ctx.author.id)
+    if not chore_ui.available(user_id):
+        await ctx.send("You're away this week. Use Weekly sign-ups to reserve your next home week's chores.")
+        return
 
     cursor.execute(
         """
@@ -596,6 +599,7 @@ async def claim(ctx, quest_id: int):
         return
 
     quest_id, name, assigned_to, completed = quest
+    assigned_to = assigned_to or chore_ui.weekly_owner(quest_id)
 
     if completed:
         await ctx.send(f"Quest #{quest_id} is already completed! ✨")
@@ -669,6 +673,9 @@ async def unclaim(ctx, quest_id: int):
 async def done(ctx, quest_id: int):
     reset_due_quests()
     user_id = str(ctx.author.id)
+    if not chore_ui.available(user_id):
+        await ctx.send("You're away this week. Your next home week's chores will appear after the Sunday handoff.")
+        return
     get_or_create_user(user_id)
 
     cursor.execute(
@@ -699,6 +706,7 @@ async def done(ctx, quest_id: int):
         assigned_to,
         completed,
     ) = quest
+    assigned_to = assigned_to or chore_ui.weekly_owner(quest_id)
 
     if completed:
         await ctx.send(
@@ -1469,4 +1477,9 @@ async def on_ready():
 
 # --- Run ---
 
-bot.run(DISCORD_TOKEN)
+from chore_board import install
+
+chore_ui = install(globals())
+
+if __name__ == "__main__":
+    bot.run(DISCORD_TOKEN)
