@@ -1,5 +1,11 @@
 # Sprig's button chore board
 
+## Find the board — prepared shortcut
+
+Anyone in the household server can type `!board` from any channel to get a link to the saved existing panel. It does not repost the board or alter chores. The person must already be able to view the chores channel and its message history; it does not reveal another server's board. If setup is missing or pending, it asks the household to inspect setup without creating a duplicate.
+
+This shortcut is a separate local update after deployed release f776dff. The complete suite now has 37 passing offline tests, including shortcut access, existing-message reuse, and pending setup.
+
 ## Editing and weekday / twice-daily schedules — latest prepared update
 
 Everyone can use **Edit chore**: choose an active chore by name, then **Edit details** to change its name, instructions, or future points, or **Change schedule** to choose a replacement cadence and submit the prefilled form. Concurrent changes invalidate old forms. Editing retains existing assignments, claims, completion state, and earned points. A change to monthly/one-time is blocked while weekly sign-ups remain; release those first.

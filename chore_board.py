@@ -629,6 +629,27 @@ def install(namespace):
             view=EditChoreView(interaction.user.id)
             await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True)
 
+    @bot.command(name="board")
+    @commands.guild_only()
+    async def board(ctx):
+        """Find the existing household panel from any channel in its server."""
+        saved=location()
+        if not saved or saved[2]=='pending':
+            await ctx.send("There isn't a confirmed chore panel yet. Ask the household to check setup before posting another one.")
+            return
+        if ctx.guild is None or str(ctx.guild.id)!=saved[0]:
+            await ctx.send("There isn't a chore board configured for this server.")
+            return
+        channel=ctx.guild.get_channel(int(saved[1]))
+        if channel is None:
+            await ctx.send("I can't find the saved chores channel. Ask the household to check it; I haven't created another panel.")
+            return
+        permissions=channel.permissions_for(ctx.author)
+        if not permissions.view_channel or not permissions.read_message_history:
+            await ctx.send("You need access to the chores channel and its message history to open the board.")
+            return
+        await ctx.send(f"🌱 **Household chore board:** https://discord.com/channels/{saved[0]}/{saved[1]}/{saved[2]}",allowed_mentions=discord.AllowedMentions.none())
+
     @bot.command(name="refreshchoreboard")
     @commands.guild_only()
     @commands.has_guild_permissions(manage_guild=True)

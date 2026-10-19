@@ -461,6 +461,36 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         await picker.children[0].callback(event)
         self.assertEqual(event.response.payload.frequency,'wednesday')
 
+    async def test_board_link_available_to_non_admin_in_another_channel(self):
+        messages=[]
+        async def send(message,**kwargs):
+            messages.append(message)
+        channel=SimpleNamespace(permissions_for=lambda member:SimpleNamespace(view_channel=True,read_message_history=True))
+        ctx=SimpleNamespace(guild=SimpleNamespace(id=1,get_channel=lambda cid:channel if cid==2 else None),author=SimpleNamespace(id=20),channel=SimpleNamespace(id=99),send=send)
+        before=self.db.execute('SELECT * FROM chore_board').fetchall()
+        await self.app.bot.get_command('board').callback(ctx)
+        self.assertIn('https://discord.com/channels/1/2/3',messages[0])
+        self.assertEqual(self.db.execute('SELECT * FROM chore_board').fetchall(),before)
+
+    async def test_board_link_never_exposes_other_server_or_hidden_channel(self):
+        messages=[]
+        async def send(message,**kwargs):
+            messages.append(message)
+        hidden=SimpleNamespace(permissions_for=lambda member:SimpleNamespace(view_channel=False,read_message_history=False))
+        for guild in [None,SimpleNamespace(id=99),SimpleNamespace(id=1,get_channel=lambda cid:hidden)]:
+            await self.app.bot.get_command('board').callback(SimpleNamespace(guild=guild,author=SimpleNamespace(id=20),send=send))
+        self.assertTrue(all('https://' not in m for m in messages))
+
+    async def test_board_shortcut_does_not_recreate_pending_panel(self):
+        self.db.execute("UPDATE chore_board SET message_id='pending'")
+        self.db.commit()
+        messages=[]
+        async def send(message,**kwargs):
+            messages.append(message)
+        await self.app.bot.get_command('board').callback(SimpleNamespace(send=send))
+        self.assertEqual(self.db.execute('SELECT message_id FROM chore_board').fetchone(),('pending',))
+        self.assertIn('check setup',messages[0])
+
 
 if __name__ == "__main__":
     unittest.main()
