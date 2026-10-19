@@ -105,3 +105,5 @@ Every launcher includes **Help**, which opens a private guide to claims, Done, w
 ## Who’s doing what?
 
 The private household overview shows This week / Next week, people’s assigned chores and weekly sign-ups, current single claims, and Nobody signed up. Completed recurring chores retain their weekly owner. Single claims do not reserve next week. Archived chores are excluded; alternating schedules respect the selected week, with overdue chores included this week. Outstanding monthly and one-time chores are included. Refresh and page buttons update the same private message. After deployment, !refreshchoreboard adds the new button to the existing saved dashboard.
+
+New chores start at **5 points**. The Add form is prefilled with 5; a blank points field in Add or Edit means 5. An explicit 0 is still allowed. Editing a chore keeps its existing point value prefilled. Changes affect future completions, not points already earned.

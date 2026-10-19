@@ -479,7 +479,7 @@ def install(namespace):
         if frequency not in api.VALID_FREQUENCIES:
             return "Choose a valid repeat schedule."
         try:
-            points = int(points.strip() or '0')
+            points = int(points.strip() or '5')
         except ValueError:
             return "Points must be a whole number (zero is fine)."
         if points < 0 or points > 1000000:
@@ -500,7 +500,7 @@ def install(namespace):
             self.owner, self.frequency = owner, frequency
             self.name = discord.ui.TextInput(label="Chore name", placeholder=timing.label(frequency)[:100], max_length=100)
             self.notes = discord.ui.TextInput(label="Instructions / timing (optional)", style=discord.TextStyle.paragraph, required=False, max_length=1000, placeholder="What counts as done? Choose weekdays in the schedule picker; notes don't send reminders.")
-            self.points = discord.ui.TextInput(label="Points (optional; blank means 0)", required=False, default="0", max_length=7)
+            self.points = discord.ui.TextInput(label="Points (optional; blank means 5)", required=False, default="5", max_length=7)
             for item in (self.name, self.notes, self.points):
                 self.add_item(item)
 
@@ -598,7 +598,7 @@ def install(namespace):
         if not name or len(name)>100 or frequency not in api.VALID_FREQUENCIES:
             return 'Enter a name (up to 100 characters) and a valid schedule.'
         try:
-            points=int(points.strip() or '0')
+            points=int(points.strip() or '5')
         except ValueError:
             return 'Points must be a whole number.'
         if not 0<=points<=1000000:

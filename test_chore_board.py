@@ -278,10 +278,17 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         before = self.db.execute('SELECT * FROM quests ORDER BY id').fetchall()
         message = self.ui.create_chore('  Sweep   kitchen ', 'daily', '', 'Afternoon')
         self.assertIn('Added', message)
-        self.assertEqual(self.db.execute("SELECT frequency, points, notes, assigned_to FROM quests WHERE name = 'Sweep kitchen'").fetchone(), ('daily', 0, 'Afternoon', None))
+        self.assertEqual(self.db.execute("SELECT frequency, points, notes, assigned_to FROM quests WHERE name = 'Sweep kitchen'").fetchone(), ('daily', 5, 'Afternoon', None))
         self.assertIn('already exists', self.ui.create_chore('sweep kitchen', 'daily', '5', ''))
         self.assertEqual(self.db.execute('SELECT * FROM quests ORDER BY id LIMIT 2').fetchall(), before)
         self.assertIn('already exists', self.ui.create_chore('Fill dishwasher', 'daily', '5', ''))
+
+    async def test_starting_points_default_five_and_explicit_zero_allowed(self):
+        self.assertEqual(self.ui.AddChoreModal(10,'daily').points.default,'5')
+        self.ui.create_chore('Free chore','daily','0','')
+        self.assertEqual(self.db.execute("SELECT points FROM quests WHERE name='Free chore'").fetchone()[0],0)
+        self.ui.update_chore(2,'My bathroom','weekly','','',self.ui.snapshot(2))
+        self.assertEqual(self.db.execute('SELECT points FROM quests WHERE id=2').fetchone()[0],5)
 
     async def test_add_form_rejects_bad_input_without_writes(self):
         for name, frequency, points in [(' ', 'daily', '0'), ('New', 'yearly', '0'), ('New', 'daily', '-1'), ('New', 'daily', 'many')]:
