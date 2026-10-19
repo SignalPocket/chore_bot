@@ -1,5 +1,27 @@
 # Sprig's button chore board
 
+## Editing and weekday / twice-daily schedules — latest prepared update
+
+Everyone can use **Edit chore**: choose an active chore by name, then **Edit details** to change its name, instructions, or future points, or **Change schedule** to choose a replacement cadence and submit the prefilled form. Concurrent changes invalidate old forms. Editing retains existing assignments, claims, completion state, and earned points. A change to monthly/one-time is blocked while weekly sign-ups remain; release those first.
+
+The schedule picker now includes **On a specific weekday** and **Twice daily** as well as Daily, Weekly, Monthly, and One time. Pick the weekday from a second dropdown. A weekday chore appears at midnight on the selected day, remains due if missed, and after completion returns the next selected weekday. It can be reserved in Weekly sign-ups before it is due. Times such as Wednesday night can be recorded in instructions; there are no automatic reminder messages or hour-specific deadlines.
+
+Twice-daily chores have a morning slot (midnight to noon) and an afternoon/evening slot (noon to midnight), in the configured household timezone. Each slot awards points once; the second slot does not become available early. Missed slots do not accumulate. A weekly reservation keeps the same owner across slots. Dishwasher filling and emptying remain separate chores: choose Twice daily on each if wanted; this update does not create or change live chores automatically.
+
+This release adds `chore_timing.py`, required beside `chore_board.py` and `sprig_bot.py`. Include that file in the approved commit and deployment. Run compilation for all three modules and `test_chore_board.py -q` in an isolated/test environment. **34 offline integration tests passed**, including weekday readiness and overdue behavior, noon/midnight resets, daylight-saving changes, editing without changing earned points, duplicate names, concurrent changes, and weekly-owner preservation. These changes are local only until explicitly approved for push and deployment.
+
+## Add chores inside Discord — prepared update
+
+Everyone who can use the configured household panel can use **Add chore**, choose Daily / Weekly / Monthly / One time, and fill in the chore name, optional instructions/timing, and optional points. Blank points means zero. New chores are shared, open for sign-up. Names are checked against existing chores, including completed ones, to avoid duplicate submissions. Personal chores need distinct names, such as Katie's laundry; the form does not automatically create a separate task for every household member or assign a specific member.
+
+Everyone can also use **Remove chore**: choose a chore by name, then **Confirm removal**. This hides it from everyone's lists and weekly sign-ups while preserving the chore record, points, claims, and sign-up history. **Removed chores → choose chore → Restore** puts it back. Completed work remains completed for the current cycle; restoring does not reset points. Old open views cannot complete or reserve a removed chore. This is reversible removal from the board, not permanent deletion.
+
+Specific days and times entered in notes are descriptive; this form does not implement automatic weekday reminders or twice-daily resets. Daily resets at midnight, weekly Sunday at 6 p.m., and monthly at the start of the month.
+
+This update adds **Add chore** plus the administrator command `!refreshchoreboard`, which edits the saved panel in its existing channel without posting another board or changing its chores/sign-ups. After deploying and restarting the approved update, an administrator runs that command once to reveal the new button. Editing the live panel requires the normal delivery approval if performed by an assistant. The old deployed release adfe8c2 does not contain this update.
+
+Twenty-six offline tests passed for the prepared update, including non-administrator submission, invalid input, duplicate prevention, view ownership and channel checks, removal confirmation, restoration without data loss, stale completion/removal buttons, and refreshing the existing panel. These are separate from the 17 server tests for adfe8c2 recorded below.
+
 Family members use a single shared message:
 
 **Open chores** → choose a chore by name → **Claim**.

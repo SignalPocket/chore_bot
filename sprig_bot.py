@@ -535,6 +535,7 @@ async def editquest(ctx, quest_id: int, field: str, *, value: str):
 
     # Recalculate the next reset when frequency changes on a completed quest.
     if field == "frequency":
+        chore_ui.timing.initialize(quest_id, stored_value)
         cursor.execute(
             """
             SELECT completed, last_completed, frequency
@@ -555,7 +556,8 @@ async def editquest(ctx, quest_id: int, field: str, *, value: str):
             except (TypeError, ValueError):
                 completed_at = now_local()
 
-            reset_after = calculate_reset_after(
+            reset_after = chore_ui.completion_reset(
+                quest_id,
                 completed_at,
                 new_frequency,
             )
@@ -580,6 +582,12 @@ async def editquest(ctx, quest_id: int, field: str, *, value: str):
 async def claim(ctx, quest_id: int):
     reset_due_quests()
     user_id = str(ctx.author.id)
+    if not chore_ui.ready(quest_id):
+        await ctx.send("This chore isn't due yet. Check it on its scheduled weekday.")
+        return
+    if chore_ui.is_archived(quest_id):
+        await ctx.send("This chore was removed. Restore it from Remove chore → Removed chores first.")
+        return
     if not chore_ui.available(user_id):
         await ctx.send("You're away this week. Use Weekly sign-ups to reserve your next home week's chores.")
         return
@@ -673,6 +681,12 @@ async def unclaim(ctx, quest_id: int):
 async def done(ctx, quest_id: int):
     reset_due_quests()
     user_id = str(ctx.author.id)
+    if not chore_ui.ready(quest_id):
+        await ctx.send("This chore isn't due yet. Check it on its scheduled weekday.")
+        return
+    if chore_ui.is_archived(quest_id):
+        await ctx.send("This chore was removed. Restore it from Remove chore → Removed chores first.")
+        return
     if not chore_ui.available(user_id):
         await ctx.send("You're away this week. Your next home week's chores will appear after the Sunday handoff.")
         return
@@ -777,7 +791,8 @@ async def done(ctx, quest_id: int):
             streak = current_streak + 1
 
     new_points = current_points + points_val
-    reset_after = calculate_reset_after(
+    reset_after = chore_ui.completion_reset(
+        quest_id,
         completed_at,
         frequency,
     )

@@ -30,6 +30,9 @@ class Response:
     async def edit_message(self, **kwargs):
         self.payload = kwargs
 
+    async def send_modal(self, modal):
+        self.payload = modal
+
 
 class Interaction:
     def __init__(self, user_id=10):
@@ -270,6 +273,193 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(self.ui.available(10))
             self.assertFalse(self.ui.available(30))
             self.assertTrue(self.ui.available(20))
+
+    async def test_add_form_preserves_existing_and_blocks_duplicate(self):
+        before = self.db.execute('SELECT * FROM quests ORDER BY id').fetchall()
+        message = self.ui.create_chore('  Sweep   kitchen ', 'daily', '', 'Afternoon')
+        self.assertIn('Added', message)
+        self.assertEqual(self.db.execute("SELECT frequency, points, notes, assigned_to FROM quests WHERE name = 'Sweep kitchen'").fetchone(), ('daily', 0, 'Afternoon', None))
+        self.assertIn('already exists', self.ui.create_chore('sweep kitchen', 'daily', '5', ''))
+        self.assertEqual(self.db.execute('SELECT * FROM quests ORDER BY id LIMIT 2').fetchall(), before)
+        self.assertIn('already exists', self.ui.create_chore('Fill dishwasher', 'daily', '5', ''))
+
+    async def test_add_form_rejects_bad_input_without_writes(self):
+        for name, frequency, points in [(' ', 'daily', '0'), ('New', 'yearly', '0'), ('New', 'daily', '-1'), ('New', 'daily', 'many')]:
+            self.ui.create_chore(name, frequency, points, '')
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM quests').fetchone(), (2,))
+
+    async def test_add_menu_opens_modal_and_admin_submit(self):
+        menu = self.ui.AddChoreMenu(10)
+        event = Interaction()
+        event.user.guild_permissions = SimpleNamespace(manage_guild=True)
+        self.assertTrue(await menu.interaction_check(event))
+        menu.children[0]._values = ['monthly']
+        await menu.children[0].callback(event)
+        modal = event.response.payload
+        self.assertEqual(modal.frequency, 'monthly')
+        modal.name._value = 'Clean microwave and turntable'
+        modal.notes._value = 'Include turntable'
+        modal.points._value = '0'
+        await modal.on_submit(event)
+        self.assertEqual(self.db.execute("SELECT frequency FROM quests WHERE name = 'Clean microwave and turntable'").fetchone(), ('monthly',))
+        await modal.on_submit(event)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM quests').fetchone(), (3,))
+
+    async def test_add_modal_rechecks_permissions_and_location(self):
+        modal = self.ui.AddChoreModal(10, 'daily')
+        modal.name._value = 'Should not be added'
+        for user_id, admin, channel in [(20, True, 2), (10, True, 99)]:
+            event = Interaction(user_id)
+            event.user.guild_permissions = SimpleNamespace(manage_guild=admin)
+            event.channel_id = channel
+            await modal.on_submit(event)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM quests').fetchone(), (2,))
+
+    async def test_panel_refresh_edits_saved_message_without_posting_new_board(self):
+        edits, notices = [], []
+        async def edit(**kwargs):
+            edits.append(kwargs)
+        async def fetch(message_id):
+            self.assertEqual(message_id, 3)
+            return SimpleNamespace(author=SimpleNamespace(id=777), edit=edit)
+        async def send(content):
+            notices.append(content)
+        self.app.bot._connection.user = SimpleNamespace(id=777)
+        ctx = SimpleNamespace(guild=SimpleNamespace(id=1), channel=SimpleNamespace(id=2, fetch_message=fetch), send=send)
+        await self.app.bot.get_command('refreshchoreboard').callback(ctx)
+        self.assertEqual(len(edits), 1)
+        self.assertIn('Add chore', [c.label for c in edits[0]['view'].children])
+        self.assertEqual(self.db.execute('SELECT message_id FROM chore_board').fetchone(), ('3',))
+
+    async def test_everyone_can_add_without_admin(self):
+        event=Interaction()
+        event.user.guild_permissions=SimpleNamespace(manage_guild=False)
+        menu=self.ui.AddChoreMenu(10)
+        self.assertTrue(await menu.interaction_check(event))
+        modal=self.ui.AddChoreModal(10,'daily')
+        modal.name._value='Sweep patio'
+        modal.notes._value=''
+        modal.points._value=''
+        await modal.on_submit(event)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM quests WHERE name = 'Sweep patio'").fetchone(),(1,))
+
+    async def test_remove_requires_confirmation_and_restore_keeps_data(self):
+        self.db.execute("INSERT INTO claims VALUES (1,'10')")
+        self.db.commit()
+        before=self.db.execute('SELECT * FROM quests WHERE id=1').fetchone()
+        view=self.ui.RemoveChoreView(10,selected=1)
+        self.assertFalse(self.ui.is_archived(1))
+        await view.act(Interaction())
+        self.assertTrue(self.ui.is_archived(1))
+        self.assertNotIn(1,[r[0] for r in self.ui.rows(10,'mine')])
+        self.assertIn('no longer',self.ui.signup(10,1,self.ui.week_key()))
+        await self.ui.RemoveChoreView(10,removed=True,selected=1).act(Interaction())
+        self.assertEqual(self.db.execute('SELECT * FROM quests WHERE id=1').fetchone(),before)
+        self.assertEqual(self.db.execute('SELECT user_id FROM claims WHERE quest_id=1').fetchone(),('10',))
+
+    async def test_removed_chore_cannot_complete_through_old_button(self):
+        await self.ui.PersonalView(10,selected=1).act(Interaction(),'claim')
+        old=self.ui.PersonalView(10,'mine',selected=1)
+        await self.ui.RemoveChoreView(10,selected=1).act(Interaction())
+        await old.act(Interaction(),'done')
+        self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=1').fetchone(),(0,))
+
+    async def test_removal_rechecks_changed_chore(self):
+        stale=self.ui.RemoveChoreView(10,selected=1)
+        await self.ui.PersonalView(10,selected=1).act(Interaction(),'claim')
+        await stale.act(Interaction())
+        self.assertFalse(self.ui.is_archived(1))
+
+    async def test_twice_daily_completion_limits_and_weekly_owner(self):
+        with self.clock('2026-10-19T09:00:00'):
+            self.ui.create_chore('Dishwasher filling','twice-daily','5','')
+            qid=self.db.execute("SELECT id FROM quests WHERE name='Dishwasher filling'").fetchone()[0]
+            self.ui.signup(10,qid,self.ui.week_key())
+            early=self.ui.PersonalView(10,'mine',selected=qid)
+            await early.act(Interaction(),'done')
+            await early.act(Interaction(),'done')
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(5,))
+        with self.clock('2026-10-19T11:59:59'):
+            self.assertNotIn(qid,[r[0] for r in self.ui.rows(10,'mine')])
+        with self.clock('2026-10-19T12:00:00'):
+            self.assertIn(qid,[r[0] for r in self.ui.rows(10,'mine')])
+            await self.ui.PersonalView(10,'mine',selected=qid).act(Interaction(),'done')
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(10,))
+        with self.clock('2026-10-20T00:00:00'):
+            self.assertIn(qid,[r[0] for r in self.ui.rows(10,'mine')])
+            self.assertEqual(self.ui.weekly_owner(qid),'10')
+
+    async def test_weekday_stays_hidden_until_due_and_overdue_until_done(self):
+        with self.clock('2026-10-19T09:00:00'):
+            self.ui.create_chore('Curb trash Wednesday','wednesday','0','Evening')
+            qid=self.db.execute("SELECT id FROM quests WHERE name='Curb trash Wednesday'").fetchone()[0]
+            self.assertNotIn(qid,[r[0] for r in self.ui.rows(10,'open')])
+            self.ui.signup(10,qid,self.ui.week_key())
+        with self.clock('2026-10-21T00:00:00'):
+            self.assertIn(qid,[r[0] for r in self.ui.rows(10,'mine')])
+        with self.clock('2026-10-22T10:00:00'):
+            self.assertIn(qid,[r[0] for r in self.ui.rows(10,'mine')])
+            await self.ui.PersonalView(10,'mine',selected=qid).act(Interaction(),'done')
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=?',(qid,)).fetchone(),(1,))
+        with self.clock('2026-10-27T23:59:59'):
+            self.assertNotIn(qid,[r[0] for r in self.ui.rows(20,'open')])
+        with self.clock('2026-10-28T00:00:00'):
+            self.assertIn(qid,[r[0] for r in self.ui.rows(20,'open')])
+
+    async def test_weekday_created_on_due_day_is_ready_immediately(self):
+        with self.clock('2026-10-21T20:00:00'):
+            self.ui.create_chore('Wednesday job','wednesday','0','')
+            qid=self.db.execute("SELECT id FROM quests WHERE name='Wednesday job'").fetchone()[0]
+            self.assertTrue(self.ui.ready(qid))
+
+    async def test_weekday_and_twice_daily_resets_across_dst(self):
+        from zoneinfo import ZoneInfo
+        when=datetime(2026,10,31,20,tzinfo=ZoneInfo('America/New_York'))
+        next_reset=self.app.calculate_reset_after(when,'sunday')
+        self.assertTrue(next_reset.startswith('2026-11-01T00:00:00-04:00'))
+        after_fallback=datetime(2026,11,1,10,tzinfo=ZoneInfo('America/New_York'))
+        self.assertEqual(self.app.calculate_reset_after(after_fallback,'twice-daily'),'2026-11-01T12:00:00-05:00')
+
+    async def test_edit_prefilled_form_preserves_completion_and_assignment(self):
+        event=Interaction()
+        event.user.guild_permissions=SimpleNamespace(manage_guild=False)
+        before=self.db.execute('SELECT assigned_to FROM quests WHERE id=2').fetchone()
+        expected=self.ui.snapshot(2)
+        modal=self.ui.EditChoreModal(10,2,'weekly',expected)
+        self.assertEqual(modal.name.default,'My bathroom')
+        modal.name._value='Clean my bathroom'
+        modal.notes._value='Towels and trash'
+        modal.points._value='12'
+        await modal.on_submit(event)
+        self.assertEqual(self.db.execute('SELECT name,notes,points FROM quests WHERE id=2').fetchone(),('Clean my bathroom','Towels and trash',12))
+        self.assertEqual(self.db.execute('SELECT assigned_to FROM quests WHERE id=2').fetchone(),before)
+        self.assertIn('changed',self.ui.update_chore(2,'Stale overwrite','daily','1','',expected))
+
+    async def test_edit_schedule_retains_earned_points_and_completed_cycle(self):
+        with self.clock('2026-10-19T09:00:00'):
+            await self.ui.PersonalView(10,selected=1).act(Interaction(),'claim')
+            await self.ui.PersonalView(10,'mine',selected=1).act(Interaction(),'done')
+            result=self.ui.update_chore(1,'Fill dishwasher','twice-daily','8','',self.ui.snapshot(1))
+            self.assertIn('Saved',result)
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=1').fetchone(),(1,))
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(5,))
+        with self.clock('2026-10-19T12:00:00'):
+            self.assertIn(1,[r[0] for r in self.ui.rows(10,'open')])
+
+    async def test_edit_duplicate_and_week_signup_incompatible_schedule(self):
+        with self.clock('2026-10-19T09:00:00'):
+            self.assertIn('already',self.ui.update_chore(1,'My bathroom','daily','5','',self.ui.snapshot(1)))
+            self.ui.signup(10,1,self.ui.week_key())
+            self.assertIn('Release',self.ui.update_chore(1,'Fill dishwasher','monthly','5','',self.ui.snapshot(1)))
+            self.assertEqual(self.db.execute('SELECT frequency FROM quests WHERE id=1').fetchone(),('daily',))
+
+    async def test_weekday_picker_opens_named_schedule_form(self):
+        picker=self.ui.WeekdayMenu(10)
+        picker.children[0]._values=['wednesday']
+        event=Interaction()
+        self.assertTrue(await picker.interaction_check(event))
+        await picker.children[0].callback(event)
+        self.assertEqual(event.response.payload.frequency,'wednesday')
 
 
 if __name__ == "__main__":
