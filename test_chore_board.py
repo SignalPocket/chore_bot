@@ -525,6 +525,157 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self.ui.Launcher().interaction_check(event))
         self.assertTrue(event.response.payload[1]['ephemeral'])
 
+    async def test_two_weekdays_due_overdue_and_next_occurrence(self):
+        with self.clock('2026-10-19T10:00:00'):
+            self.assertIn('Added',self.ui.create_chore('Morning room trash','days:tuesday,friday','0',''))
+            qid=self.db.execute("SELECT id FROM quests WHERE name='Morning room trash'").fetchone()[0]
+            self.assertFalse(self.ui.ready(qid))
+        with self.clock('2026-10-20T00:00:00'):
+            self.assertTrue(self.ui.ready(qid))
+        with self.clock('2026-10-22T10:00:00'):
+            self.assertTrue(self.ui.ready(qid))
+            reset=self.ui.completion_reset(qid,self.app.now_local(),'days:tuesday,friday')
+            self.assertTrue(reset.startswith('2026-10-23T00:00:00'))
+            self.assertFalse(self.ui.ready(qid))
+        with self.clock('2026-10-23T00:00:00'):
+            self.assertTrue(self.ui.ready(qid))
+
+    async def test_alternating_monday_away_anchor_and_signups(self):
+        with self.clock('2026-10-19T10:00:00'):
+            self.ui.create_chore('Recycling','away:monday','0','')
+            qid=self.db.execute("SELECT id FROM quests WHERE name='Recycling'").fetchone()[0]
+            self.assertTrue(self.ui.ready(qid))
+            self.assertIn('not scheduled',self.ui.signup(10,qid,self.ui.week_key(1)))
+            self.assertIn('signed up',self.ui.signup(10,qid,self.ui.week_key()))
+            self.assertNotIn(str(qid),[option.value for child in self.ui.WeeklyView(10,1).children if isinstance(child,discord.ui.Select) for option in child.options])
+            reset=self.ui.completion_reset(qid,self.app.now_local(),'away:monday')
+            self.assertTrue(reset.startswith('2026-11-02T00:00:00-05:00'))
+        with self.clock('2026-10-26T10:00:00'):
+            self.assertFalse(self.ui.ready(qid))
+        with self.clock('2026-11-02T00:00:00'):
+            self.assertTrue(self.ui.ready(qid))
+
+    async def test_alternating_saturday_overdue_does_not_disappear(self):
+        with self.clock('2026-10-19T10:00:00'):
+            self.ui.create_chore('Yard check','away:saturday','0','')
+            qid=self.db.execute("SELECT id FROM quests WHERE name='Yard check'").fetchone()[0]
+            self.assertFalse(self.ui.ready(qid))
+        with self.clock('2026-10-24T00:00:00'):
+            self.assertTrue(self.ui.ready(qid))
+        with self.clock('2026-10-26T10:00:00'):
+            self.assertTrue(self.ui.ready(qid))
+            self.assertIn('signed up',self.ui.signup(10,qid,self.ui.week_key()))
+            reset=self.ui.completion_reset(qid,self.app.now_local(),'away:saturday')
+            self.assertTrue(reset.startswith('2026-11-07T00:00:00-05:00'))
+
+    async def test_alternating_sunday_midnight_is_before_handoff(self):
+        with self.clock('2026-10-25T17:59:00'):
+            self.assertTrue(self.ui.timing.matches(self.app.now_local().date(),'away:sunday'))
+            self.assertFalse(self.ui.timing.matches(self.app.now_local().date(),'home:sunday'))
+            self.assertTrue(self.ui.timing.in_week('away:sunday',self.app.now_local().replace(day=18,hour=18)))
+        with self.clock('2026-10-25T18:00:00'):
+            start=self.app.now_local()
+            self.assertFalse(self.ui.timing.in_week('away:monday',start))
+            self.assertTrue(self.ui.timing.in_week('home:monday',start))
+
+    async def test_extended_schedule_claim_done_reset_and_reload(self):
+        with self.clock('2026-10-19T10:00:00'):
+            self.ui.create_chore('Alternating recycling','away:monday','4','')
+            qid=self.db.execute("SELECT id FROM quests WHERE name='Alternating recycling'").fetchone()[0]
+            await self.ui.PersonalView(10,selected=qid).act(Interaction(),'claim')
+            await self.ui.PersonalView(10,'mine',selected=qid).act(Interaction(),'done')
+            row=self.db.execute('SELECT completed,reset_after FROM quests WHERE id=?',(qid,)).fetchone()
+            self.assertEqual(row[0],1)
+            self.assertTrue(row[1].startswith('2026-11-02'))
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone()[0],4)
+            from chore_timing import ChoreTiming
+            timing=ChoreTiming(vars(self.app),self.db)
+            self.assertFalse(timing.ready(qid))
+        with self.clock('2026-10-26T10:00:00'):
+            self.app.reset_due_quests()
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=?',(qid,)).fetchone()[0],1)
+        with self.clock('2026-11-02T00:00:00'):
+            self.app.reset_due_quests()
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=?',(qid,)).fetchone()[0],0)
+            self.assertTrue(timing.ready(qid))
+
+    async def test_repeat_picker_creates_and_edits_with_canonical_days(self):
+        menu=self.ui.RepeatMenu(10,'two-days')
+        menu.children[0]._values=['friday','tuesday']
+        event=Interaction()
+        await menu.children[0].callback(event)
+        self.assertEqual(event.response.payload.frequency,'days:tuesday,friday')
+        expected=self.ui.snapshot(1)
+        menu=self.ui.RepeatMenu(10,'alternating',1,expected,'home')
+        menu.children[0]._values=['saturday']
+        event=Interaction()
+        await menu.children[0].callback(event)
+        self.assertEqual(event.response.payload.frequency,'home:saturday')
+        self.assertEqual(event.response.payload.expected,expected)
+        other=Interaction(20)
+        self.assertFalse(await menu.interaction_check(other))
+
+    async def test_roster_weekly_owner_done_and_unclaimed(self):
+        with self.clock('2026-10-19T10:00:00'):
+            self.ui.signup(20,1,self.ui.week_key())
+            self.db.execute('UPDATE quests SET completed=1 WHERE id=1')
+            self.db.commit()
+            self.ui.create_chore('Sweep kitchen','daily','0','')
+            rows=self.ui.responsibility_rows()
+            filling=next(r for r in rows if r[1]==1)
+            self.assertEqual((filling[0],filling[4]),('20','Weekly sign-up'))
+            self.assertIn('Done',filling[5])
+            self.assertTrue(any(r[0] is None and r[2]=='Sweep kitchen' for r in rows))
+            self.assertEqual(next(r for r in rows if r[1]==2)[0],'10')
+
+    async def test_roster_next_week_ignores_current_claim_and_reservation(self):
+        with self.clock('2026-10-19T10:00:00'):
+            self.db.execute("INSERT INTO claims VALUES (1,'20')")
+            self.db.commit()
+            self.assertEqual(next(r for r in self.ui.responsibility_rows() if r[1]==1)[0],'20')
+            self.assertIsNone(next(r for r in self.ui.responsibility_rows(1) if r[1]==1)[0])
+            self.ui.signup(10,1,self.ui.week_key(1))
+            self.assertEqual(next(r for r in self.ui.responsibility_rows(1) if r[1]==1)[0],'10')
+
+    async def test_roster_excludes_archived_and_wrong_alternating_week(self):
+        with self.clock('2026-10-19T10:00:00'):
+            self.ui.create_chore('Away recycling','away:monday','0','')
+            self.db.execute("INSERT INTO archived_chores VALUES (2,'10','test')")
+            self.db.commit()
+            self.assertNotIn(2,[r[1] for r in self.ui.responsibility_rows()])
+            self.assertNotIn('Away recycling',[r[2] for r in self.ui.responsibility_rows(1)])
+            self.assertIn('Away recycling',[r[2] for r in self.ui.responsibility_rows()])
+
+    async def test_roster_launcher_private_and_navigation_refreshes(self):
+        with self.clock('2026-10-19T10:00:00'):
+            event=Interaction()
+            button=next(c for c in self.ui.Launcher().children if c.label=='Who’s doing what?')
+            await button.callback(event)
+            options=event.response.payload[1]
+            self.assertTrue(options['ephemeral'])
+            view=options['view']
+            self.assertTrue(await view.interaction_check(event))
+            self.assertFalse(await view.interaction_check(Interaction(20)))
+            await next(c for c in view.children if c.label=='Next week').callback(event)
+            self.assertEqual(event.response.payload['view'].offset,1)
+            self.assertIn('Next week',event.response.payload['embed'].description)
+
+    async def test_roster_paginates_and_missing_members_have_fallback(self):
+        with self.clock('2026-10-19T10:00:00'):
+            for number in range(25):
+                self.ui.create_chore('Chore '+str(number),'daily','0','')
+            guild=SimpleNamespace(get_member=lambda uid:None)
+            view=self.ui.ResponsibilityView(10,guild)
+            self.assertEqual(len(view.embed.fields),8)
+            self.assertIn('Account 10',str(view.embed.to_dict()))
+            ids=[]
+            for page in range(4):
+                chunk=self.ui.ResponsibilityView(10,guild,page=page)
+                ids.extend(r[1] for r in chunk.entries[chunk.page*8:(chunk.page+1)*8])
+                self.assertLess(len(str(chunk.embed.to_dict())),6000)
+            self.assertEqual(len(ids),27)
+            self.assertEqual(len(set(ids)),27)
+
     async def test_help_button_is_persistent_private_and_changes_no_data(self):
         before = list(self.db.iterdump())
         view = self.ui.Launcher()

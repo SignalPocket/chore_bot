@@ -97,3 +97,11 @@ Seventeen offline integration tests use a temporary database and dummy token, wi
 ## Button help
 
 Every launcher includes **Help**, which opens a private guide to claims, Done, weekly sign-ups, alternating weeks, schedules, and shared chore management. The dashboard text explains Help and !help. After deployment, an administrator runs `!refreshchoreboard` in the existing chores channel to update the same saved dashboard text and buttons. Fresh `!chores` and `/chores` panels include help automatically.
+
+## Extended schedules
+
+**Twice a week** lets you choose two weekdays. **Every other week** lets you choose a weekday and Kas/Z home or away weeks (away anchor Sunday October 18, 2026 at 6 p.m. Eastern). This supports biweekly dusting/yard checks and away-week Monday recycling. Occurrences become due at midnight and stay due until done, even across a home/away handoff. A late completion moves to the next matching date; missed occurrences do not accumulate. Weekly sign-ups show scheduled weeks, plus overdue chores in the current week. Every-other-week Sunday means midnight before the evening handoff. These schedules are available for both Add and Edit. No existing chore is changed automatically.
+
+## Who’s doing what?
+
+The private household overview shows This week / Next week, people’s assigned chores and weekly sign-ups, current single claims, and Nobody signed up. Completed recurring chores retain their weekly owner. Single claims do not reserve next week. Archived chores are excluded; alternating schedules respect the selected week, with overdue chores included this week. Outstanding monthly and one-time chores are included. Refresh and page buttons update the same private message. After deployment, !refreshchoreboard adds the new button to the existing saved dashboard.
