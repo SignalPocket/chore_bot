@@ -93,3 +93,7 @@ Week-long sign-ups and alternating-week availability are implemented. Twice-dail
 ## Verification
 
 Seventeen offline integration tests use a temporary database and dummy token, without connecting to Discord. They cover the original claim/done interface, competing claims, repeated completion, assigned ownership, release, pagination, persistent launcher registration, channel restrictions, duplicate/interrupted setup, weekly competition and release, midnight recurrence with the same weekly owner, exact Sunday handoff, daylight-saving changes, alternating eligibility, account setup, persistent weekly data, and legacy-command enforcement. Live rendering and delivery still require the approved activation and account checks above.
+
+## Button help
+
+Every launcher includes **Help**, which opens a private guide to claims, Done, weekly sign-ups, alternating weeks, schedules, and shared chore management. The dashboard text explains Help and !help. After deployment, an administrator runs `!refreshchoreboard` in the existing chores channel to update the same saved dashboard text and buttons. Fresh `!chores` and `/chores` panels include help automatically.

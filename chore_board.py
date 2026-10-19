@@ -589,6 +589,24 @@ def install(namespace):
             view=EditChoreView(self.owner,self.page if page is None else page,selected)
             await interaction.response.edit_message(embed=view.embed,view=view)
 
+    HELP_HINT = 'Need help? Tap **Help** below for the button guide, or type **!help** for command help.'
+    BOARD_TEXT = ('🌱 **Household chores**\nTap **Open chores** to sign up. Tap **My chores** to mark your work **Done**.\n'
+                  'Your list is private; changes are saved for everyone.\n' + HELP_HINT)
+
+    def help_embed():
+        embed = discord.Embed(title='How to use Sprig', description='Use the buttons to manage chores. This guide is private; everyone with access to the household panel can open it.')
+        for title, text in [
+            ('Sign up for a chore', 'Open chores → choose a chore → Claim. It then appears in My chores.'),
+            ('Mark work done', 'My chores → choose the chore → Done. Use Release to give up a one-off claim when that option is shown.'),
+            ('Take a whole week', 'Weekly sign-ups → This week or Next week → choose a chore → Sign up for week. Daily chores stay yours after Done and return when due. Use Release week to give up the reservation.'),
+            ('Kas and Z’s weeks', 'Weeks switch Sunday at 6 p.m. Eastern. Once their accounts are saved in Household setup, Kas and Z can sign up only for their home weeks. Ask a household administrator if the accounts or week look wrong.'),
+            ('Add, edit, or remove', 'Everyone can use Add chore, Edit chore, and Remove chore. Removal asks for confirmation and hides the chore; Removed chores → Restore brings it back. Earned points and history stay saved.'),
+            ('When chores return', 'Daily: midnight. Twice daily: midnight and noon. Weekly: Sunday at 6 p.m. Monthly: first day of the month. Weekday chores stay due until done. One-time chores do not repeat. Times are Eastern; notes do not send reminders.'),
+            ('Open fresh controls or get more help', 'Use /chores for a fully private panel once enabled, or !chores for fresh buttons with a public starter message. Button replies are private. Reopen after 10 minutes or a restart. Type !help for the older command guide. Household setup is for administrators.')
+        ]:
+            embed.add_field(name=title, value=text, inline=False)
+        return embed
+
     class Launcher(SafeView):
         def __init__(self,timeout=None):
             super().__init__(timeout=timeout)
@@ -602,6 +620,10 @@ def install(namespace):
         async def open_list(self, interaction, mode):
             view = PersonalView(interaction.user.id, mode)
             await interaction.response.send_message(embed=view.embed, view=view, ephemeral=True)
+
+        @discord.ui.button(label="Help", custom_id="sprig:help:v1", row=1)
+        async def help_button(self, interaction, button):
+            await interaction.response.send_message(embed=help_embed(), ephemeral=True)
 
         @discord.ui.button(label="Open chores", style=discord.ButtonStyle.primary, custom_id="sprig:open:v1")
         async def open_button(self, interaction, button):
@@ -650,6 +672,7 @@ def install(namespace):
             await ctx.send("Use the household server with access to the chores channel. Check panel setup if it hasn't been completed.",ephemeral=private)
             return
         text='🌱 **Your chore controls** — choose a button below. Only you see the follow-up lists and confirmations. Reopen after 10 minutes or a restart.'
+        text+='\n' + HELP_HINT
         if not private:
             text+='\nThis starter message is public. Use **/chores** for a fully private panel without a channel message.'
         await ctx.send(text,view=Launcher(timeout=600),ephemeral=private,allowed_mentions=discord.AllowedMentions.none())
@@ -710,7 +733,7 @@ def install(namespace):
         if message.author.id != bot.user.id:
             await ctx.send("The saved message is not Sprig's panel. Nothing changed.")
             return
-        await message.edit(view=Launcher())
+        await message.edit(content=BOARD_TEXT, view=Launcher())
         await ctx.send("Updated the existing panel's buttons. Your chores and sign-ups are unchanged.")
 
     @bot.command(name="choreboard")
@@ -729,7 +752,7 @@ def install(namespace):
             # Reserve setup before delivery. A timeout may still have posted it.
             db.execute("INSERT INTO chore_board VALUES (1, ?, ?, 'pending')", (str(ctx.guild.id), str(ctx.channel.id)))
             db.commit()
-            message = await ctx.send("🌱 **Household chores**\nTap **Open chores** to sign up. Tap **My chores** to mark your work **Done**.\nYour list is private; changes are saved for everyone.", view=Launcher())
+            message = await ctx.send(BOARD_TEXT, view=Launcher())
             db.execute("UPDATE chore_board SET message_id = ? WHERE singleton = 1", (str(message.id),))
             db.commit()
 

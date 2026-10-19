@@ -501,6 +501,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         content,options=messages[0]
         self.assertNotIn('https://discord.com/',content)
         self.assertIn('starter message is public',content)
+        self.assertIn('Tap **Help**',content)
         self.assertFalse(options['ephemeral'])
         self.assertIn('Open chores',[c.label for c in options['view'].children])
         self.assertEqual(options['view'].timeout,600)
@@ -523,6 +524,34 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         event.guild.get_channel=lambda cid:hidden
         self.assertFalse(await self.ui.Launcher().interaction_check(event))
         self.assertTrue(event.response.payload[1]['ephemeral'])
+
+    async def test_help_button_is_persistent_private_and_changes_no_data(self):
+        before = list(self.db.iterdump())
+        view = self.ui.Launcher()
+        self.assertTrue(view.is_persistent())
+        button = next(c for c in view.children if c.label == 'Help')
+        event = Interaction(20)
+        self.assertTrue(await view.interaction_check(event))
+        await button.callback(event)
+        options = event.response.payload[1]
+        self.assertTrue(options['ephemeral'])
+        guide = str(options['embed'].to_dict())
+        for phrase in ['Claim', 'Done', 'Release week', 'Sunday at 6 p.m.', 'Restore', '/chores', '!help']:
+            self.assertIn(phrase, guide)
+        self.assertEqual(list(self.db.iterdump()), before)
+
+    async def test_refresh_updates_existing_dashboard_help_without_reposting(self):
+        message = SimpleNamespace(author=SimpleNamespace(id=77), edit=AsyncMock())
+        send = AsyncMock()
+        channel = SimpleNamespace(id=2, fetch_message=AsyncMock(return_value=message))
+        ctx = SimpleNamespace(guild=SimpleNamespace(id=1), channel=channel, send=send)
+        with patch.object(self.app.bot, '_connection', SimpleNamespace(user=SimpleNamespace(id=77))):
+            await self.app.bot.get_command('refreshchoreboard').callback(ctx)
+        channel.fetch_message.assert_awaited_once_with(3)
+        options = message.edit.call_args.kwargs
+        self.assertIn('Tap **Help**', options['content'])
+        self.assertIn('Help', [c.label for c in options['view'].children])
+        self.assertEqual(send.await_count, 1)
 
     async def test_slash_enable_does_not_remove_other_remote_commands(self):
         messages=[]
