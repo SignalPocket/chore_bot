@@ -398,43 +398,18 @@ async def addquest(
       !addquest "Feed the cat" daily 5 @Katie
     """
     try:
-        frequency = normalize_frequency(frequency)
+        frequency=normalize_frequency(frequency)
     except ValueError as exc:
-        await ctx.send(f"🚫 {exc}")
+        await ctx.send(str(exc))
         return
-
-    if points < 0:
-        await ctx.send("Quest points cannot be negative.")
+    if assigned_to and assigned_to.bot:
+        await ctx.send('Choose a household person, not a bot.')
         return
-
-    assigned_id = str(assigned_to.id) if assigned_to else None
-
-    cursor.execute(
-        """
-        INSERT INTO quests (
-            name,
-            frequency,
-            points,
-            assigned_to,
-            category,
-            difficulty
-        )
-        VALUES (?, ?, ?, ?, 'general', 'normal')
-        """,
-        (name, frequency, points, assigned_id),
-    )
-
-    quest_id = cursor.lastrowid
-    db.commit()
-
-    display = assigned_to.display_name if assigned_to else "Open to all"
-
-    await ctx.send(
-        f"🌱 Added quest #{quest_id}: **{name}**\n"
-        f"Frequency: {frequency} | "
-        f"Assigned: {display} | "
-        f"+{points} points"
-    )
+    result=chore_ui.create_chore(name,frequency,str(points),'')
+    if result.startswith('Added') and assigned_to:
+        qid=db.execute('SELECT id FROM quests WHERE name=?',(' '.join(name.split()),)).fetchone()[0]
+        result+='\n'+chore_ui.reassign(qid,assigned_to.id,'assignment',chore_ui.reassign_snapshot(qid))
+    await ctx.send(result)
 
 
 @bot.command()
@@ -445,137 +420,34 @@ async def editquest(ctx, quest_id: int, field: str, *, value: str):
     Editable fields:
       name, frequency, points, assigned_to, category, difficulty, notes
     """
-    if not quest_exists(quest_id):
-        await ctx.send(f"Sprig cannot find quest #{quest_id} 👀")
+    if not quest_exists(quest_id) or chore_ui.is_archived(quest_id):
+        await ctx.send('Choose an active chore from /chores.')
         return
-
-    field = field.strip().lower()
-    allowed_fields = {
-        "name",
-        "frequency",
-        "points",
-        "assigned_to",
-        "category",
-        "difficulty",
-        "notes",
-    }
-
-    if field not in allowed_fields:
-        await ctx.send(
-            "Editable fields: `name`, `frequency`, `points`, "
-            "`assigned_to`, `category`, `difficulty`, or `notes`."
-        )
+    field=field.lower().strip()
+    row=db.execute('SELECT name,frequency,points,notes FROM quests WHERE id=?',(quest_id,)).fetchone()
+    if field=='assigned_to':
+        await ctx.send('Use /chores → chore card → Reassign or Drop to choose the responsibility duration explicitly.')
         return
-
-    stored_value = value.strip()
-
-    if field == "frequency":
-        try:
-            stored_value = normalize_frequency(stored_value)
+    if field not in ('name','frequency','points','notes','category','difficulty'):
+        await ctx.send('Open the chore card → Edit chore for available settings.')
+        return
+    values=dict(name=row[0],frequency=row[1],points=str(row[2]),notes=row[3] or '')
+    if field=='frequency':
+        try: value=normalize_frequency(value)
         except ValueError as exc:
-            await ctx.send(f"🚫 {exc}")
+            await ctx.send(str(exc))
             return
-
-    elif field == "points":
-        try:
-            stored_value = int(stored_value)
-        except ValueError:
-            await ctx.send("Points must be a whole number.")
+    if field in values: values[field]=value
+    room=value if field=='category' else None
+    if field=='difficulty':
+        if value.lower() not in VALID_DIFFICULTIES:
+            await ctx.send('Choose a valid difficulty.')
             return
-
-        if stored_value < 0:
-            await ctx.send("Quest points cannot be negative.")
-            return
-
-    elif field == "difficulty":
-        stored_value = stored_value.lower()
-        if stored_value not in VALID_DIFFICULTIES:
-            choices = ", ".join(sorted(VALID_DIFFICULTIES))
-            await ctx.send(f"Difficulty must be one of: {choices}")
-            return
-
-    elif field == "assigned_to":
-        if stored_value.lower() in {
-            "none",
-            "open",
-            "unassigned",
-            "clear",
-        }:
-            stored_value = None
-        else:
-            try:
-                member = await commands.MemberConverter().convert(
-                    ctx,
-                    stored_value,
-                )
-            except commands.MemberNotFound:
-                await ctx.send(
-                    "I could not find that member. Mention them, or use "
-                    "`open` to make the quest unassigned."
-                )
-                return
-
-            stored_value = str(member.id)
-
-    elif field in {"name", "category"} and not stored_value:
-        await ctx.send(f"`{field}` cannot be blank.")
+        with db: db.execute('UPDATE quests SET difficulty=? WHERE id=?',(value.lower(),quest_id))
+        await ctx.send('Difficulty updated. Use /chores for the button interface.')
         return
-
-    elif field == "notes" and stored_value.lower() in {
-        "none",
-        "clear",
-        "delete",
-    }:
-        stored_value = None
-
-    cursor.execute(
-        f"UPDATE quests SET {field} = ? WHERE id = ?",
-        (stored_value, quest_id),
-    )
-
-    # Recalculate the next reset when frequency changes on a completed quest.
-    if field == "frequency":
-        chore_ui.timing.initialize(quest_id, stored_value)
-        cursor.execute(
-            """
-            SELECT completed, last_completed, frequency
-            FROM quests
-            WHERE id = ?
-            """,
-            (quest_id,),
-        )
-        completed, last_completed, new_frequency = cursor.fetchone()
-
-        if completed:
-            try:
-                completed_at = datetime.fromisoformat(last_completed)
-                if completed_at.tzinfo is None:
-                    completed_at = completed_at.replace(
-                        tzinfo=QUEST_TIMEZONE
-                    )
-            except (TypeError, ValueError):
-                completed_at = now_local()
-
-            reset_after = chore_ui.completion_reset(
-                quest_id,
-                completed_at,
-                new_frequency,
-            )
-            cursor.execute(
-                "UPDATE quests SET reset_after = ? WHERE id = ?",
-                (reset_after, quest_id),
-            )
-
-    db.commit()
-
-    display_value = "open" if (
-        field == "assigned_to" and stored_value is None
-    ) else stored_value
-
-    await ctx.send(
-        f"🌿 Updated quest #{quest_id}: "
-        f"`{field}` → **{display_value}**"
-    )
+    result=chore_ui.update_chore(quest_id,values['name'],values['frequency'],values['points'],values['notes'],chore_ui.snapshot(quest_id),room)
+    await ctx.send(result)
 
 
 @bot.command()
@@ -790,50 +662,54 @@ async def done(ctx, quest_id: int):
         elif last_date == yesterday:
             streak = current_streak + 1
 
-    new_points = current_points + points_val
-    reset_after = chore_ui.completion_reset(
-        quest_id,
-        completed_at,
-        frequency,
-    )
-
-    cursor.execute(
-        """
-        UPDATE users
-        SET points = ?,
-            streak = ?,
-            last_completed = ?
-        WHERE id = ?
-        """,
-        (
-            new_points,
-            streak,
-            completed_at.isoformat(),
-            user_id,
-        ),
-    )
-
-    cursor.execute(
-        "DELETE FROM claims WHERE quest_id = ?",
-        (quest_id,),
-    )
-
-    cursor.execute(
-        """
-        UPDATE quests
-        SET completed = 1,
-            last_completed = ?,
-            reset_after = ?
-        WHERE id = ?
-        """,
-        (
-            completed_at.isoformat(),
-            reset_after,
+    completion_before = chore_ui.capture_completion(quest_id,user_id)
+    with db:
+        new_points = current_points + points_val
+        reset_after = chore_ui.completion_reset(
             quest_id,
-        ),
-    )
+            completed_at,
+            frequency,
+        )
 
-    db.commit()
+        cursor.execute(
+            """
+            UPDATE users
+            SET points = ?,
+                streak = ?,
+                last_completed = ?
+            WHERE id = ?
+            """,
+            (
+                new_points,
+                streak,
+                completed_at.isoformat(),
+                user_id,
+            ),
+        )
+
+        cursor.execute(
+            "DELETE FROM claims WHERE quest_id = ?",
+            (quest_id,),
+        )
+
+        cursor.execute(
+            """
+            UPDATE quests
+            SET completed = 1,
+                last_completed = ?,
+                reset_after = ?
+            WHERE id = ?
+            """,
+            (
+                completed_at.isoformat(),
+                reset_after,
+                quest_id,
+            ),
+        )
+
+        cursor.execute("DELETE FROM occurrence_moves WHERE quest_id=?",(quest_id,))
+        chore_ui.record_completion(quest_id,user_id,completion_before)
+
 
     reset_message = (
         "This one-time quest will stay completed."
@@ -1049,45 +925,17 @@ async def quest_details(ctx, quest_id: int):
 
 @bot.command()
 async def resetquest(ctx, quest_id: int):
-    if not quest_exists(quest_id):
-        await ctx.send(f"Sprig cannot find quest #{quest_id} 👀")
-        return
-
-    cursor.execute(
-        """
-        UPDATE quests
-        SET completed = 0,
-            reset_after = NULL
-        WHERE id = ?
-        """,
-        (quest_id,),
-    )
-    cursor.execute(
-        "DELETE FROM claims WHERE quest_id = ?",
-        (quest_id,),
-    )
-    db.commit()
-
-    await ctx.send(f"♻️ Quest #{quest_id} is available again.")
+    await ctx.send('To correct a completion, open /chores → chore card → Completion history → Undo. This keeps points and streaks consistent.')
 
 
 @bot.command()
 async def deletequest(ctx, quest_id: int):
     if not quest_exists(quest_id):
-        await ctx.send(f"Sprig cannot find quest #{quest_id} 👀")
+        await ctx.send('That chore could not be found.')
         return
-
-    cursor.execute(
-        "DELETE FROM claims WHERE quest_id = ?",
-        (quest_id,),
-    )
-    cursor.execute(
-        "DELETE FROM quests WHERE id = ?",
-        (quest_id,),
-    )
-    db.commit()
-
-    await ctx.send(f"🍂 Deleted quest #{quest_id}.")
+    with db:
+        db.execute('INSERT OR IGNORE INTO archived_chores VALUES(?,?,?)',(quest_id,str(ctx.author.id),now_local().isoformat()))
+    await ctx.send('Archived. Restore it from /chores → Manage chores → Archived chores. Points and saved records remain.')
 
 
 @bot.command()
@@ -1311,46 +1159,7 @@ def help_command_lines(command_names):
 async def custom_help(ctx, *, topic: str = None):
     """Show Sprig's command guide."""
     if not topic:
-        embed = discord.Embed(
-            title="🌱 Sprig's Quest Guide",
-            description=(
-                "Use quest **numbers** for everyday commands. "
-                "Try `!help COMMAND` for examples and details."
-            ),
-        )
-
-        for category in HELP_CATEGORIES.values():
-            embed.add_field(
-                name=category["title"],
-                value=help_command_lines(category["commands"]),
-                inline=False,
-            )
-
-        embed.add_field(
-            name="🕰️ Automatic Resets",
-            value=(
-                "`daily` — midnight each day\n"
-                "`weekly` — Sunday at 6:00 PM\n"
-                "`monthly` — first day of the month\n"
-                "`one-time` — never resets automatically"
-            ),
-            inline=False,
-        )
-
-        embed.add_field(
-            name="💡 First Steps",
-            value=(
-                "1. Run `!quests`\n"
-                "2. Reserve an open quest with `!claim NUMBER`\n"
-                "3. Finish it with `!done NUMBER`"
-            ),
-            inline=False,
-        )
-
-        embed.set_footer(
-            text="Examples: !help addquest • !help done • !help management"
-        )
-        await ctx.send(embed=embed)
+        await ctx.send('Open **/chores** for private buttons. My chores: due, upcoming, and done work. Pick up chores: take work once or for a week. Household: everyone’s work. Open **Help** there for the complete button guide. Older command help remains available with !help COMMAND.')
         return
 
     lookup = topic.strip().lower().lstrip("!")
@@ -1489,6 +1298,10 @@ async def on_ready():
         f"({QUEST_TIMEZONE_NAME}; reset {reset_count} due quest(s))"
     )
 
+
+# Keep older command-specific help truthful about archive and undo semantics.
+HELP_COMMANDS['deletequest'].update(summary='Archive a chore while retaining its saved records.',details=['Equivalent to Archive chore. Restore from /chores → Manage chores → Archived chores.'])
+HELP_COMMANDS['resetquest'].update(summary='Find safe completion correction controls.',details=['Open /chores → chore card → Completion history → Undo. This command does not reset completion or award points.'])
 
 # --- Run ---
 

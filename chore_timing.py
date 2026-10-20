@@ -120,6 +120,7 @@ class ChoreTiming:
                     continue
                 if now < datetime.fromisoformat(deadline):
                     continue
+                self.db.execute('DELETE FROM occurrence_moves WHERE quest_id=?',(qid,))
                 if not completed:
                     self.db.execute('DELETE FROM claims WHERE quest_id=?',(qid,))
                 if frequency in SCHEDULED:

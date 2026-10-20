@@ -9,7 +9,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch, AsyncMock
-from datetime import datetime
+from datetime import datetime, timedelta
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "test-deps"))
@@ -20,6 +20,9 @@ class Response:
     def __init__(self):
         self.payload = None
         self.acknowledged = False
+
+    def is_done(self):
+        return self.acknowledged
 
     async def defer(self, **kwargs):
         self.acknowledged = True
@@ -340,7 +343,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         ctx = SimpleNamespace(guild=SimpleNamespace(id=1), channel=SimpleNamespace(id=2, fetch_message=fetch), send=send)
         await self.app.bot.get_command('refreshchoreboard').callback(ctx)
         self.assertEqual(len(edits), 1)
-        self.assertIn('Add chore', [c.label for c in edits[0]['view'].children])
+        self.assertIn('Manage chores', [c.label for c in edits[0]['view'].children])
         self.assertEqual(self.db.execute('SELECT message_id FROM chore_board').fetchone(), ('3',))
 
     async def test_everyone_can_add_without_admin(self):
@@ -515,7 +518,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('starter message is public',content)
         self.assertIn('Tap **Help**',content)
         self.assertFalse(options['ephemeral'])
-        self.assertIn('Open chores',[c.label for c in options['view'].children])
+        self.assertIn('Pick up chores',[c.label for c in options['view'].children])
         self.assertEqual(options['view'].timeout,600)
 
     async def test_slash_chores_is_private_and_actions_stay_private(self):
@@ -526,8 +529,9 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         await self.app.bot.get_command('chores').callback(ctx)
         self.assertTrue(messages[0][1]['ephemeral'])
         event=Interaction()
-        await messages[0][1]['view'].open_list(event,'open')
-        self.assertTrue(event.response.payload[1]['ephemeral'])
+        await next(c for c in messages[0][1]['view'].children if c.label=='Pick up chores').callback(event)
+        self.assertIsInstance(event.response.payload,dict)
+        self.assertIsInstance(event.response.payload['view'],self.ui.workspace.Browse)
 
     async def test_private_panel_does_not_bypass_hidden_channel(self):
         hidden=SimpleNamespace(permissions_for=lambda user:SimpleNamespace(view_channel=False,read_message_history=False))
@@ -661,16 +665,16 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_roster_launcher_private_and_navigation_refreshes(self):
         with self.clock('2026-10-19T10:00:00'):
             event=Interaction()
-            button=next(c for c in self.ui.Launcher().children if c.label=='Who’s doing what?')
+            button=next(c for c in self.ui.Launcher().children if c.label=='Household')
             await button.callback(event)
             options=event.response.payload[1]
             self.assertTrue(options['ephemeral'])
             view=options['view']
             self.assertTrue(await view.interaction_check(event))
             self.assertFalse(await view.interaction_check(Interaction(20)))
-            await next(c for c in view.children if c.label=='Next week').callback(event)
-            self.assertEqual(event.result['view'].offset,1)
-            self.assertIn('Next week',event.result['embed'].description)
+            await next(c for c in view.children if getattr(c,'label',None)=='Next week').callback(event)
+            self.assertEqual(event.response.payload['view'].state['tab'],'next')
+            self.assertIn('Next week',event.response.payload['embed'].description)
 
     async def test_claim_and_done_fast_path_use_single_response(self):
         with self.clock('2026-10-20T10:00:00'):
@@ -755,13 +759,13 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(set(ids)),27)
 
     async def test_dashboard_layout_is_consistent_for_saved_and_fresh_panels(self):
-        expected=[('My chores',0),('Open chores',0),('Weekly sign-ups',0),('Who’s doing what?',1),('Who’s home?',1),('Reassign',1),('Help',1),('Add chore',2),('Edit chore',2),('Remove chore',2),('Household setup',2),('Review inbox',3)]
+        expected=[('My chores',0),('Pick up chores',0),('Household',0),('Who’s home?',1),('Manage chores',1),('Help',1)]
         for timeout in [None,600]:
             view=self.ui.Launcher(timeout=timeout)
             self.assertEqual([(c.label,c.row) for c in view.children],expected)
             self.assertEqual([c.label for c in view.children if c.style==discord.ButtonStyle.primary],['My chores'])
             self.assertTrue(all(c.style==discord.ButtonStyle.secondary for c in view.children if c.label!='My chores'))
-            self.assertEqual(len({c.custom_id for c in view.children}),12)
+            self.assertEqual(len({c.custom_id for c in view.children}),6)
 
     async def test_reassign_occurrence_retains_points_history_and_blocks_stale(self):
         with self.clock('2026-10-20T10:00:00'):
@@ -849,10 +853,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_reassign_private_ui_ownership_and_cancel(self):
         event=Interaction()
-        button=next(c for c in self.ui.Launcher().children if c.label=='Reassign')
-        await button.callback(event)
-        self.assertTrue(event.response.payload[1]['ephemeral'])
-        view=event.response.payload[1]['view']
+        view=self.ui.ReassignView(10)
         self.assertTrue(await view.interaction_check(event))
         self.assertFalse(await view.interaction_check(Interaction(20)))
         before=list(self.db.iterdump())
@@ -1131,7 +1132,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             day_view=event.result['view']
             self.assertEqual(day_view.mode,'day')
             self.assertEqual(day_view.page,0)
-            await next(c for c in day_view.children if c.label=='Next week').callback(event)
+            await next(c for c in day_view.children if getattr(c,'label',None)=='Next week').callback(event)
             self.assertEqual(event.result['view'].mode,'day')
             self.assertEqual(event.result['view'].offset,1)
             await next(c for c in event.result['view'].children if c.label=='By chore').callback(event)
@@ -1152,7 +1153,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             edit=self.ui.EditChoreView(20,selected=2)
             for view in [mine,edit]:
                 event=Interaction(view.owner)
-                await next(c for c in view.children if getattr(c,'label',None)=='Choose day').callback(event)
+                await next(c for c in view.children if getattr(c,'label',None)=='Change regular day').callback(event)
                 self.assertTrue(event.response.payload[1]['ephemeral'])
                 self.assertIn('Choose a recurring day',event.response.payload[1]['embed'].title)
 
@@ -1285,7 +1286,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         view=event.response.payload[1]['view']
         view.children[0]._values=[SimpleNamespace(id=99,bot=True,guild=SimpleNamespace(id=1))]
         await view.children[0].callback(event)
-        self.assertIn('not a bot',event.response.payload[0][0])
+        self.assertIn('not bots',event.response.payload[0][0])
 
     async def test_attendance_change_invalidates_pending_trade(self):
         with self.clock('2026-10-20T10:00:00'):
@@ -1361,7 +1362,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             view=self.ui.PersonalView(10,'mine',page=1,selected=qid)
             rows={getattr(c,'label',None):c.row for c in view.children if isinstance(c,discord.ui.Button)}
             self.assertTrue(all(rows[label]==1 for label in ['Done','Drop','Reassign','Trade']))
-            self.assertEqual(rows['Choose day'],2)
+            self.assertEqual(rows['Change regular day'],2)
             self.assertEqual(rows['Back to list'],3)
             self.assertNotIn('My chores',rows)
             self.assertEqual(rows['Previous'],4)
@@ -1387,8 +1388,8 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         view=self.ui.PersonalView(10)
         before=list(self.db.iterdump())
         await next(c for c in view.children if getattr(c,'label',None)=='Dashboard').callback(event)
-        self.assertIsInstance(event.response.payload['view'],self.ui.Launcher)
-        self.assertIsNone(event.response.payload['embed'])
+        self.assertIsInstance(event.response.payload['view'],self.ui.workspace.Dashboard)
+        self.assertEqual(event.response.payload['embed'].title,'🌱 Your chore workspace')
         self.assertEqual(before,list(self.db.iterdump()))
 
     async def test_help_topics_are_short_private_and_navigable(self):
@@ -1493,17 +1494,17 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         context=self.ui.feedback_context(1)
         for number in range(8):
             self.ui.save_feedback(1,10,'Kas','*'*1000,'x'*200,'8','long-'+str(number),context)
-        view=self.ui.FeedbackView(20,1,selected=8)
+        view=self.ui.FeedbackView(301104023405199361,1,selected=8)
         self.assert_screen_limits(view)
-        event=Interaction(20)
+        event=Interaction(301104023405199361)
         self.assertFalse(await view.interaction_check(Interaction(30)))
-        await next(c for c in view.children if getattr(c,'label',None)=='Mark reviewed').callback(event)
+        await next(c for c in view.children if getattr(c,'label',None)=='Resolve review').callback(event)
         self.assertEqual(self.db.execute('SELECT reviewed FROM chore_feedback WHERE id=8').fetchone()[0],1)
         self.assertEqual(self.db.execute('SELECT count(*) FROM chore_feedback').fetchone()[0],8)
-        all_view=self.ui.FeedbackView(20,1,all_reviews=True,selected=8)
+        all_view=self.ui.FeedbackView(301104023405199361,1,all_reviews=True,selected=8)
         self.assertIn('Reviewed',str(all_view.embed.to_dict()))
         self.assert_screen_limits(all_view)
-        self.assertIn('Next',[getattr(c,'label',None) for c in self.ui.FeedbackView(20,1).children])
+        self.assertIn('Next',[getattr(c,'label',None) for c in self.ui.FeedbackView(301104023405199361,1).children])
 
     async def test_feedback_rejects_archived_chore_and_score_picker_is_optional(self):
         view=self.ui.FeedbackView(10,1)
@@ -1603,15 +1604,346 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.db.execute('SELECT COUNT(*) FROM chore_feedback').fetchone()[0],8)
 
     async def test_review_inbox_launcher_is_private_and_rejects_other_people(self):
-        view=self.ui.Launcher()
-        button=next(c for c in view.children if c.label=='Review inbox')
-        other=Interaction(10)
-        await button.callback(other)
-        self.assertIn('for ginaria',other.response.payload[0][0])
+        self.assertNotIn('Review inbox',[c.label for c in self.ui.Launcher().children])
+        self.assertFalse(any(c.label.startswith('Review inbox') for c in self.ui.workspace.Dashboard(10).children))
+        view=self.ui.workspace.Dashboard(301104023405199361)
+        button=next(c for c in view.children if c.label.startswith('Review inbox'))
         event=Interaction(301104023405199361)
         await button.callback(event)
-        self.assertTrue(event.response.payload[1]['ephemeral'])
-        self.assertIsInstance(event.response.payload[1]['view'],self.ui.ReviewInbox)
+        self.assertIsInstance(event.response.payload['view'],self.ui.workspace.Inbox)
+        self.assertFalse(await event.response.payload['view'].interaction_check(Interaction(10)))
+
+    async def test_workspace_personal_upcoming_includes_future_responsibilities(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.create_chore('Friday laundry','friday','5','Bedroom')
+            qid=self.db.execute("SELECT id FROM quests WHERE name='Friday laundry'").fetchone()[0]
+            self.db.execute('UPDATE quests SET assigned_to=? WHERE id=?',('10',qid));self.db.commit()
+            self.assertNotIn(qid,[r[0] for r in self.ui.workspace.Browse(10,'mine').entries])
+            self.assertIn(qid,[r[0] for r in self.ui.workspace.Browse(10,'mine',tab='upcoming').entries])
+            self.assertIn(qid,[r[0] for r in self.ui.workspace.Browse(10,'mine',tab='week').entries])
+            card=self.ui.workspace.Card(10,qid)
+            self.assertNotIn('Done',[getattr(c,'label',None) for c in card.children])
+
+    async def test_workspace_next_week_reservations_visible_before_due(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.signup(10,1,self.ui.week_key(1))
+            self.assertIn(1,[r[0] for r in self.ui.workspace.Browse(10,'mine',tab='next').entries])
+            self.assertIn(1,[r[0] for r in self.ui.workspace.Browse(10,'mine',tab='upcoming').entries])
+            self.assertIn('Next week',self.ui.workspace.Browse(10,'mine',tab='next').embed.description)
+
+    async def test_workspace_chore_card_claim_done_and_safe_history(self):
+        with self.clock('2026-10-20T10:00:00'):
+            w=self.ui.workspace
+            first=w.Card(10,1);event=Interaction()
+            await next(c for c in first.children if getattr(c,'label',None)=='Just this time').callback(event)
+            claimed=(event.result or event.response.payload)['view'];self.assertIsInstance(claimed,w.Card)
+            second=Interaction();await next(c for c in claimed.children if getattr(c,'label',None)=='Done').callback(second)
+            self.assertEqual(self.db.execute('SELECT points FROM users WHERE id=?',('10',)).fetchone(),(5,))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(1,))
+            result=self.ui.undo_completion(10,1)
+            self.assertIn('undone',result)
+            self.assertEqual(self.db.execute('SELECT points FROM users WHERE id=?',('10',)).fetchone(),(0,))
+            self.assertEqual(self.db.execute('SELECT user_id FROM claims WHERE quest_id=1').fetchone(),('10',))
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=1').fetchone(),(0,))
+            self.assertNotIn('undone.',self.ui.undo_completion(10,1))
+
+    async def test_history_undo_rejects_other_user_changed_points_and_rollover(self):
+        with self.clock('2026-10-20T10:00:00'):
+            await self.ui.PersonalView(10,selected=1).act(Interaction(),'claim')
+            await self.ui.PersonalView(10,'mine',selected=1).act(Interaction(),'done')
+            self.assertIn('no longer',self.ui.undo_completion(20,1))
+            self.db.execute("UPDATE users SET points=points+10 WHERE id='10'");self.db.commit()
+            self.assertIn('changed',self.ui.undo_completion(10,1))
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(15,))
+        with self.clock('2026-10-21T10:00:00'):
+            self.assertIn('changed',self.ui.undo_completion(10,1))
+
+    async def test_history_undo_most_recent_and_streak_preserved(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("INSERT INTO users VALUES('10',40,3,'2026-10-19T10:00:00-04:00')");self.db.commit()
+            await self.ui.PersonalView(10,selected=1).act(Interaction(),'claim')
+            await self.ui.PersonalView(10,'mine',selected=1).act(Interaction(),'done')
+            await self.ui.PersonalView(10,'mine',selected=2).act(Interaction(),'done')
+            self.assertIn('most recent',self.ui.undo_completion(10,1))
+            self.assertIn('undone',self.ui.undo_completion(10,2))
+            self.assertIn('undone',self.ui.undo_completion(10,1))
+            self.assertEqual(self.db.execute("SELECT points,streak,last_completed FROM users WHERE id='10'").fetchone(),(40,3,'2026-10-19T10:00:00-04:00'))
+
+    async def test_history_write_failure_rolls_back_award_and_completion(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("INSERT INTO users(id,points) VALUES('10',12)")
+            self.db.execute("INSERT INTO claims VALUES(1,'10')")
+            self.db.execute("CREATE TRIGGER reject_history BEFORE INSERT ON completion_log BEGIN SELECT RAISE(ABORT,'simulated disk error'); END;");self.db.commit()
+            with self.assertRaises(Exception):await self.app.bot.get_command('done').callback(SimpleNamespace(author=SimpleNamespace(id=10,display_name='Kas'),send=AsyncMock()),1)
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(12,))
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=1').fetchone(),(0,))
+            self.assertEqual(self.db.execute('SELECT user_id FROM claims WHERE quest_id=1').fetchone(),('10',))
+
+    async def test_workspace_search_room_person_and_unclaimed_filters(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.create_chore('Sweep kitchen','daily','5','Under table','Kitchen')
+            w=self.ui.workspace
+            self.assertEqual([r[1] for r in w.Browse(10,'household',tab='all',query='under table').entries],['Sweep kitchen'])
+            self.assertEqual([r[1] for r in w.Browse(10,'household',tab='all',room='Kitchen').entries],['Sweep kitchen'])
+            self.assertEqual([r[0] for r in w.Browse(10,'household',tab='all',person_id=10).entries],[2])
+            self.assertNotIn(2,[r[0] for r in w.Browse(10,'household',tab='all',unclaimed=True).entries])
+            self.assertEqual(self.db.execute('SELECT category FROM quests WHERE id=2').fetchone(),('general',))
+
+    async def test_workspace_household_chore_selection_opens_same_card(self):
+        with self.clock('2026-10-20T10:00:00'):
+            w=self.ui.workspace;view=w.Browse(10,'household',tab='all');event=Interaction()
+            picker=next(c for c in view.children if isinstance(c,discord.ui.Select));picker._values=['1']
+            await picker.callback(event)
+            self.assertIsInstance(event.response.payload['view'],w.Card)
+            self.assertEqual(event.response.payload['view'].qid,1)
+            await next(c for c in event.response.payload['view'].children if getattr(c,'label',None)=='Back').callback(event)
+            self.assertIsInstance(event.response.payload['view'],w.Browse)
+            self.assertEqual(event.response.payload['view'].state['area'],'household')
+
+    async def test_workspace_browse_preferences_remembered_per_person(self):
+        w=self.ui.workspace
+        w.Browse(10,'household',tab='all',group='person',query='bath')
+        event=Interaction();await next(c for c in w.Dashboard(10).children if c.label=='Household').callback(event)
+        self.assertEqual(event.response.payload['view'].state['query'],'bath')
+        self.assertNotIn((20,'household'),w.memory)
+
+    async def test_workspace_context_edit_replaces_current_private_message(self):
+        view=self.ui.workspace.adapt(self.ui.EditChoreView(10,selected=1),10,lambda:self.ui.workspace.Card(10,1))
+        event=Interaction()
+        await next(c for c in view.children if getattr(c,'label',None)=='Change schedule').callback(event)
+        self.assertIsInstance(event.response.payload,dict)
+        self.assertIsInstance(event.response.payload['view'],self.ui.AddChoreMenu)
+        self.assertIn('Back',[getattr(c,'label',None) for c in event.response.payload['view'].children])
+
+    async def test_workspace_review_only_owner_can_resolve(self):
+        context=self.ui.feedback_context(1);self.ui.save_feedback(1,10,'Kas','Need more time','','8','owner-only',context)
+        nonowner=self.ui.FeedbackView(10,1,selected=1)
+        self.assertNotIn('Resolve review',[getattr(c,'label',None) for c in nonowner.children])
+        self.assertFalse(await self.ui.workspace.Inbox(10).interaction_check(Interaction(10)))
+        owner=self.ui.workspace.Inbox(301104023405199361);event=Interaction(301104023405199361)
+        await next(c for c in owner.children if getattr(c,'label',None)=='Resolve and next').callback(event)
+        self.assertEqual(self.db.execute('SELECT reviewed FROM chore_feedback').fetchone(),(1,))
+        self.assertIn('All caught up',event.response.payload['embed'].description)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM chore_feedback').fetchone(),(1,))
+
+    async def test_workspace_owner_tools_hidden_from_other_people(self):
+        w=self.ui.workspace
+        labels=lambda v:[c.label for c in v.children if isinstance(c,discord.ui.Button)]
+        self.assertFalse(any(l.startswith('Review inbox') for l in labels(w.Dashboard(10))))
+        self.assertTrue(any(l.startswith('Review inbox') for l in labels(w.Dashboard(301104023405199361))))
+        self.assertNotIn('Household setup',labels(w.Dashboard(10,Interaction().guild)))
+
+    async def test_workspace_multi_person_trip_preview_and_edit_keeps_history(self):
+        with self.clock('2026-10-20T10:00:00'):
+            w=self.ui.workspace;first=w.parse_date('today');last=w.parse_date('tomorrow')
+            self.assertIn('Saved',w.save_trip(['10','20'],first,last,'away','Trip'))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM availability_exceptions WHERE active=1').fetchone(),(2,))
+            record=self.db.execute('SELECT id,user_id,start_date,end_date,state,note,active FROM availability_exceptions WHERE user_id=?',('10',)).fetchone()
+            self.assertIn('Saved',w.save_trip(['10'],first,last+timedelta(days=1),'away','Longer trip',record[0],record))
+            self.assertEqual(self.db.execute('SELECT active FROM availability_exceptions WHERE id=?',(record[0],)).fetchone(),(0,))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM availability_exceptions').fetchone(),(3,))
+            self.assertIn('changed',w.save_trip(['10'],first,last,'home','stale',record[0],record))
+
+    async def test_workspace_trip_overlap_rolls_back_entire_group(self):
+        w=self.ui.workspace;first=w.parse_date('2026-10-24');last=w.parse_date('2026-10-26')
+        w.save_trip(['20'],first,last,'away','Existing')
+        self.assertIn('overlap',w.save_trip(['10','20'],first,last,'home','New'))
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM availability_exceptions WHERE user_id='10'").fetchone(),(0,))
+        self.assertIn('already saved',w.save_trip(['20'],first,last,'away','Existing'))
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM availability_exceptions').fetchone(),(1,))
+
+    async def test_workspace_trip_modal_preview_does_not_save_before_confirmation(self):
+        w=self.ui.workspace;modal=w.TripModal(10,['10','20'],'away',lambda:w.Trips(10))
+        modal.first._value='2026-10-24';modal.last._value='2026-10-26';modal.note._value='Trip'
+        event=Interaction();await modal.on_submit(event)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM availability_exceptions').fetchone(),(0,))
+        confirmation=event.response.payload['view']
+        await next(c for c in confirmation.children if getattr(c,'label',None)=='Confirm').callback(event)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM availability_exceptions').fetchone(),(2,))
+
+    async def test_workspace_move_only_one_occurrence_retains_frequency(self):
+        with self.clock('2026-10-20T10:00:00'):
+            w=self.ui.workspace;modal=w.MoveModal(10,1,self.ui.snapshot(1),lambda:w.Card(10,1))
+            modal.day._value='tomorrow';event=Interaction();await modal.on_submit(event)
+            self.assertIsNone(self.db.execute('SELECT day FROM occurrence_moves WHERE quest_id=1').fetchone())
+            await next(c for c in event.response.payload['view'].children if getattr(c,'label',None)=='Confirm').callback(event)
+            self.assertFalse(self.ui.ready(1))
+            self.assertEqual(self.db.execute('SELECT frequency FROM quests WHERE id=1').fetchone(),('daily',))
+        with self.clock('2026-10-21T10:00:00'):
+            self.assertTrue(self.ui.ready(1))
+            await self.ui.PersonalView(10,selected=1).act(Interaction(),'claim')
+            await self.ui.PersonalView(10,'mine',selected=1).act(Interaction(),'done')
+            self.assertIsNone(self.db.execute('SELECT day FROM occurrence_moves WHERE quest_id=1').fetchone())
+
+    async def test_workspace_trade_notifications_are_opt_in_and_deduplicated(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("INSERT INTO claims VALUES(1,'20')");self.db.commit()
+            text=self.ui.propose_trade(10,2,1,self.ui.trade_snapshot(2),self.ui.trade_snapshot(1));self.assertIn('proposed',text)
+            await self.ui.workspace.notify_trade(1);self.dm.send.assert_not_awaited()
+            self.db.execute("INSERT INTO notification_preferences VALUES('20',1)");self.db.commit()
+            await self.ui.workspace.notify_trade(1);await self.ui.workspace.notify_trade(1)
+            self.dm.send.assert_awaited_once();self.app.bot.get_user.assert_called_once_with(20)
+
+    async def test_workspace_notification_toggle_is_personal_and_opt_in(self):
+        w=self.ui.workspace;view=w.Notifications(10)
+        self.assertIn('off',view.embed.description)
+        self.assertFalse(await view.interaction_check(Interaction(20)))
+        event=Interaction();await next(c for c in view.children if getattr(c,'label',None)=='Turn trade DMs on').callback(event)
+        self.assertEqual(self.db.execute('SELECT user_id,trade_dm FROM notification_preferences').fetchone(),('10',1))
+
+    async def test_workspace_legacy_delete_archives_and_reset_cannot_duplicate_awards(self):
+        context=SimpleNamespace(author=SimpleNamespace(id=10),send=AsyncMock())
+        await self.app.bot.get_command('deletequest').callback(context,1)
+        self.assertTrue(self.ui.is_archived(1))
+        self.assertIsNotNone(self.db.execute('SELECT id FROM quests WHERE id=1').fetchone())
+        self.db.execute('UPDATE quests SET completed=1 WHERE id=2');self.db.commit()
+        await self.app.bot.get_command('resetquest').callback(context,2)
+        self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=2').fetchone(),(1,))
+
+    async def test_workspace_all_screens_and_large_data_respect_discord_limits(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            for n in range(35):self.ui.create_chore(f'Long chore {n:02} '+'x'*65,'daily','5','*'*900,'Kitchen')
+            for area in ('mine','pickup','household'):
+                for tab in ('due','week','next','all'):
+                    for group in ('person','chore','day'):
+                        self.assert_screen_limits(w.Browse(10,area,tab=tab,group=group,page=1))
+            for view in (w.Dashboard(10),w.Dashboard(301104023405199361),w.Card(10,1),w.Manage(10),w.Trips(10,people=['10','20']),w.Inbox(301104023405199361),w.Guide(10),w.History(10,1,lambda:w.Card(10,1))):
+                self.assert_screen_limits(view)
+
+
+    async def test_workspace_same_card_fast_path_has_one_response(self):
+        with self.clock('2026-10-20T10:00:00'):
+            card=self.ui.workspace.Card(10,1);event=Interaction()
+            await next(c for c in card.children if getattr(c,'label',None)=='Just this time').callback(event)
+            self.assertFalse(event.response.acknowledged)
+            self.assertIsInstance(event.response.payload['view'],self.ui.workspace.Card)
+
+    async def test_workspace_paired_days_are_both_actionable_and_uniquely_counted(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.create_chore('Morning room trash','days:tuesday,friday','5','')
+            view=self.ui.workspace.Browse(10,'household',group='day')
+            headings=[f.name for f in view.embed.fields if 'Morning room trash' in f.name]
+            self.assertEqual(len(headings),2)
+            self.assertTrue(any('🟠 Tue' in h for h in headings))
+            self.assertTrue(any('🔵 Fri' in h for h in headings))
+            self.assertEqual(len(view.entries),3)
+            picker=next(c for c in view.children if isinstance(c,discord.ui.Select))
+            self.assertEqual(len({o.value for o in picker.options}),len(picker.options))
+
+    async def test_workspace_exact_date_filter_excludes_flexible_unset_days(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.create_chore('Friday car cleanup','friday','5','')
+            view=self.ui.workspace.Browse(10,'household',tab='all',date_filter='2026-10-23')
+            self.assertIn('Friday car cleanup',[q[1] for q in view.entries])
+            self.assertNotIn(2,[q[0] for q in view.entries])
+            self.assertNotIn('Friday car cleanup',[q[1] for q in self.ui.workspace.Browse(10,'household',tab='all',date_filter='2026-10-22').entries])
+
+    async def test_workspace_move_checks_stale_forms_and_restores_on_undo(self):
+        with self.clock('2026-10-20T10:00:00'):
+            w=self.ui.workspace;expected=self.ui.snapshot(1)
+            first=w.MoveModal(10,1,expected,lambda:w.Card(10,1));first.day._value='today'
+            event=Interaction();await first.on_submit(event)
+            await next(c for c in event.response.payload['view'].children if getattr(c,'label',None)=='Confirm').callback(event)
+            stale=w.MoveModal(10,1,expected,lambda:w.Card(10,1));stale.day._value='tomorrow'
+            event=Interaction();await stale.on_submit(event)
+            await next(c for c in event.response.payload['view'].children if getattr(c,'label',None)=='Confirm').callback(event)
+            self.assertEqual(self.db.execute('SELECT day FROM occurrence_moves').fetchone(),('2026-10-20',))
+            await self.ui.PersonalView(10,selected=1).act(Interaction(),'claim')
+            await self.ui.PersonalView(10,'mine',selected=1).act(Interaction(),'done')
+            self.assertIn('undone',self.ui.undo_completion(10,1))
+            self.assertEqual(self.db.execute('SELECT day FROM occurrence_moves').fetchone(),('2026-10-20',))
+
+    async def test_workspace_skip_policy_respects_future_moved_occurrence(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.timing.set_policy(1,'skip')
+            w=self.ui.workspace;modal=w.MoveModal(10,1,self.ui.snapshot(1),lambda:w.Card(10,1));modal.day._value='2026-10-23'
+            event=Interaction();await modal.on_submit(event)
+            await next(c for c in event.response.payload['view'].children if getattr(c,'label',None)=='Confirm').callback(event)
+        with self.clock('2026-10-22T10:00:00'):
+            self.app.reset_due_quests()
+            self.assertFalse(self.ui.ready(1))
+            self.assertEqual(self.db.execute('SELECT day FROM occurrence_moves').fetchone(),('2026-10-23',))
+
+    async def test_workspace_room_field_creates_and_edits_correct_chore(self):
+        modal=self.ui.AddChoreModal(10,'daily');modal.name._value='Kitchen counters';modal.notes._value='Wipe';modal.points._value='5';modal.room._value='Kitchen'
+        await modal.on_submit(Interaction())
+        qid=self.db.execute("SELECT id FROM quests WHERE name='Kitchen counters'").fetchone()[0]
+        self.assertEqual(self.db.execute('SELECT category FROM quests WHERE id=?',(qid,)).fetchone(),('Kitchen',))
+        edit=self.ui.EditChoreModal(10,qid,'daily',self.ui.snapshot(qid));edit.name._value='Kitchen counters';edit.notes._value='Wipe';edit.points._value='8';edit.room._value='Downstairs'
+        await edit.on_submit(Interaction())
+        self.assertEqual(self.db.execute('SELECT points,category FROM quests WHERE id=?',(qid,)).fetchone(),(8,'Downstairs'))
+        self.assertEqual(self.db.execute('SELECT category FROM quests WHERE id=2').fetchone(),('general',))
+
+    async def test_workspace_legacy_add_and_edit_share_duplicate_and_schedule_guards(self):
+        ctx=SimpleNamespace(author=SimpleNamespace(id=10),send=AsyncMock())
+        await self.app.bot.get_command('addquest').callback(ctx,'Fill dishwasher','daily',5)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM quests WHERE name='Fill dishwasher'").fetchone(),(1,))
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.signup(10,1,self.ui.week_key())
+            await self.app.bot.get_command('editquest').callback(ctx,1,'frequency',value='monthly')
+            self.assertEqual(self.db.execute('SELECT frequency FROM quests WHERE id=1').fetchone(),('daily',))
+
+    async def test_workspace_ongoing_assignment_requires_confirmation(self):
+        with self.clock('2026-10-20T10:00:00'):
+            w=self.ui.workspace;card=w.Card(10,1);event=Interaction()
+            await next(c for c in card.children if getattr(c,'label',None)=='Every week · ongoing').callback(event)
+            self.assertIsNone(self.db.execute('SELECT assigned_to FROM quests WHERE id=1').fetchone()[0])
+            await next(c for c in event.response.payload['view'].children if getattr(c,'label',None)=='Confirm').callback(event)
+            self.assertEqual(self.db.execute('SELECT assigned_to FROM quests WHERE id=1').fetchone(),('10',))
+
+    async def test_workspace_admin_tools_use_interaction_member_when_not_cached(self):
+        guild=SimpleNamespace(id=1,get_member=lambda uid:None)
+        member=SimpleNamespace(id=10,guild_permissions=SimpleNamespace(manage_guild=True))
+        view=self.ui.workspace.Dashboard(10,guild,member)
+        self.assertIn('Household setup',[c.label for c in view.children if isinstance(c,discord.ui.Button)])
+
+    async def test_workspace_completion_undo_survives_reopen_and_failed_undo_is_atomic(self):
+        with self.clock('2026-10-20T10:00:00'):
+            await self.ui.PersonalView(10,selected=1).act(Interaction(),'claim')
+            await self.ui.PersonalView(10,'mine',selected=1).act(Interaction(),'done')
+            import sqlite3
+            external=sqlite3.connect(Path(self.temp.name)/'sprig.db')
+            self.assertEqual(external.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(1,));external.close()
+            self.db.execute("CREATE TRIGGER reject_undo BEFORE UPDATE OF undone_at ON completion_log BEGIN SELECT RAISE(ABORT,'undo disk failure'); END;");self.db.commit()
+            with self.assertRaises(Exception):self.ui.undo_completion(10,1)
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(5,))
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=1').fetchone(),(1,))
+
+
+    async def test_workspace_expired_moved_skip_resumes_regular_weekday(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.create_chore('Moved Friday chore','friday','5','')
+            qid=self.db.execute("SELECT id FROM quests WHERE name='Moved Friday chore'").fetchone()[0]
+            self.ui.timing.set_policy(qid,'skip')
+            w=self.ui.workspace;modal=w.MoveModal(10,qid,self.ui.snapshot(qid),lambda:w.Card(10,qid));modal.day._value='2026-10-21'
+            event=Interaction();await modal.on_submit(event)
+            await next(c for c in event.response.payload['view'].children if getattr(c,'label',None)=='Confirm').callback(event)
+        with self.clock('2026-10-22T10:00:00'):
+            self.app.reset_due_quests()
+            self.assertIsNone(self.db.execute('SELECT day FROM occurrence_moves WHERE quest_id=?',(qid,)).fetchone())
+            self.assertFalse(self.ui.ready(qid))
+        with self.clock('2026-10-23T10:00:00'):
+            self.assertTrue(self.ui.ready(qid))
+
+    async def test_workspace_next_week_card_cannot_silently_take_others_current_claim(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("INSERT INTO claims VALUES(1,'20')");self.db.commit()
+            card=self.ui.workspace.Card(10,1,offset=1)
+            labels=[getattr(c,'label',None) for c in card.children]
+            self.assertNotIn('Every week · ongoing',labels)
+            self.assertNotIn('Take this week',labels)
+            self.assertIn('Take next week',labels)
+
+    async def test_workspace_trade_proposal_uses_saved_id_before_discord_response(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("INSERT INTO claims VALUES(1,'20')");self.db.execute("INSERT INTO notification_preferences VALUES('20',1)");self.db.commit()
+            view=self.ui.TradeOfferView(10,2,requested=1)
+            event=Interaction()
+            await next(c for c in view.children if getattr(c,'label',None)=='Propose trade').callback(event)
+            self.dm.send.assert_awaited_once()
+            self.assertEqual(self.db.execute('SELECT trade_id,status FROM trade_notifications').fetchone(),(1,'sent'))
+            self.assertIn('preference',event.response.payload['content'])
 
     async def test_help_button_is_persistent_private_and_changes_no_data(self):
         before = list(self.db.iterdump())
@@ -1624,7 +1956,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         options = event.response.payload[1]
         self.assertTrue(options['ephemeral'])
         guide = str(options['embed'].to_dict())
-        for phrase in ['Claim', 'Done', 'Release week', 'Sunday at 6 p.m.', 'Restore', '/chores', '!help']:
+        for phrase in ['My chores','Due now','Upcoming','Done','Pick up chores','Household','same card']:
             self.assertIn(phrase, guide)
         self.assertEqual(list(self.db.iterdump()), before)
 
