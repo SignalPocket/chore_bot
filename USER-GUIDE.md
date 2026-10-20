@@ -244,3 +244,11 @@ Open **Dashboard → Needs attention**. This private household view shows each c
 Needs someone includes unfinished work due now without a current owner; next week's reservation does not cover this week. Overdue means its scheduled day or shift has ended, or a flexible weekly/monthly period has ended. Due today alone is not overdue. Moved occurrences use the end of the moved day. One-time chores have no overdue deadline. Completed, archived, skipped expired occurrences, and resolved help notes are excluded as appropriate.
 
 For flexible daily, twice-daily, weekly, and monthly work without a recorded occurrence date, the first attention check saves the end of the current period. That date persists while the occurrence remains unfinished. Sprig does not guess historical missed dates before tracking began. This tracking does not change the chore's schedule, missed-work policy, ownership, points, or history.
+
+## Repeated clicks and simultaneous changes
+
+If two people try to take the same chore or weekly responsibility, one succeeds and the other sees current information. Done awards points once per occurrence. Completing separate chores still awards both sets of points without counting the same streak day twice.
+
+Old actions require fresh review after a chore changes, even if its owner or settings later return to the original values, or its completion is undone. Reopen the chore and choose again deliberately. An old weekly Release cannot remove a new reservation. A stored trade becomes outdated if either chore changes; propose a fresh trade instead. Pending trades created before this protection was installed may also require a fresh proposal.
+
+If Discord fails after an action saves, check the current card or Refresh / Resume before trying again. Sprig does not automatically repeat uncertain actions. When Done competes with Drop, Reassign, accepting a Trade, or changing the regular day, the first valid action saves and the outdated action asks for review. Earned points and recorded completions remain attached to the completing person.

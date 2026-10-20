@@ -90,6 +90,250 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.db.close()
         self.temp.cleanup()
 
+    async def audit9_queue(self,*actions):
+        # Queue real callbacks behind the production mutation lock, in each
+        # tested order, without wall-clock sleeps or replacing DB operations.
+        tasks=[]
+        async with self.ui.mutation_lock:
+            for action,event in actions:
+                tasks.append(asyncio.create_task(action(event)))
+                for _ in range(3):await asyncio.sleep(0)
+        await asyncio.gather(*tasks)
+
+    async def test_audit9_competing_card_claims_in_both_orders(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            for first,second in ((10,20),(20,10)):
+                self.ui.create_chore(f'Claim race {first}','one-time','5','')
+                qid=self.db.execute('SELECT MAX(id) FROM quests').fetchone()[0]
+                views=[w.Card(uid,qid) for uid in (first,second)]
+                actions=[(next(c for c in v.children if getattr(c,'label',None)=='Just this time').callback,Interaction(uid)) for v,uid in zip(views,(first,second))]
+                await self.audit9_queue(*actions)
+                self.assertEqual(self.ui.owned_scope(qid),(str(first),'occurrence'))
+                self.assertIn('changed',actions[1][1].response.payload['embed'].description)
+                self.assertEqual(self.db.execute('SELECT COUNT(*) FROM claims WHERE quest_id=?',(qid,)).fetchone(),(1,))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+
+    async def test_audit9_competing_week_reservations_current_and_next(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            for offset,label in ((0,'Take this week'),(1,'Take next week')):
+                for first,second in ((10,20),(20,10)):
+                    self.ui.create_chore(f'Week race {offset} {first}','daily','5','')
+                    qid=self.db.execute('SELECT MAX(id) FROM quests').fetchone()[0]
+                    actions=[(next(c for c in w.Card(uid,qid).children if getattr(c,'label',None)==label).callback,Interaction(uid)) for uid in (first,second)]
+                    await self.audit9_queue(*actions)
+                    self.assertEqual(self.ui.weekly_owner(qid,offset),str(first))
+                    self.assertIn('changed',actions[1][1].response.payload['embed'].description)
+
+    async def test_audit9_card_and_inline_done_together_award_once(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            card=w.Card(10,2);panel=w.render(w.Browse(10))
+            inline=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Button) and c.label=='Done')
+            actions=[(next(c for c in card.children if getattr(c,'label',None)=='Done').callback,Interaction()),(inline.callback,Interaction())]
+            await self.audit9_queue(*actions)
+            self.assertEqual(self.db.execute("SELECT points,streak FROM users WHERE id='10'").fetchone(),(10,1))
+            self.assertEqual(self.db.execute('SELECT quest_id,user_id,points FROM completion_log').fetchall(),[(2,'10',10)])
+            self.dm.send.assert_not_called()
+
+    async def test_audit9_two_different_completions_keep_both_awards_and_one_streak_day(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("UPDATE quests SET assigned_to='10' WHERE id=1");self.db.commit()
+            actions=[(next(c for c in w.Card(10,qid).children if getattr(c,'label',None)=='Done').callback,Interaction()) for qid in (1,2)]
+            await self.audit9_queue(*actions)
+            self.assertEqual(self.db.execute("SELECT points,streak FROM users WHERE id='10'").fetchone(),(15,1))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(2,))
+
+    async def test_audit9_done_and_drop_both_orders(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            for done_first in (True,False):
+                self.ui.create_chore('Drop race '+str(done_first),'weekly','5','')
+                qid=self.db.execute('SELECT MAX(id) FROM quests').fetchone()[0]
+                self.db.execute("UPDATE quests SET assigned_to='10' WHERE id=?",(qid,));self.db.commit()
+                done=(next(c for c in w.Card(10,qid).children if getattr(c,'label',None)=='Done').callback,Interaction())
+                drop=(next(c for c in self.ui.DropChoreView(10,qid,self.ui.snapshot(qid)).children if getattr(c,'label',None)=='Confirm drop').callback,Interaction())
+                await self.audit9_queue(*( (done,drop) if done_first else (drop,done) ))
+                self.assertEqual(self.db.execute('SELECT completed,assigned_to FROM quests WHERE id=?',(qid,)).fetchone(),(1,'10') if done_first else (0,None))
+                self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log WHERE quest_id=?',(qid,)).fetchone(),(int(done_first),))
+
+    async def test_audit9_done_and_reassign_both_orders_preserve_earned_points(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            for scope in ('occurrence','week0','assignment'):
+                for done_first in (True,False):
+                    self.ui.create_chore(f'Reassign race {scope} {done_first}','daily','5','')
+                    qid=self.db.execute('SELECT MAX(id) FROM quests').fetchone()[0]
+                    self.ui.reassign(qid,10,scope,self.ui.reassign_snapshot(qid))
+                    done=(next(c for c in w.Card(10,qid).children if getattr(c,'label',None)=='Done').callback,Interaction())
+                    view=self.ui.ReassignView(10,qid=qid,scope=scope,expected=self.ui.reassign_snapshot(qid))
+                    view.target=SimpleNamespace(id=20,bot=False,guild=SimpleNamespace(id=1))
+                    give=(view.confirm,Interaction())
+                    await self.audit9_queue(*( (done,give) if done_first else (give,done) ))
+                    self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=?',(qid,)).fetchone(),(int(done_first),))
+                    self.assertEqual(self.db.execute('SELECT user_id,points FROM completion_log WHERE quest_id=?',(qid,)).fetchall(),[('10',5)] if done_first else [])
+                    if not done_first:self.assertEqual(w.ownership(qid)[0],'20')
+                    else:self.assertIn('changed',give[1].result['content'])
+
+    async def test_audit9_done_and_trade_acceptance_both_orders(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            for done_first in (True,False):
+                ids=[]
+                for uid in (10,20):
+                    self.ui.create_chore(f'Trade race {done_first} {uid}','daily','5','')
+                    qid=self.db.execute('SELECT MAX(id) FROM quests').fetchone()[0];ids.append(qid)
+                    self.ui.reassign(qid,uid,'occurrence',self.ui.reassign_snapshot(qid))
+                offered,requested=ids
+                self.ui.propose_trade(10,offered,requested,self.ui.trade_snapshot(offered),self.ui.trade_snapshot(requested))
+                tid=self.db.execute('SELECT MAX(id) FROM chore_trades').fetchone()[0]
+                inbox=self.ui.TradeInboxView(20,selected=tid)
+                accept=(next(c for c in inbox.children if getattr(c,'label',None)=='Accept trade').callback,Interaction(20))
+                done=(next(c for c in w.Card(10,offered).children if getattr(c,'label',None)=='Done').callback,Interaction())
+                await self.audit9_queue(*( (done,accept) if done_first else (accept,done) ))
+                self.assertEqual(self.db.execute('SELECT status FROM chore_trades WHERE id=?',(tid,)).fetchone(),('expired',) if done_first else ('accepted',))
+                self.assertEqual(self.db.execute('SELECT user_id FROM completion_log WHERE quest_id=?',(offered,)).fetchall(),[('10',)] if done_first else [])
+                self.assertEqual(self.ui.owned_scope(requested)[0],'20' if done_first else '10')
+
+    async def test_audit9_done_and_schedule_change_both_orders(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            for done_first in (True,False):
+                self.ui.create_chore('Schedule race '+str(done_first),'weekly','5','')
+                qid=self.db.execute('SELECT MAX(id) FROM quests').fetchone()[0]
+                self.db.execute("UPDATE quests SET assigned_to='10' WHERE id=?",(qid,));self.db.commit()
+                done=(next(c for c in w.Card(10,qid).children if getattr(c,'label',None)=='Done').callback,Interaction())
+                day=self.ui.ChooseDayView(10,qid,self.ui.snapshot(qid),day='wednesday')
+                change=(next(c for c in day.children if getattr(c,'label',None)=='Save day').callback,Interaction())
+                await self.audit9_queue(*( (done,change) if done_first else (change,done) ))
+                self.assertEqual(self.db.execute('SELECT completed,frequency FROM quests WHERE id=?',(qid,)).fetchone(),(1,'weekly') if done_first else (0,'wednesday'))
+                self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log WHERE quest_id=?',(qid,)).fetchone(),(int(done_first),))
+
+    async def test_audit9_completion_failure_rolls_back_points_history_and_revision(self):
+        import sqlite3
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("INSERT INTO users(id,points,streak) VALUES('10',30,2)")
+            self.db.execute("CREATE TRIGGER audit9_abort BEFORE INSERT ON completion_log BEGIN SELECT RAISE(ABORT,'audit failure'); END");self.db.commit()
+            before={t:self.db.execute('SELECT * FROM '+t).fetchall() for t in ('quests','users','claims','chore_timing','chore_revisions','completion_log')}
+            with self.assertRaises(sqlite3.IntegrityError):await self.ui.PersonalView(10,'mine',selected=2).act(Interaction(),'done')
+            self.assertEqual(before,{t:self.db.execute('SELECT * FROM '+t).fetchall() for t in before})
+
+    async def test_audit9_restart_keeps_unchanged_pending_trade_valid(self):
+        with self.clock('2026-10-20T10:00:00'):
+            other=self.setup_trade()
+            self.ui.propose_trade(10,1,other,self.ui.trade_snapshot(1),self.ui.trade_snapshot(other))
+            before=self.db.execute('SELECT * FROM chore_revisions ORDER BY quest_id').fetchall()
+            path=Path(self.app.__file__)
+            spec=importlib.util.spec_from_file_location('sprig_audit9_restarted',path)
+            restarted=importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(restarted)
+            try:
+                with patch.object(restarted,'now_local',return_value=self.app.now_local()):
+                    self.assertEqual(before,restarted.db.execute('SELECT * FROM chore_revisions ORDER BY quest_id').fetchall())
+                    self.assertIn('accepted',restarted.chore_ui.respond_trade(20,1,'accept'))
+                    self.assertEqual(restarted.chore_ui.owned_scope(1)[0],'20')
+                    self.assertEqual(restarted.chore_ui.owned_scope(other)[0],'10')
+            finally:
+                await restarted.bot.close();restarted.db.close()
+
+    async def test_audit9_revision_persists_and_ignores_noop_updates(self):
+        import sqlite3
+        from contextlib import closing
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("UPDATE quests SET assigned_to='20' WHERE id=2");self.db.commit()
+            revision=self.db.execute('SELECT revision FROM chore_revisions WHERE quest_id=2').fetchone()
+            self.db.execute('UPDATE quests SET frequency=LOWER(TRIM(frequency)),assigned_to=assigned_to WHERE id=2');self.db.commit()
+            self.assertEqual(revision,self.db.execute('SELECT revision FROM chore_revisions WHERE quest_id=2').fetchone())
+            path=self.db.execute('PRAGMA database_list').fetchone()[2]
+            with closing(sqlite3.connect(path)) as second:
+                self.assertEqual(revision,second.execute('SELECT revision FROM chore_revisions WHERE quest_id=2').fetchone())
+
+    async def test_audit9_lost_completion_reply_retry_does_not_award_again(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            view=w.Card(10,2)
+            done=next(c for c in view.children if getattr(c,'label',None)=='Done')
+            failed=Interaction();failed.response.edit_message=AsyncMock(side_effect=ConnectionError('reply unavailable'))
+            with self.assertRaises(ConnectionError):await done.callback(failed)
+            retry=Interaction();await done.callback(retry)
+            self.assertEqual(self.db.execute("SELECT points,streak FROM users WHERE id='10'").fetchone(),(10,1))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(1,))
+            self.assertIn('changed',retry.response.payload['embed'].description)
+
+    async def test_audit9_trade_accept_and_cancel_compete_without_partial_swap(self):
+        with self.clock('2026-10-20T10:00:00'):
+            for accept_first in (True,False):
+                ids=[]
+                for uid in (10,20):
+                    self.ui.create_chore(f'Cancel trade {accept_first} {uid}','daily','5','')
+                    qid=self.db.execute('SELECT MAX(id) FROM quests').fetchone()[0];ids.append(qid)
+                    self.ui.reassign(qid,uid,'occurrence',self.ui.reassign_snapshot(qid))
+                offered,requested=ids
+                self.ui.propose_trade(10,offered,requested,self.ui.trade_snapshot(offered),self.ui.trade_snapshot(requested))
+                tid=self.db.execute('SELECT MAX(id) FROM chore_trades').fetchone()[0]
+                accept=(next(c for c in self.ui.TradeInboxView(20,selected=tid).children if getattr(c,'label',None)=='Accept trade').callback,Interaction(20))
+                cancel=(next(c for c in self.ui.TradeInboxView(10,selected=tid).children if getattr(c,'label',None)=='Cancel proposal').callback,Interaction())
+                await self.audit9_queue(*( (accept,cancel) if accept_first else (cancel,accept) ))
+                self.assertEqual(self.db.execute('SELECT status FROM chore_trades WHERE id=?',(tid,)).fetchone(),('accepted',) if accept_first else ('canceled',))
+                self.assertEqual([self.ui.owned_scope(qid)[0] for qid in ids],['20','10'] if accept_first else ['10','20'])
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+
+    async def test_audit9_trade_rollback_preserves_revision_and_can_retry_freshly(self):
+        import sqlite3
+        with self.clock('2026-10-20T10:00:00'):
+            other=self.setup_trade()
+            self.ui.propose_trade(10,1,other,self.ui.trade_snapshot(1),self.ui.trade_snapshot(other))
+            before=self.db.execute('SELECT * FROM chore_revisions ORDER BY quest_id').fetchall()
+            self.db.execute(f"CREATE TRIGGER audit9_swap_abort BEFORE UPDATE ON claims WHEN NEW.quest_id={other} BEGIN SELECT RAISE(ABORT,'swap failure'); END");self.db.commit()
+            with self.assertRaises(sqlite3.IntegrityError):self.ui.respond_trade(20,1,'accept')
+            self.assertEqual(before,self.db.execute('SELECT * FROM chore_revisions ORDER BY quest_id').fetchall())
+            self.assertEqual(self.ui.owned_scope(1)[0],'10');self.assertEqual(self.ui.owned_scope(other)[0],'20')
+            self.db.execute('DROP TRIGGER audit9_swap_abort');self.db.commit()
+            self.assertIn('accepted',self.ui.respond_trade(20,1,'accept'))
+
+    async def test_audit9_stale_done_after_undo_does_not_recomplete(self):
+        with self.clock('2026-10-20T10:00:00'):
+            old=self.ui.PersonalView(10,'mine',selected=2)
+            await self.ui.PersonalView(10,'mine',selected=2).act(Interaction(),'done')
+            event_id=self.db.execute('SELECT MAX(id) FROM completion_log').fetchone()[0]
+            self.assertIn('undone',self.ui.undo_completion(10,event_id))
+            event=Interaction();await old.act(event,'done')
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=2').fetchone(),(0,))
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(0,))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(1,))
+            self.assertIn('changed',event.response.payload['embed'].description)
+
+    async def test_audit9_trade_expires_when_ownership_changes_away_and_back(self):
+        with self.clock('2026-10-20T10:00:00'):
+            other=self.setup_trade()
+            self.ui.propose_trade(10,1,other,self.ui.trade_snapshot(1),self.ui.trade_snapshot(other))
+            self.ui.reassign(1,30,'occurrence',self.ui.reassign_snapshot(1))
+            self.ui.reassign(1,10,'occurrence',self.ui.reassign_snapshot(1))
+            text=self.ui.respond_trade(20,1,'accept')
+            self.assertIn('expired',text)
+            self.assertEqual(self.ui.owned_scope(1),('10','occurrence'))
+            self.assertEqual(self.ui.owned_scope(other),('20','occurrence'))
+
+    async def test_audit9_old_week_release_cannot_remove_fresh_signup(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.signup(10,1,self.ui.week_key())
+            old=self.ui.WeeklyView(10,selected=1)
+            await old.act(Interaction(),True)
+            self.ui.signup(10,1,self.ui.week_key())
+            event=Interaction();await old.act(event,True)
+            self.assertEqual(self.ui.weekly_owner(1),'10')
+            self.assertIn('changed',event.result['embed'].description)
+
+    async def test_audit9_stale_completion_after_schedule_edit_and_revert(self):
+        with self.clock('2026-10-20T10:00:00'):
+            old=self.ui.PersonalView(10,'mine',selected=2)
+            self.ui.update_chore(2,'My bathroom','tuesday','10','',self.ui.snapshot(2))
+            self.ui.update_chore(2,'My bathroom','weekly','10','',self.ui.snapshot(2))
+            await old.act(Interaction(),'done')
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=2').fetchone(),(0,))
+
     async def test_attention_combines_reasons_once_and_preserves_household_data(self):
         w=self.ui.workspace;p=self.ui.planning
         with self.clock('2026-10-19T09:00:00'):

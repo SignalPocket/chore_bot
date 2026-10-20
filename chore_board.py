@@ -26,6 +26,8 @@ def install(namespace):
     )""")
     db.commit()
     lock = asyncio.Lock()
+    db.execute("CREATE TABLE IF NOT EXISTS chore_revisions(quest_id INTEGER PRIMARY KEY,revision INTEGER NOT NULL)")
+    db.commit()
     db.executescript("""
         CREATE TABLE IF NOT EXISTS week_signups (
             quest_id INTEGER NOT NULL, week_start TEXT NOT NULL, user_id TEXT NOT NULL,
@@ -172,7 +174,7 @@ def install(namespace):
         row = db.execute("""SELECT q.completed, q.last_completed, q.assigned_to, c.user_id
             FROM quests q LEFT JOIN claims c ON c.quest_id = q.id WHERE q.id = ?""", (quest_id,)).fetchone()
         details=db.execute('SELECT name,frequency,points,notes,category,difficulty FROM quests WHERE id=?',(quest_id,)).fetchone()
-        return (row, week_key(), weekly_owner(quest_id), is_archived(quest_id), details, timing.state(quest_id), timing.policy_state(quest_id), db.execute("SELECT day FROM occurrence_moves WHERE quest_id=?",(quest_id,)).fetchone())
+        return (row, week_key(), weekly_owner(quest_id), is_archived(quest_id), details, timing.state(quest_id), timing.policy_state(quest_id), db.execute("SELECT day FROM occurrence_moves WHERE quest_id=?",(quest_id,)).fetchone(), db.execute("SELECT revision FROM chore_revisions WHERE quest_id=?",(quest_id,)).fetchone())
 
     def allowed(interaction):
         saved = location()
@@ -528,6 +530,7 @@ def install(namespace):
             self.page = min(max(page, 0), max((len(entries) - 1) // PAGE_SIZE, 0))
             chunk = entries[self.page * PAGE_SIZE:(self.page + 1) * PAGE_SIZE]
             self.selected = next((r for r in chunk if r[0] == selected), None)
+            self.expected = reassign_snapshot(selected) if self.selected else None
             start = week_start(offset)
             end = start + timedelta(weeks=1)
             status = {"home":"Home this week","away":"Away this week — choose a home week","partial":"Partly home this week — check coverage before reserving daily chores"}[week_status(owner,offset)]
@@ -586,9 +589,12 @@ def install(namespace):
         async def act(self, interaction, release=False):
             await interaction.response.defer()
             async with lock:
+                api.reset_due_quests()
                 # Do not silently apply a click to a different week after Sunday.
                 if week_key(self.offset) != self.key:
                     notice = "The week changed. Review the new dates before signing up."
+                elif not self.selected or reassign_snapshot(self.selected[0]) != self.expected:
+                    notice = "This chore changed. Review the refreshed weekly list before changing responsibility."
                 elif release:
                     with db:
                         db.execute("DELETE FROM week_signups WHERE quest_id = ? AND week_start = ? AND user_id = ?", (self.selected[0], self.key, str(self.owner)))
@@ -1951,7 +1957,7 @@ def install(namespace):
             bot.tree.add_command(bot.tree.get_command('chores'),guild=discord.Object(id=int(saved[0])),override=True)
 
     bot.setup_hook = setup_hook
-    result = SimpleNamespace(allowed=allowed, week_start=week_start, chore_option=chore_option, Context=Context, ReviewInbox=ReviewInbox, notify_feedback=notify_feedback, FeedbackView=FeedbackView, FeedbackModal=FeedbackModal, save_feedback=save_feedback, feedback_votes=feedback_votes, feedback_context=feedback_context, HelpView=HelpView, ReturnView=ReturnView, attendance=attendance, week_status=week_status, can_take_week=can_take_week, coverage_warning=coverage_warning, AttendanceView=AttendanceView, AttendanceModal=AttendanceModal, ChooseDayView=ChooseDayView, owned_scope=owned_scope, drop_chore=drop_chore, trade_snapshot=trade_snapshot, propose_trade=propose_trade, respond_trade=respond_trade, TradeOfferView=TradeOfferView, TradeInboxView=TradeInboxView, DropChoreView=DropChoreView, MissedChoreView=MissedChoreView, ReassignView=ReassignView, reassign=reassign, reassign_snapshot=reassign_snapshot, responsibility_view=responsibility_view, responsibility_rows=responsibility_rows, ResponsibilityView=ResponsibilityView, Launcher=Launcher, PersonalView=PersonalView, WeeklyView=WeeklyView, HouseholdSetup=HouseholdSetup, AddChoreModal=AddChoreModal, AddChoreMenu=AddChoreMenu, RemoveChoreView=RemoveChoreView, EditChoreView=EditChoreView, EditChoreModal=EditChoreModal, RepeatMenu=RepeatMenu, WeekdayMenu=WeekdayMenu, update_chore=update_chore, ready=timing.ready, completion_reset=timing.completion_reset, timing=timing, is_archived=is_archived, create_chore=create_chore, snapshot=snapshot, rows=rows, week_key=week_key, available=available, weekly_owner=weekly_owner, signup=signup)
+    result = SimpleNamespace(mutation_lock=lock,allowed=allowed, week_start=week_start, chore_option=chore_option, Context=Context, ReviewInbox=ReviewInbox, notify_feedback=notify_feedback, FeedbackView=FeedbackView, FeedbackModal=FeedbackModal, save_feedback=save_feedback, feedback_votes=feedback_votes, feedback_context=feedback_context, HelpView=HelpView, ReturnView=ReturnView, attendance=attendance, week_status=week_status, can_take_week=can_take_week, coverage_warning=coverage_warning, AttendanceView=AttendanceView, AttendanceModal=AttendanceModal, ChooseDayView=ChooseDayView, owned_scope=owned_scope, drop_chore=drop_chore, trade_snapshot=trade_snapshot, propose_trade=propose_trade, respond_trade=respond_trade, TradeOfferView=TradeOfferView, TradeInboxView=TradeInboxView, DropChoreView=DropChoreView, MissedChoreView=MissedChoreView, ReassignView=ReassignView, reassign=reassign, reassign_snapshot=reassign_snapshot, responsibility_view=responsibility_view, responsibility_rows=responsibility_rows, ResponsibilityView=ResponsibilityView, Launcher=Launcher, PersonalView=PersonalView, WeeklyView=WeeklyView, HouseholdSetup=HouseholdSetup, AddChoreModal=AddChoreModal, AddChoreMenu=AddChoreMenu, RemoveChoreView=RemoveChoreView, EditChoreView=EditChoreView, EditChoreModal=EditChoreModal, RepeatMenu=RepeatMenu, WeekdayMenu=WeekdayMenu, update_chore=update_chore, ready=timing.ready, completion_reset=timing.completion_reset, timing=timing, is_archived=is_archived, create_chore=create_chore, snapshot=snapshot, rows=rows, week_key=week_key, available=available, weekly_owner=weekly_owner, signup=signup)
 
     from chore_history import install as install_history
     install_history(namespace,result)
@@ -1960,4 +1966,21 @@ def install(namespace):
     result.workspace=workspace
     from chore_planning import install as install_planning
     result.planning=install_planning(namespace,result,workspace,lock)
+    # Changes away and back must not revive an old action or stored trade.
+    # SQLite increments these counters in the same transaction as each mutation,
+    # including legacy commands, Undo, and rollback. Navigation never bumps them.
+    for table,key in [('quests','id'),('claims','quest_id'),('week_signups','quest_id'),
+            ('chore_timing','quest_id'),('missed_chore_policy','quest_id'),
+            ('occurrence_moves','quest_id'),('archived_chores','quest_id')]:
+        for event,reference in [('INSERT','NEW'),('UPDATE','NEW'),('DELETE','OLD')]:
+            changed = ''
+            if event=='UPDATE':
+                columns=[r[1] for r in db.execute('PRAGMA table_info('+table+')')]
+                changed=' WHEN '+ ' OR '.join(f'OLD."{column}" IS NOT NEW."{column}"' for column in columns)
+            db.execute(f"""CREATE TRIGGER IF NOT EXISTS chore_revision_{table}_{event.lower()}
+                AFTER {event} ON {table}{changed} BEGIN
+                INSERT INTO chore_revisions(quest_id,revision) VALUES({reference}.{key},1)
+                ON CONFLICT(quest_id) DO UPDATE SET revision=revision+1;
+                END""")
+    db.commit()
     return result
