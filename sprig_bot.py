@@ -589,7 +589,7 @@ async def claim(ctx, quest_id: int):
         await ctx.send("This chore was removed. Restore it from Remove chore → Removed chores first.")
         return
     if not chore_ui.available(user_id):
-        await ctx.send("You're away this week. Use Weekly sign-ups to reserve your next home week's chores.")
+        await ctx.send("You're away today. Use Weekly sign-ups to plan a home day, or Who’s home? to check trips and traded days.")
         return
 
     cursor.execute(
@@ -688,7 +688,7 @@ async def done(ctx, quest_id: int):
         await ctx.send("This chore was removed. Restore it from Remove chore → Removed chores first.")
         return
     if not chore_ui.available(user_id):
-        await ctx.send("You're away this week. Your next home week's chores will appear after the Sunday handoff.")
+        await ctx.send("You're away today. Check Who’s home? for your dates; your responsibilities remain saved.")
         return
     get_or_create_user(user_id)
 

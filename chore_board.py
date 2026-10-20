@@ -1,12 +1,14 @@
 """Button interface for Sprig; existing commands remain the source of mutations."""
 import asyncio
 import json
+from uuid import uuid4
 from time import monotonic
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import discord
 from discord.ext import commands
+from household_availability import HouseholdAvailability
 from chore_timing import ChoreTiming, WEEKDAYS, WEEKLY_FREQUENCIES, DAY_COLORS, DAY_LEGEND, day_badge
 
 PAGE_SIZE = 20
@@ -39,6 +41,14 @@ def install(namespace):
         status TEXT NOT NULL DEFAULT 'pending')""")
     db.commit()
 
+    db.execute("""CREATE TABLE IF NOT EXISTS chore_feedback(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, submission_key TEXT UNIQUE NOT NULL,
+        quest_id INTEGER NOT NULL, author_id TEXT NOT NULL, author_name TEXT NOT NULL,
+        comment TEXT NOT NULL, timing TEXT NOT NULL, suggested_points INTEGER,
+        created_at TEXT NOT NULL, context TEXT NOT NULL, reviewed INTEGER NOT NULL DEFAULT 0)""")
+    db.commit()
+    attendance=HouseholdAvailability(db,api.QUEST_TIMEZONE)
+
     def week_start(offset=0):
         now = namespace['now_local']().astimezone(api.QUEST_TIMEZONE)
         start = (now - timedelta(days=(now.weekday() + 1) % 7)).replace(hour=18, minute=0, second=0, microsecond=0)
@@ -50,12 +60,39 @@ def install(namespace):
         return week_start(offset).date().isoformat()
 
     def available(user_id, offset=0):
-        alternating = db.execute("SELECT 1 FROM alternating_members WHERE user_id = ?", (str(user_id),)).fetchone()
-        if not alternating:
-            return True
-        # Sunday October 18, 2026 begins the away week supplied by Katherine.
-        anchor = datetime(2026, 10, 18).date()
-        return ((week_start(offset).date() - anchor).days // 7) % 2 == 1
+        return attendance.at(user_id,namespace['now_local']() if offset==0 else week_start(offset))
+
+    def week_status(user_id,offset=0):
+        return attendance.status(user_id,week_start(offset))
+
+    def coverage_warning(qid,user_id,offset=0):
+        frequency=db.execute('SELECT frequency FROM quests WHERE id=?',(qid,)).fetchone()
+        if not frequency:
+            return ''
+        frequency=frequency[0]
+        days=attendance.week(user_id,week_start(offset))
+        if frequency in ('daily','twice-daily'):
+            away=[when for when,home in days if not home]
+        elif frequency in WEEKDAYS or ':' in frequency:
+            away=[when for when,home in days[1:] if timing.matches(when.date(),frequency) and not home]
+        else:
+            away=[when for when,home in days if not home] if week_status(user_id,offset)!='home' else []
+        if not away:
+            return ''
+        return 'Check coverage: away '+', '.join(f'{day_badge(WEEKDAYS[when.weekday()])} {when:%b %d}' for when in away)
+
+    def can_take_week(user_id,qid,offset):
+        days=attendance.week(user_id,week_start(offset))
+        if offset==0:
+            today=namespace['now_local']().astimezone(api.QUEST_TIMEZONE).date()
+            days=[(when,home) for when,home in days if when.date()>=today]
+        if not any(home for _,home in days):
+            return False
+        frequency=db.execute('SELECT frequency FROM quests WHERE id=?',(qid,)).fetchone()
+        if frequency and (frequency[0] in WEEKDAYS or ':' in frequency[0]):
+            scheduled=[(when,home) for when,home in days if when!=week_start(offset) and timing.matches(when.date(),frequency[0])]
+            return all(home for _,home in scheduled) if scheduled else (offset==0 and available(user_id))
+        return True
 
     def weekly_owner(quest_id, offset=0):
         row = db.execute("SELECT user_id FROM week_signups WHERE quest_id = ? AND week_start = ?", (quest_id, week_key(offset))).fetchone()
@@ -66,10 +103,8 @@ def install(namespace):
     def reset_with_availability():
         timing.skip_missed()
         result = original_reset()
-        # A claim made during a home week must not strand a chore in an away week.
-        away = [r[0] for r in db.execute("SELECT user_id FROM alternating_members").fetchall() if not available(r[0])]
+        # Preserve responsibilities when attendance changes; show coverage warnings.
         with db:
-            db.executemany("DELETE FROM claims WHERE user_id = ?", [(uid,) for uid in away])
             # A new weekly owner takes precedence over a previous occurrence claim.
             db.execute("""DELETE FROM claims WHERE EXISTS (
                 SELECT 1 FROM week_signups w WHERE w.quest_id = claims.quest_id
@@ -94,13 +129,15 @@ def install(namespace):
         offset = offsets.get(key)
         if offset is None:
             return "The week changed. Reopen Weekly sign-ups."
-        if not available(user_id, offset):
+        if week_status(user_id,offset)=='away':
             return "You're away that week. Choose a week when you're home."
         row = db.execute("SELECT frequency, assigned_to FROM quests WHERE id = ?", (quest_id,)).fetchone()
         if not row or is_archived(quest_id) or row[0] not in WEEKLY_FREQUENCIES or row[1]:
             return "This chore is no longer available for a weekly sign-up."
         if not timing.in_week(row[0],week_start(offset)) and not (offset == 0 and timing.ready(quest_id)):
             return 'This chore is not scheduled for that week.'
+        if not can_take_week(user_id,quest_id,offset):
+            return 'You are away on a scheduled chore day. Choose another chore or update attendance.'
         claim = db.execute("SELECT user_id FROM claims WHERE quest_id = ?", (quest_id,)).fetchone()
         if offset == 0 and claim and claim[0] != str(user_id):
             return "Someone already claimed this occurrence. Choose another chore."
@@ -110,7 +147,7 @@ def install(namespace):
                 db.execute("DELETE FROM claims WHERE quest_id = ? AND user_id = ?", (quest_id, str(user_id)))
         if weekly_owner(quest_id, offset) != str(user_id):
             return "Someone already signed up for this chore that week."
-        return "You're signed up for the week. Daily chores stay yours after each Done until Sunday at 6 p.m."
+        return "You're signed up for the week. Daily chores stay yours after each Done until Sunday at 6 p.m. " + coverage_warning(quest_id,user_id,offset)
 
     def location():
         return db.execute("SELECT guild_id, channel_id, message_id FROM chore_board WHERE singleton = 1").fetchone()
@@ -150,6 +187,13 @@ def install(namespace):
         return permissions.view_channel and permissions.read_message_history
 
     class SafeView(discord.ui.View):
+        def add_dashboard(self,row=4):
+            button=discord.ui.Button(label='Dashboard',row=row,style=discord.ButtonStyle.secondary)
+            async def home(interaction):
+                await interaction.response.edit_message(content=BOARD_TEXT,embed=None,view=Launcher(timeout=600),allowed_mentions=discord.AllowedMentions.none())
+            button.callback=home
+            self.add_item(button)
+
         async def on_error(self, interaction, error, item):
             # Do not repeat an action after a response failure: it may have saved.
             message = "I couldn't finish updating this view. Open My chores again to check what saved before trying again."
@@ -160,6 +204,24 @@ def install(namespace):
             import logging
             logging.getLogger(__name__).exception("Chore board interaction failed", exc_info=error)
 
+    class ReturnView(SafeView):
+        def __init__(self,owner):
+            super().__init__(timeout=600)
+            self.owner=owner
+            mine=discord.ui.Button(label='My chores',style=discord.ButtonStyle.primary)
+            async def open_mine(interaction):
+                view=PersonalView(owner,'mine')
+                await interaction.response.edit_message(content=None,embed=view.embed,view=view)
+            mine.callback=open_mine
+            self.add_item(mine)
+            self.add_dashboard(row=0)
+
+        async def interaction_check(self,interaction):
+            if interaction.user.id!=self.owner or not allowed(interaction):
+                await interaction.response.send_message('Open your own dashboard with /chores.',ephemeral=True)
+                return False
+            return True
+
     class Context:
         def __init__(self, interaction):
             self.author, self.guild = interaction.user, interaction.guild
@@ -169,10 +231,10 @@ def install(namespace):
             # Buffer command feedback: no network await during its DB mutation.
             self.messages.append(content)
 
-    def chore_option(qid,name,extra=''):
+    def chore_option(qid,name,extra='',selected=False):
         frequency=db.execute('SELECT frequency FROM quests WHERE id=?',(qid,)).fetchone()[0]
         description=timing.compact_label(frequency)+((' · '+extra) if extra else '')
-        return discord.SelectOption(label=name[:100],value=str(qid),description=description[:100],emoji=timing.emoji(frequency))
+        return discord.SelectOption(label=name[:100],value=str(qid),description=description[:100],emoji=timing.emoji(frequency),default=selected)
 
     class PersonalView(SafeView):
         def __init__(self, owner, mode="open", page=0, selected=None, notice=""):
@@ -184,26 +246,26 @@ def install(namespace):
             self.selected = next((r for r in chunk if r[0] == selected), None)
             self.expected = snapshot(selected) if self.selected else None
             title = "Open chores" if mode == "open" else "My chores"
-            away_message = "You're away this week. Use Weekly sign-ups on the main board to reserve your next home week's chores."
+            away_message = "You're away today. Use Weekly sign-ups on the main board to reserve your next home week's chores."
             self.embed = discord.Embed(title=f"🌱 {title}", description=(notice or ("Choose a chore below. No commands needed." if available(owner) else away_message))+"\n"+DAY_LEGEND)
             if self.selected:
                 r = self.selected
                 responsibility = " · Yours through Sunday at 6 p.m." if weekly_owner(r[0]) == str(owner) else ""
                 self.embed.add_field(name=r[1][:256], value=f"{timing.label(r[2],r[0])} · {r[3]} points{responsibility}\n{(r[7] or '')[:650]}", inline=False)
             elif not chunk:
-                self.embed.add_field(name="All clear", value="No open chores right now." if mode == "open" else "Nothing assigned or claimed. Tap Open chores to sign up.")
+                self.embed.add_field(name='Away today' if not available(owner) else 'All clear',value='Your responsibilities remain saved. Check Who’s home? or the weekly overview for coverage.' if not available(owner) else ("No open chores right now." if mode == "open" else "No chores due right now. Check weekly sign-ups or the overview for upcoming work."))
             else:
                 for part in range(0,len(chunk),6):
                     self.embed.add_field(name='Available here' if part==0 else 'More chores',value='\n'.join(f"• **{discord.utils.escape_markdown(r[1])[:65]}** — {timing.compact_label(r[2])}" for r in chunk[part:part+6]),inline=False)
-            self.embed.set_footer(text=f"Page {self.page + 1} of {max((len(self.entries) - 1) // PAGE_SIZE + 1, 1)} · Private view · Reopen from the main board after 10 minutes or a bot restart.")
+            self.embed.set_footer(text=f"Page {self.page + 1} of {max((len(self.entries) - 1) // PAGE_SIZE + 1, 1)} · Private view · Reopen /chores after 10 minutes or a restart.")
             if chunk:
-                select = discord.ui.Select(placeholder="Choose a chore…", options=[chore_option(r[0],r[1],f"{r[3]} points") for r in chunk])
+                select = discord.ui.Select(placeholder="Choose a chore…", options=[chore_option(r[0],r[1],f"{r[3]} points",selected=bool(self.selected and r[0]==self.selected[0])) for r in chunk])
                 async def choose(interaction):
                     await self.show(interaction, selected=int(select.values[0]))
                 select.callback = choose
                 self.add_item(select)
-            self.add_button("Open chores", lambda i: self.show(i, mode="open", page=0))
-            self.add_button("My chores", lambda i: self.show(i, mode="mine", page=0))
+            self.add_button("Open chores", lambda i: self.show(i, mode="open", page=0),style=discord.ButtonStyle.primary if mode=="open" else discord.ButtonStyle.secondary,row=3)
+            self.add_button("My chores", lambda i: self.show(i, mode="mine", page=0),style=discord.ButtonStyle.primary if mode=="mine" else discord.ButtonStyle.secondary,row=3)
             if self.selected:
                 if mode == "open":
                     self.add_button("Claim", lambda i: self.act(i, "claim"), discord.ButtonStyle.success)
@@ -223,24 +285,32 @@ def install(namespace):
                         await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True)
                     self.add_button('Drop',drop)
                     self.add_button('Reassign',give)
-                    self.add_button('Trade',trade,row=2)
+                    self.add_button('Trade',trade,row=1)
                     if self.selected[2] in ('weekly',*WEEKDAYS):
                         async def choose_day(interaction):
                             view=ChooseDayView(self.owner,self.selected[0],self.expected)
                             await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True)
                         self.add_button('Choose day',choose_day,row=2)
 
+            if self.selected:
+                async def review(interaction):
+                    view=FeedbackView(self.owner,self.selected[0])
+                    await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+                self.add_button('Chore review',review,row=2)
             if self.page:
-                self.add_button("Previous", lambda i: self.show(i, page=self.page - 1), row=2)
+                self.add_button("Previous", lambda i: self.show(i, page=self.page - 1), row=4)
             if (self.page + 1) * PAGE_SIZE < len(self.entries):
-                self.add_button("Next", lambda i: self.show(i, page=self.page + 1), row=2)
-            self.add_button("Refresh", lambda i: self.show(i), row=2)
+                self.add_button("Next", lambda i: self.show(i, page=self.page + 1), row=4)
+            self.add_button("Refresh", lambda i: self.show(i), row=4)
             if mode=='mine':
                 count=db.execute("SELECT count(*) FROM chore_trades WHERE status='pending' AND (proposer=? OR recipient=?)",(str(owner),str(owner))).fetchone()[0]
                 async def requests(interaction):
                     view=TradeInboxView(self.owner)
                     await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True)
-                self.add_button(f'Trade requests ({count})',requests,row=3)
+                self.add_button(f'Trade requests ({count})',requests,row=2)
+            self.add_dashboard()
+            if hasattr(self,'embed'):
+                self.embed.color=0x6B9B77
 
 
         def add_button(self, label, callback, style=discord.ButtonStyle.secondary, row=1):
@@ -264,13 +334,17 @@ def install(namespace):
                 async with lock:
                     api.reset_due_quests()
                     if not available(self.owner):
-                        notice = "You're away this week. Open Weekly sign-ups to plan your next home week."
+                        notice = "You're away today. Open Weekly sign-ups to plan your next home week."
                     elif snapshot(self.selected[0]) != self.expected:
                         notice = "This chore changed since you opened it. The list has been refreshed."
                     else:
                         context = Context(interaction)
                         await bot.get_command(action).callback(context, self.selected[0])
                         notice = "\n".join(context.messages)
+                    if action=='claim' and db.execute('SELECT user_id FROM claims WHERE quest_id=?',(self.selected[0],)).fetchone()==(str(self.owner),):
+                        notice='Added to My chores: **'+discord.utils.escape_markdown(self.selected[1])+'**.'
+                    elif action=='done' and db.execute('SELECT completed FROM quests WHERE id=?',(self.selected[0],)).fetchone()==(1,):
+                        notice='Done: **'+discord.utils.escape_markdown(self.selected[1])+'** · +'+str(self.selected[3])+' points.'
                     view = PersonalView(self.owner, "mine" if action == "claim" else self.mode, notice=notice)
                 return view
             # Fast local mutations need one Discord response, not defer + edit.
@@ -362,7 +436,7 @@ def install(namespace):
             elif mode=='chore':
                 rendered=[(0,'Chores · A–Z',entry) for entry in sorted(entries,key=lambda r:(r[2].casefold(),r[1]))]
             else:
-                rendered=[(0,(display(entry[0])+(' · away' if not available(entry[0],offset) else '')) if entry[0] else 'Needs someone',entry) for entry in entries]
+                rendered=[(0,(display(entry[0])+(' · '+week_status(entry[0],offset) if week_status(entry[0],offset)!='home' else '')) if entry[0] else 'Needs someone',entry) for entry in entries]
             self.rendered=rendered
             self.page=min(max(page,0),max((len(rendered)-1)//12,0))
             missing=sum(r[0] is None for r in entries)
@@ -390,7 +464,8 @@ def install(namespace):
                     tags.append('ongoing')
                 if status=='Done for this occurrence':
                     tags.append('done this slot' if frequency=='twice-daily' else 'done')
-                line=f"• **{discord.utils.escape_markdown(name)[:150]}** — {' · '.join(tags)}"
+                warning=coverage_warning(qid,uid,offset) if uid else ''
+                line=f"• **{discord.utils.escape_markdown(name)[:150]}** — {' · '.join(tags)}"+('\n⚠ '+(warning if len(warning)<=110 else warning[:100]+'… · see Who’s home?') if warning else '')
                 if title!=heading or len('\n'.join(lines+[line]))>950:
                     flush()
                     heading=title
@@ -412,6 +487,9 @@ def install(namespace):
                 self.button('Previous',lambda i:self.show(i,page=self.page-1),row=2)
             if (self.page+1)*12<len(rendered):
                 self.button('Next page',lambda i:self.show(i,page=self.page+1),row=2)
+            self.add_dashboard()
+            if hasattr(self,'embed'):
+                self.embed.color=0x6B9B77
 
         def button(self,label,callback,row=0,style=discord.ButtonStyle.secondary):
             item=discord.ui.Button(label=label,row=row,style=style)
@@ -440,8 +518,9 @@ def install(namespace):
             self.selected = next((r for r in chunk if r[0] == selected), None)
             start = week_start(offset)
             end = start + timedelta(weeks=1)
-            status = "Home this week" if available(owner, offset) else "Away this week — choose your next home week"
+            status = {"home":"Home this week","away":"Away this week — choose a home week","partial":"Partly home this week — check coverage before reserving daily chores"}[week_status(owner,offset)]
             self.embed = discord.Embed(title="🌱 Weekly sign-ups", description=f"{start:%b %d} at 6 p.m. → {end:%b %d} at 6 p.m.\n{status}\n{notice or 'Reserve a recurring chore for this week or next week.'}\n{DAY_LEGEND}")
+            self.embed.add_field(name='Availability',value=('Home throughout this household week.' if week_status(owner,offset)=='home' else ('Away throughout this household week.' if week_status(owner,offset)=='away' else '\n'.join(f'{day_badge(WEEKDAYS[when.weekday()])} {when:%b %d}: '+('Home' if home else 'Away')+(' after 6 p.m.' if index==0 else (' before 6 p.m.' if index==7 else '')) for index,(when,home) in enumerate(attendance.week(owner,week_start(offset)))))),inline=False)
             if not db.execute("SELECT 1 FROM alternating_members LIMIT 1").fetchone():
                 self.embed.add_field(name="Household setup needed", value="An administrator still needs to select Kas and Z in Household setup so their away weeks can be enforced.", inline=False)
             if self.selected:
@@ -451,23 +530,31 @@ def install(namespace):
             elif not chunk:
                 self.embed.add_field(name="No chores available", value="Preassigned and one-time chores aren't part of weekly sign-ups.")
             if chunk:
-                select = discord.ui.Select(placeholder="Choose a chore for the week…", options=[chore_option(r[0],r[1],"Your weekly responsibility" if weekly_owner(r[0], offset) == str(owner) else "Open for the week") for r in chunk])
+                select = discord.ui.Select(placeholder="Choose a chore for the week…", options=[chore_option(r[0],r[1],"Your weekly responsibility" if weekly_owner(r[0], offset) == str(owner) else "Open for the week",selected=bool(self.selected and r[0]==self.selected[0])) for r in chunk])
                 async def choose(interaction):
                     await self.show(interaction, selected=int(select.values[0]))
                 select.callback = choose
                 self.add_item(select)
+            if self.selected:
+                async def review(interaction):
+                    view=FeedbackView(owner,self.selected[0])
+                    await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+                self.button('Chore review',review,row=2)
             self.button("This week", lambda i: self.show(i, offset=0, page=0))
             self.button("Next week", lambda i: self.show(i, offset=1, page=0))
             if self.selected:
                 mine = weekly_owner(self.selected[0], offset) == str(owner)
-                if mine or available(owner, offset):
+                if mine or can_take_week(owner,r[0],offset):
                     self.button("Release week" if mine else "Sign up for week", lambda i: self.act(i, mine), discord.ButtonStyle.secondary if mine else discord.ButtonStyle.success)
             if self.page:
                 self.button("Previous", lambda i: self.show(i, page=self.page - 1), row=2)
             if (self.page + 1) * PAGE_SIZE < len(entries):
                 self.button("Next", lambda i: self.show(i, page=self.page + 1), row=2)
             self.button("Refresh", lambda i: self.show(i), row=2)
-            self.embed.set_footer(text=f"Page {self.page + 1} · 🩷 Sun 6 p.m. handoff · Daily completion does not release your week · Reopen from the main board after 10 minutes or restart.")
+            self.embed.set_footer(text=f"Page {self.page + 1} · 🩷 Sun 6 p.m. handoff · Daily completion does not release your week · Reopen /chores after 10 minutes or a restart.")
+            self.add_dashboard()
+            if hasattr(self,'embed'):
+                self.embed.color=0x6B9B77
 
         def button(self, label, callback, style=discord.ButtonStyle.secondary, row=1):
             button = discord.ui.Button(label=label, style=style, row=row)
@@ -500,7 +587,7 @@ def install(namespace):
             await interaction.edit_original_response(embed=view.embed, view=view)
 
     def reassign_snapshot(qid):
-        return snapshot(qid),week_key(1),weekly_owner(qid,1)
+        return snapshot(qid),week_key(1),weekly_owner(qid,1),db.execute('SELECT id,active FROM availability_exceptions ORDER BY id').fetchall()
 
     def reassign(qid,target,scope,expected):
         api.reset_due_quests()
@@ -510,7 +597,7 @@ def install(namespace):
         if not row or scope not in ('occurrence','week0','week1','assignment'):
             return 'Choose a valid chore and assignment scope.'
         offset=1 if scope=='week1' else 0
-        if not available(target,offset):
+        if (scope.startswith('week') and not can_take_week(target,qid,offset)) or (not scope.startswith('week') and not available(target)):
             return 'That person is away that week. Choose someone who is home.'
         if scope.startswith('week'):
             if row[1]:
@@ -547,7 +634,7 @@ def install(namespace):
             self.embed=discord.Embed(title='Reassign a chore',description='Choose a chore, how long the responsibility lasts, and a person. Then review and confirm. Everyone in the household can do this. Chore names, history, and earned points stay saved.')
             chunk=entries[self.page*PAGE_SIZE:(self.page+1)*PAGE_SIZE]
             if chunk:
-                picker=discord.ui.Select(placeholder='Choose a chore',row=0,options=[chore_option(key,name) for key,name in chunk])
+                picker=discord.ui.Select(placeholder='Choose a chore',row=0,options=[chore_option(key,name,selected=key==qid) for key,name in chunk])
                 async def choose_chore(interaction):
                     chosen=int(picker.values[0])
                     await self.show(interaction,qid=chosen,scope=None,target=None,expected=reassign_snapshot(chosen))
@@ -586,6 +673,9 @@ def install(namespace):
             if (self.page+1)*PAGE_SIZE<len(entries):
                 self.button('Next page',lambda i:self.show(i,page=self.page+1,qid=None,scope=None,target=None,expected=None))
             self.button('Cancel',self.cancel,row=3)
+            self.add_dashboard()
+            if hasattr(self,'embed'):
+                self.embed.color=0x6B9B77
 
         def button(self,label,callback,row=4,style=discord.ButtonStyle.secondary):
             item=discord.ui.Button(label=label,row=row,style=style)
@@ -605,7 +695,7 @@ def install(namespace):
             await interaction.response.edit_message(embed=view.embed,view=view,allowed_mentions=discord.AllowedMentions.none())
 
         async def cancel(self,interaction):
-            await interaction.response.edit_message(content='Reassignment canceled. Nothing changed.',embed=None,view=None)
+            await interaction.response.edit_message(content='Reassignment canceled. Nothing changed.',embed=None,view=ReturnView(interaction.user.id))
 
         async def confirm(self,interaction):
             if not self.target or self.target.bot or getattr(getattr(self.target,'guild',None),'id',None)!=interaction.guild_id:
@@ -614,7 +704,7 @@ def install(namespace):
             await interaction.response.defer()
             async with lock:
                 notice=reassign(self.qid,self.target.id,self.scope,self.expected)
-            await interaction.edit_original_response(content=notice,embed=None,view=None,allowed_mentions=discord.AllowedMentions.none())
+            await interaction.edit_original_response(content=notice,embed=None,view=ReturnView(interaction.user.id),allowed_mentions=discord.AllowedMentions.none())
 
     def owned_scope(qid):
         row=db.execute('SELECT assigned_to FROM quests WHERE id=?',(qid,)).fetchone()
@@ -656,9 +746,12 @@ def install(namespace):
                 async def choose(interaction,save=save):
                     async with lock:
                         result=drop_chore(owner,qid,expected) if save else 'Canceled. Nothing changed.'
-                    await interaction.response.edit_message(content=result,embed=None,view=None)
+                    await interaction.response.edit_message(content=result,embed=None,view=ReturnView(interaction.user.id))
                 button.callback=choose
                 self.add_item(button)
+            self.add_dashboard()
+            if hasattr(self,'embed'):
+                self.embed.color=0x6B9B77
 
         async def interaction_check(self,interaction):
             if interaction.user.id!=self.owner or not allowed(interaction):
@@ -732,7 +825,7 @@ def install(namespace):
             self.embed=discord.Embed(title='Propose a trade',description=f'You offer **{discord.utils.escape_markdown(name)}** ({descriptions.get(owned_scope(offered)[1],"ownership changed")}). Choose another person’s chore. They must accept in Trade requests.')
             chunk=entries[page*PAGE_SIZE:(page+1)*PAGE_SIZE]
             if chunk:
-                picker=discord.ui.Select(placeholder='Which chore would you take?',options=[chore_option(qid,name) for qid,name in chunk])
+                picker=discord.ui.Select(placeholder='Which chore would you take?',options=[chore_option(qid,name,selected=qid==requested) for qid,name in chunk])
                 async def choose(interaction):
                     view=TradeOfferView(owner,offered,page,int(picker.values[0]),expected_offer)
                     await interaction.response.edit_message(embed=view.embed,view=view)
@@ -748,7 +841,7 @@ def install(namespace):
                 async def propose(interaction):
                     async with lock:
                         result=propose_trade(owner,offered,requested,expected_offer,expected_request)
-                    await interaction.response.edit_message(content=result,embed=None,view=None,allowed_mentions=discord.AllowedMentions.none())
+                    await interaction.response.edit_message(content=result,embed=None,view=ReturnView(interaction.user.id),allowed_mentions=discord.AllowedMentions.none())
                 self.button('Propose trade',propose)
             if page:
                 async def previous(interaction):
@@ -760,6 +853,9 @@ def install(namespace):
                     view=TradeOfferView(owner,offered,page+1,expected_offer=expected_offer)
                     await interaction.response.edit_message(embed=view.embed,view=view)
                 self.button('Next',following)
+            self.add_dashboard()
+            if hasattr(self,'embed'):
+                self.embed.color=0x6B9B77
 
         def button(self,label,callback):
             item=discord.ui.Button(label=label,row=1)
@@ -801,7 +897,7 @@ def install(namespace):
                     async def respond(interaction,action=action):
                         async with lock:
                             result=respond_trade(owner,selected,action)
-                        await interaction.response.edit_message(content=result,embed=None,view=None,allowed_mentions=discord.AllowedMentions.none())
+                        await interaction.response.edit_message(content=result,embed=None,view=ReturnView(interaction.user.id),allowed_mentions=discord.AllowedMentions.none())
                     self.button(label,respond)
             for label,new_page in [('Previous',page-1),('Next',page+1)]:
                 if (label=='Previous' and page>0) or (label=='Next' and (page+1)*PAGE_SIZE<len(entries)):
@@ -809,13 +905,121 @@ def install(namespace):
                         view=TradeInboxView(owner,new_page)
                         await interaction.response.edit_message(embed=view.embed,view=view)
                     self.button(label,navigate)
+            self.add_dashboard()
+            if hasattr(self,'embed'):
+                self.embed.color=0x6B9B77
+
+    class AttendanceModal(discord.ui.Modal):
+        def __init__(self,owner,member_id,member_name,state):
+            super().__init__(title='Mark '+member_name[:20]+' '+state,timeout=600)
+            self.owner,self.member_id,self.state=owner,member_id,state
+            self.start=discord.ui.TextInput(label='First full day (YYYY-MM-DD)',placeholder='2026-10-24',max_length=10)
+            self.end=discord.ui.TextInput(label='Last full day, included (YYYY-MM-DD)',placeholder='2026-10-26',max_length=10)
+            self.note=discord.ui.TextInput(label='Reason (optional)',placeholder='Trip or traded days',required=False,max_length=300)
+            for item in [self.start,self.end,self.note]:
+                self.add_item(item)
+
+        async def on_submit(self,interaction):
+            if not can_add(interaction,self.owner):
+                await interaction.response.send_message('Open your own Who’s home? form.',ephemeral=True)
+                return
+            async with lock:
+                result=attendance.add(self.member_id,self.start.value,self.end.value,self.state,self.note.value)
+                warnings=[]
+                if result.startswith('Saved'):
+                    for offset in (0,1):
+                        ids={qid for qid, in db.execute('SELECT quest_id FROM week_signups WHERE user_id=? AND week_start=?',(str(self.member_id),week_key(offset)))}
+                        ids.update(qid for qid, in db.execute('SELECT id FROM quests WHERE assigned_to=?',(str(self.member_id),)))
+                        ids.update(qid for qid, in db.execute('SELECT quest_id FROM claims WHERE user_id=?',(str(self.member_id),)))
+                        for qid in ids:
+                            if not is_archived(qid) and coverage_warning(qid,self.member_id,offset):
+                                name=db.execute('SELECT name FROM quests WHERE id=?',(qid,)).fetchone()[0]
+                                warnings.append(('This week: ' if offset==0 else 'Next week: ')+name)
+            text=result
+            if warnings:
+                text+='\n⚠ Responsibilities to review (kept, not removed):\n'+'\n'.join(discord.utils.escape_markdown(value) for value in warnings[:10])
+                if len(warnings)>10:
+                    text+=f'\n…and {len(warnings)-10} more. Open the overview to review coverage.'
+            await interaction.response.send_message(text,view=ReturnView(interaction.user.id),ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+
+    class AttendanceView(SafeView):
+        def __init__(self,owner,member_id=None,member_name='',offset=0,page=0,selected=None):
+            super().__init__(timeout=600)
+            self.owner=owner
+            self.embed=discord.Embed(title='Who’s home? · trips & traded days',description='Choose a person, then Mark home or Mark away. Dates are full calendar days in Eastern time, including the last date. Exceptions override the normal rotation, then expire automatically. Anyone in this household can edit them. Existing responsibilities are kept and flagged for review.')
+            users=discord.ui.UserSelect(placeholder='Whose dates are changing?',min_values=1,max_values=1,row=0)
+            async def person(interaction):
+                member=users.values[0]
+                if member.bot or getattr(getattr(member,'guild',None),'id',None)!=interaction.guild_id:
+                    await interaction.response.send_message('Choose a person in this household server, not a bot.',ephemeral=True)
+                    return
+                await redraw(interaction,member_id=member.id,member_name=member.display_name,page=0,selected=None)
+            users.callback=person
+            self.add_item(users)
+            async def redraw(interaction,**changes):
+                values=dict(member_id=member_id,member_name=member_name,offset=offset,page=page,selected=selected)
+                values.update(changes)
+                view=AttendanceView(owner,**values)
+                await interaction.response.edit_message(embed=view.embed,view=view,allowed_mentions=discord.AllowedMentions.none())
+            def button(label,callback,row=1):
+                item=discord.ui.Button(label=label,row=row)
+                item.callback=callback
+                self.add_item(item)
+            if member_id is not None:
+                start=week_start(offset)
+                self.embed.add_field(name=discord.utils.escape_markdown(member_name)+(' · This week' if offset==0 else ' · Next week'),value='\n'.join(f'{day_badge(WEEKDAYS[when.weekday()])} {when:%b %d}: '+('Home' if home else 'Away')+(' after 6 p.m.' if index==0 else (' before 6 p.m.' if index==7 else '')) for index,(when,home) in enumerate(attendance.week(member_id,start))),inline=False)
+                for label,state in [('Mark home','home'),('Mark away','away')]:
+                    async def mark(interaction,state=state):
+                        await interaction.response.send_modal(AttendanceModal(owner,member_id,member_name,state))
+                    button(label,mark)
+                records=db.execute('SELECT id,start_date,end_date,state,note FROM availability_exceptions WHERE user_id=? AND active=1 ORDER BY start_date,id',(str(member_id),)).fetchall()
+                page=min(max(page,0),max((len(records)-1)//PAGE_SIZE,0))
+                chunk=records[page*PAGE_SIZE:(page+1)*PAGE_SIZE]
+                if chunk:
+                    self.embed.add_field(name='Saved exceptions',value='\n'.join(f'#{row[0]} · {row[1]} → {row[2]} · {row[3].capitalize()}' for row in chunk)[:1024],inline=False)
+                    picker=discord.ui.Select(placeholder='Choose an exception to cancel',row=2,options=[discord.SelectOption(label=f'{row[1]} → {row[2]} · {row[3].capitalize()}',value=str(row[0])) for row in chunk])
+                    async def choose(interaction):
+                        await redraw(interaction,selected=int(picker.values[0]))
+                    picker.callback=choose
+                    self.add_item(picker)
+                    chosen=next((row for row in chunk if row[0]==selected),None)
+                    if chosen:
+                        self.embed.add_field(name='Cancel this exception?',value=f'{chosen[1]} → {chosen[2]} · {chosen[3].capitalize()}\n{discord.utils.escape_markdown(chosen[4])}\nNormal rotation resumes for those dates. Other exceptions remain.',inline=False)
+                        async def cancel(interaction):
+                            async with lock:
+                                current=db.execute('SELECT id,start_date,end_date,state,note FROM availability_exceptions WHERE id=? AND user_id=? AND active=1',(selected,str(member_id))).fetchone()
+                                if current!=chosen:
+                                    text='This exception changed. Reopen Who’s home? before canceling.'
+                                else:
+                                    with db:
+                                        db.execute('UPDATE availability_exceptions SET active=0 WHERE id=?',(selected,))
+                                    text='Exception canceled. Normal rotation applies again; responsibilities and history were kept. Review coverage in the overview.'
+                            await interaction.response.edit_message(content=text,embed=None,view=ReturnView(interaction.user.id))
+                        button('Confirm cancel exception',cancel,row=3)
+                else:
+                    self.embed.add_field(name='No saved exceptions',value='The normal rotation applies. Mark home or away to override a date range.')
+                button('This week',lambda i:redraw(i,offset=0,selected=None),row=4)
+                button('Next week',lambda i:redraw(i,offset=1,selected=None),row=4)
+                if page:
+                    button('Previous',lambda i:redraw(i,page=page-1,selected=None),row=4)
+                if (page+1)*PAGE_SIZE<len(records):
+                    button('Next page',lambda i:redraw(i,page=page+1,selected=None),row=4)
+            self.add_dashboard()
+            if hasattr(self,'embed'):
+                self.embed.color=0x6B9B77
+
+        async def interaction_check(self,interaction):
+            if not can_add(interaction,self.owner):
+                await interaction.response.send_message('Open your own Who’s home? view.',ephemeral=True)
+                return False
+            return True
 
     class HouseholdSetup(SafeView):
         def __init__(self, owner):
             super().__init__(timeout=600)
             self.owner = owner
             self.members = None
-            select = discord.ui.UserSelect(placeholder="Select Kas and Z's two Discord accounts", min_values=2, max_values=2)
+            select = discord.ui.UserSelect(placeholder="Select Kas and Zel's two Discord accounts", min_values=2, max_values=2)
             async def choose(interaction):
                 if any(m.bot for m in select.values):
                     await interaction.response.send_message("Select two people, not bot accounts.", ephemeral=True)
@@ -828,6 +1032,9 @@ def install(namespace):
             button = discord.ui.Button(label="Save household", style=discord.ButtonStyle.success)
             button.callback = self.save
             self.add_item(button)
+            self.add_dashboard()
+            if hasattr(self,'embed'):
+                self.embed.color=0x6B9B77
 
         async def interaction_check(self, interaction):
             if interaction.user.id != self.owner or not allowed(interaction) or not interaction.user.guild_permissions.manage_guild:
@@ -837,7 +1044,7 @@ def install(namespace):
 
         async def save(self, interaction):
             if not self.members:
-                await interaction.response.send_message("Select Kas and Z's two accounts first.", ephemeral=True)
+                await interaction.response.send_message("Select Kas and Zel's two accounts first.", ephemeral=True)
                 return
             # No sign-ups may become unusable as a side effect of configuring identity.
             current = {r[0] for r in db.execute("SELECT user_id FROM alternating_members")}
@@ -847,12 +1054,7 @@ def install(namespace):
             with db:
                 db.execute("DELETE FROM alternating_members")
                 db.executemany("INSERT INTO alternating_members VALUES (?)", [(m,) for m in self.members])
-            # Remove only pending occurrence claims held by away members, not chore history.
-            with db:
-                for member in self.members:
-                    if not available(member):
-                        db.execute("DELETE FROM claims WHERE user_id = ?", (member,))
-            await interaction.response.edit_message(content="Saved. Kas and Z can sign up and complete chores during home weeks; they can reserve next week's work while away.", view=None)
+            await interaction.response.edit_message(content="Saved. Kas and Zel follow the alternating rotation. Who’s home? can override dates for trips or traded days. Existing responsibilities were kept; review coverage warnings.", view=ReturnView(interaction.user.id))
 
     def can_add(interaction, owner=None):
         return (allowed(interaction) and
@@ -874,7 +1076,7 @@ def install(namespace):
             if self.selected:
                 self.embed.add_field(name=self.selected[1][:256], value='Tap Restore to put it back.' if removed else 'Remove this chore from everyone’s board? Existing history is retained; current ownership and completion state are kept for restoration.', inline=False)
             if chunk:
-                select = discord.ui.Select(placeholder='Choose a chore…', options=[chore_option(qid,name) for qid,name in chunk])
+                select = discord.ui.Select(placeholder='Choose a chore…', options=[chore_option(qid,name,selected=bool(self.selected and qid==self.selected[0])) for qid,name in chunk])
                 async def choose(interaction):
                     await self.show(interaction, selected=int(select.values[0]))
                 select.callback = choose
@@ -887,6 +1089,9 @@ def install(namespace):
             if (self.page+1)*PAGE_SIZE < len(entries):
                 self.button('Next', lambda i: self.show(i, page=self.page+1))
             self.embed.set_footer(text=f'Page {self.page+1} · Nobody’s points or completion history are deleted')
+            self.add_dashboard()
+            if hasattr(self,'embed'):
+                self.embed.color=0x6B9B77
 
         def button(self,label,callback,style=discord.ButtonStyle.secondary):
             item=discord.ui.Button(label=label,style=style,row=1)
@@ -945,7 +1150,7 @@ def install(namespace):
         def __init__(self, owner, frequency):
             super().__init__(title=("Add "+timing.compact_label(frequency)+" chore")[:45], timeout=600)
             self.owner, self.frequency = owner, frequency
-            self.name = discord.ui.TextInput(label="Chore name", placeholder=timing.label(frequency)[:100], max_length=100)
+            self.name = discord.ui.TextInput(label="Chore name", placeholder="e.g. Empty dishwasher and put dishes away", max_length=100)
             self.notes = discord.ui.TextInput(label="Instructions / timing (optional)", style=discord.TextStyle.paragraph, required=False, max_length=1000, placeholder="What counts as done? Choose weekdays in the schedule picker; notes don't send reminders.")
             self.points = discord.ui.TextInput(label="Points (optional; blank means 5)", required=False, default="5", max_length=7)
             for item in (self.name, self.notes, self.points):
@@ -956,7 +1161,7 @@ def install(namespace):
                 await interaction.response.send_message("Use the form you opened from the household panel.", ephemeral=True)
                 return
             message = create_chore(self.name.value, self.frequency, self.points.value, self.notes.value)
-            await interaction.response.send_message(message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+            await interaction.response.send_message(message,view=ReturnView(interaction.user.id), ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
 
         async def on_error(self, interaction, error):
             if not interaction.response.is_done():
@@ -974,7 +1179,7 @@ def install(namespace):
                 discord.SelectOption(label="Twice daily", value="twice-daily", description="One completion before noon; another after noon"),
                 discord.SelectOption(label="On a specific weekday", value="weekday", description="Choose Monday through Sunday; overdue chores stay due"),
                 discord.SelectOption(label="Twice a week", value="two-days", description="Choose two weekdays"),
-                discord.SelectOption(label="Every other week", value="alternating", description="Choose a weekday and Kas/Z home or away weeks"),
+                discord.SelectOption(label="Every other week", value="alternating", description="Choose a weekday and Kas/Zel home or away weeks"),
             ])
             async def choose(interaction):
                 if select.values[0] in ('two-days','alternating'):
@@ -987,6 +1192,9 @@ def install(namespace):
                     await interaction.response.send_modal(modal)
             select.callback = choose
             self.add_item(select)
+            self.add_dashboard()
+            if hasattr(self,'embed'):
+                self.embed.color=0x6B9B77
 
         async def interaction_check(self, interaction):
             if not can_add(interaction, self.owner):
@@ -1004,6 +1212,9 @@ def install(namespace):
                 await interaction.response.send_modal(modal)
             select.callback=choose
             self.add_item(select)
+            self.add_dashboard()
+            if hasattr(self,'embed'):
+                self.embed.color=0x6B9B77
 
         async def interaction_check(self,interaction):
             if not can_add(interaction,self.owner):
@@ -1030,6 +1241,9 @@ def install(namespace):
                     await interaction.response.send_modal(modal)
                 picker.callback=choose_days
             self.add_item(picker)
+            self.add_dashboard()
+            if hasattr(self,'embed'):
+                self.embed.color=0x6B9B77
 
         async def interaction_check(self,interaction):
             if not can_add(interaction,self.owner):
@@ -1083,23 +1297,161 @@ def install(namespace):
                 await interaction.response.send_message('Use your own household edit form.',ephemeral=True)
                 return
             result=update_chore(self.quest_id,self.name.value,self.frequency,self.points.value,self.notes.value,self.expected)
-            await interaction.response.send_message(result,ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+            await interaction.response.send_message(result,view=ReturnView(interaction.user.id),ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+
+    def feedback_context(qid):
+        row=db.execute('SELECT name,frequency,points,notes FROM quests WHERE id=?',(qid,)).fetchone()
+        return json.dumps(row) if row else None
+
+    def save_feedback(qid,author_id,author_name,comment,better_timing,points,key,context):
+        if not feedback_context(qid) or is_archived(qid):
+            return 'This chore is no longer on the board. No feedback saved.'
+        suggested=None
+        if str(points).strip():
+            try:
+                suggested=int(str(points).strip())
+            except ValueError:
+                return 'Suggested points must be a whole number, or leave them blank.'
+            if not 0<=suggested<=1000000:
+                return 'Suggested points must be between 0 and 1,000,000.'
+        comment,better_timing=comment.strip(),better_timing.strip()
+        if not comment and not better_timing and suggested is None:
+            return 'Add a comment, a timing idea, or a point suggestion.'
+        if len(comment)>1000 or len(better_timing)>200:
+            return 'Use up to 1,000 characters for comments and 200 for timing.'
+        with db:
+            cursor=db.execute('INSERT OR IGNORE INTO chore_feedback(submission_key,quest_id,author_id,author_name,comment,timing,suggested_points,created_at,context) VALUES(?,?,?,?,?,?,?,?,?)',(key,qid,str(author_id),author_name[:100],comment,better_timing,suggested,namespace['now_local']().isoformat(),context))
+        return 'Feedback saved. The chore’s schedule and actual points are unchanged.' if cursor.rowcount else 'That feedback was already saved. Nothing duplicated.'
+
+    def feedback_votes(qid):
+        return db.execute('SELECT author_id,author_name,suggested_points FROM chore_feedback WHERE id IN (SELECT MAX(id) FROM chore_feedback WHERE quest_id=? AND suggested_points IS NOT NULL GROUP BY author_id) ORDER BY author_name COLLATE NOCASE,author_id',(qid,)).fetchall()
+
+    class FeedbackModal(discord.ui.Modal):
+        def __init__(self,owner,qid,points=''):
+            super().__init__(title='Review this chore',timeout=600)
+            self.owner,self.qid=owner,qid
+            self.submission_key=uuid4().hex
+            self.context=feedback_context(qid)
+            self.comment=discord.ui.TextInput(label='What could be better? (optional)',placeholder='Too much work, unclear instructions, or something else?',style=discord.TextStyle.paragraph,required=False,max_length=1000)
+            self.timing=discord.ui.TextInput(label='Better day or time? (optional)',placeholder='e.g. Friday afternoon works better',required=False,max_length=200)
+            self.points=discord.ui.TextInput(label='Suggested points (optional)',placeholder='e.g. 1, 2, 3, 5, 8, 13, 21 — or another number',default=str(points),required=False,max_length=7)
+            for item in [self.comment,self.timing,self.points]:
+                self.add_item(item)
+
+        async def on_submit(self,interaction):
+            if not can_add(interaction,self.owner):
+                await interaction.response.send_message('Open your own Chore review form.',ephemeral=True)
+                return
+            async with lock:
+                result=save_feedback(self.qid,interaction.user.id,interaction.user.display_name,self.comment.value,self.timing.value,self.points.value,self.submission_key,self.context)
+            if result.startswith('Feedback saved') or result.startswith('That feedback'):
+                view=FeedbackView(self.owner,self.qid)
+                await interaction.response.send_message(result,embed=view.embed,view=view,ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+            else:
+                await interaction.response.send_message(result,ephemeral=True)
+
+    class FeedbackView(SafeView):
+        def __init__(self,owner,qid,page=0,all_reviews=False,selected=None):
+            super().__init__(timeout=600)
+            self.owner,self.qid=owner,qid
+            chore=db.execute('SELECT name,frequency,points FROM quests WHERE id=?',(qid,)).fetchone()
+            self.embed=discord.Embed(title='Chore review · '+chore[0][:100],description=f'**Current: {chore[2]} points** · {timing.compact_label(chore[1])}\nSuggest a better time, clearer instructions, or more/fewer points. Suggestions never change the chore automatically.',color=0x6B9B77)
+            votes=feedback_votes(qid)
+            self.embed.add_field(name='Latest point suggestions · one per person',value=('\n'.join(f'{discord.utils.escape_markdown(name)[:80]}: **{points}**' for uid,name,points in votes[:10])+ (f'\n+ {len(votes)-10} more people' if len(votes)>10 else '')) if votes else 'No scores yet. Common effort scores: 0, 1, 2, 3, 5, 8, 13, 21.',inline=False)
+            records=db.execute('SELECT id,author_name,comment,timing,suggested_points,created_at,context,reviewed FROM chore_feedback WHERE quest_id=?'+('' if all_reviews else ' AND reviewed=0')+' ORDER BY id DESC',(qid,)).fetchall()
+            page=min(max(page,0),max((len(records)-1)//3,0))
+            chunk=records[page*3:(page+1)*3]
+            chosen=next((row for row in chunk if row[0]==selected),None)
+            if chosen:
+                row=chosen
+                self.embed.add_field(name='From '+discord.utils.escape_markdown(row[1])[:90],value=row[5][:16].replace('T',' ')+(' · Reviewed' if row[7] else ' · Open')+(f' · Suggested {row[4]} points' if row[4] is not None else ''),inline=False)
+                if row[2]:
+                    escaped=discord.utils.escape_markdown(row[2])
+                    for at in range(0,len(escaped),900):
+                        self.embed.add_field(name='Feedback' if at==0 else 'Feedback continued',value=escaped[at:at+900],inline=False)
+                if row[3]:
+                    self.embed.add_field(name='Timing idea',value=discord.utils.escape_markdown(row[3]),inline=False)
+                previous=json.loads(row[6])
+                self.embed.add_field(name='Chore when submitted',value=f'{previous[0]} · {previous[2]} points · {timing.compact_label(previous[1])}'[:1000],inline=False)
+            else:
+                for row in chunk:
+                    preview=(discord.utils.escape_markdown(row[2])[:180] or '')+('\nTime: '+discord.utils.escape_markdown(row[3])[:100] if row[3] else '')
+                    score=f'Suggested **{row[4]} points**' if row[4] is not None else 'No point score'
+                    self.embed.add_field(name=discord.utils.escape_markdown(row[1])[:100]+(' · reviewed' if row[7] else ''),value=score+('\n'+preview if preview else ''),inline=False)
+                if not chunk:
+                    self.embed.add_field(name='No '+('feedback' if all_reviews else 'open feedback'),value='Add feedback or suggest an effort score below.',inline=False)
+            self.embed.set_footer(text=f'{"All feedback" if all_reviews else "Open feedback"} · Page {page+1} of {max((len(records)-1)//3+1,1)} · Reviewed feedback stays saved')
+            async def redraw(interaction,**changes):
+                values=dict(page=page,all_reviews=all_reviews,selected=selected)
+                values.update(changes)
+                view=FeedbackView(owner,qid,**values)
+                await interaction.response.edit_message(content=None,embed=view.embed,view=view,allowed_mentions=discord.AllowedMentions.none())
+            def button(label,callback,row=0):
+                item=discord.ui.Button(label=label,row=row)
+                item.callback=callback
+                self.add_item(item)
+            async def add(interaction):
+                await interaction.response.send_modal(FeedbackModal(owner,qid))
+            button('Add feedback',add)
+            async def edit(interaction):
+                ids=[row[0] for row in db.execute('SELECT id FROM quests ORDER BY name COLLATE NOCASE,id') if not is_archived(row[0])]
+                view=EditChoreView(owner,page=ids.index(qid)//PAGE_SIZE,selected=qid) if qid in ids else ReturnView(owner)
+                await interaction.response.edit_message(content=None,embed=getattr(view,'embed',None),view=view)
+            button('Edit chore',edit)
+            scores=discord.ui.Select(placeholder='Suggest an effort score…',row=1,options=[discord.SelectOption(label=str(value)+' points',value=str(value)) for value in (0,1,2,3,5,8,13,21)])
+            async def score(interaction):
+                await interaction.response.send_modal(FeedbackModal(owner,qid,scores.values[0]))
+            scores.callback=score
+            self.add_item(scores)
+            if chunk:
+                picker=discord.ui.Select(placeholder='Read a review in full…',row=2,options=[discord.SelectOption(label=(row[1]+(f' · {row[4]} points' if row[4] is not None else '')+' · '+row[5][:10])[:100],value=str(row[0]),default=row[0]==selected) for row in chunk])
+                async def choose(interaction):
+                    await redraw(interaction,selected=int(picker.values[0]))
+                picker.callback=choose
+                self.add_item(picker)
+                if chosen and not chosen[7]:
+                    async def reviewed(interaction):
+                        with db:
+                            db.execute('UPDATE chore_feedback SET reviewed=1 WHERE id=? AND quest_id=? AND reviewed=0',(selected,qid))
+                        await redraw(interaction,selected=None)
+                    button('Mark reviewed',reviewed)
+            button('Open feedback',lambda i:redraw(i,all_reviews=False,page=0,selected=None),row=3)
+            button('All feedback',lambda i:redraw(i,all_reviews=True,page=0,selected=None),row=3)
+            if page:
+                button('Previous',lambda i:redraw(i,page=page-1,selected=None),row=3)
+            if (page+1)*3<len(records):
+                button('Next',lambda i:redraw(i,page=page+1,selected=None),row=3)
+            self.add_dashboard()
+
+        async def interaction_check(self,interaction):
+            if not can_add(interaction,self.owner):
+                await interaction.response.send_message('Open your own Chore review view.',ephemeral=True)
+                return False
+            return True
 
     class MissedChoreView(SafeView):
         def __init__(self,owner,qid,expected):
             super().__init__(timeout=600)
             self.owner=owner
+            frequency=db.execute('SELECT frequency FROM quests WHERE id=?',(qid,)).fetchone()[0]
+            self.embed=discord.Embed(title='If this chore is missed',description='Choose a setting to save it. Current: '+('Skip if missed' if timing.policy(qid)=='skip' else 'Keep overdue'))
+            self.embed.add_field(name='Keep overdue',value='Leave unfinished work due until someone completes it.',inline=False)
+            self.embed.add_field(name='Skip if missed',value='Drop the expired occurrence with no points or completion credit. Release only its single claim; keep weekly sign-ups and history.',inline=False)
+            self.embed.add_field(name='Before you change it',value='Switching to Skip can drop an occurrence that is already overdue. One-time chores have no deadline. Daily/twice-daily chores expire at the next slot; weekday chores at the end of their day; weekly Sunday 6 p.m.; monthly at the next month.',inline=False)
             for label,policy in [('Keep overdue','keep'),('Skip if missed','skip')]:
-                button=discord.ui.Button(label=label,style=discord.ButtonStyle.secondary)
+                button=discord.ui.Button(label=label,style=discord.ButtonStyle.primary if timing.policy(qid)==policy else discord.ButtonStyle.secondary,disabled=frequency=='one-time' and policy=='skip')
                 async def choose(interaction,policy=policy):
                     async with lock:
                         if snapshot(qid)!=expected or is_archived(qid):
                             result='This chore changed. Reopen Edit chore before saving.'
                         else:
                             result=timing.set_policy(qid,policy)
-                    await interaction.response.edit_message(content=result,view=None)
+                    await interaction.response.edit_message(content=result,embed=None,view=ReturnView(interaction.user.id))
                 button.callback=choose
                 self.add_item(button)
+            self.add_dashboard()
+            if hasattr(self,'embed'):
+                self.embed.color=0x6B9B77
 
         async def interaction_check(self,interaction):
             if not can_add(interaction,self.owner):
@@ -1121,6 +1473,15 @@ def install(namespace):
             self.add_item(picker)
             if day:
                 due=timing.next_weekday(timing.now(),WEEKDAYS.index(day))
+                completed=db.execute('SELECT completed,last_completed FROM quests WHERE id=?',(qid,)).fetchone()
+                if completed[0] and completed[1]:
+                    last=datetime.fromisoformat(completed[1])
+                    if last.tzinfo is None:
+                        last=last.replace(tzinfo=api.QUEST_TIMEZONE)
+                    next_repeat=datetime.fromisoformat(timing.calculate_reset(last,day))
+                    if next_repeat>=timing.now():
+                        due=next_repeat
+
                 self.embed.add_field(name='New schedule',value=f'Every {day_badge(day,True)} · next scheduled date {due:%b %d}\nCompleted work stays completed until its next repeat. Tap Save day to confirm.',inline=False)
                 button=discord.ui.Button(label='Save day',style=discord.ButtonStyle.primary,row=1)
                 async def save(interaction):
@@ -1133,14 +1494,17 @@ def install(namespace):
                             result=update_chore(qid,current[0],day,str(current[2]),current[3] or '',expected)
                             if result.startswith('Saved'):
                                 result=f'Saved: every {day_badge(day,True)}. History, earned points, and weekly sign-ups are unchanged.'
-                    await interaction.response.edit_message(content=result,embed=None,view=None)
+                    await interaction.response.edit_message(content=result,embed=None,view=ReturnView(interaction.user.id))
                 button.callback=save
                 self.add_item(button)
             cancel=discord.ui.Button(label='Cancel',row=1)
             async def cancel_day(interaction):
-                await interaction.response.edit_message(content='Canceled. The schedule is unchanged.',embed=None,view=None)
+                await interaction.response.edit_message(content='Canceled. The schedule is unchanged.',embed=None,view=ReturnView(interaction.user.id))
             cancel.callback=cancel_day
             self.add_item(cancel)
+            self.add_dashboard()
+            if hasattr(self,'embed'):
+                self.embed.color=0x6B9B77
 
         async def interaction_check(self,interaction):
             if not can_add(interaction,self.owner):
@@ -1159,7 +1523,7 @@ def install(namespace):
             chosen=next((r for r in chunk if r[0]==selected),None)
             self.embed=discord.Embed(title='Edit chore',description='Choose a chore to edit its name, instructions, points, or schedule. Existing earned points and history stay saved.')
             if chunk:
-                select=discord.ui.Select(placeholder='Choose a chore…',options=[chore_option(r[0],r[1]) for r in chunk])
+                select=discord.ui.Select(placeholder='Choose a chore…',options=[chore_option(r[0],r[1],selected=r[0]==selected) for r in chunk])
                 async def choose(interaction):
                     await self.show(interaction,selected=int(select.values[0]))
                 select.callback=choose
@@ -1174,8 +1538,16 @@ def install(namespace):
                 self.button('Edit details',details)
                 self.button('Change schedule',schedule)
                 async def missed(interaction):
-                    await interaction.response.send_message('Keep overdue leaves unfinished work on the list. Skip if missed drops a missed occurrence without points and releases its single claim; weekly sign-ups and history stay saved. Weekday chores expire at the end of their due day. Daily/twice-daily chores expire at their next slot, weekly at Sunday 6 p.m., monthly at the next month. One-time chores have no deadline. Switching to Skip can immediately drop an already-overdue occurrence. Choose a setting to save.',view=MissedChoreView(owner,chosen[0],expected),ephemeral=True)
+                    view=MissedChoreView(owner,chosen[0],expected)
+                    await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True)
                 self.button('Missed chores',missed)
+                review_button=discord.ui.Button(label='Chore review',row=2)
+                async def review(interaction):
+                    view=FeedbackView(owner,chosen[0])
+                    await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+                review_button.callback=review
+                self.add_item(review_button)
+
                 if chosen[2] in ('weekly',*WEEKDAYS):
                     day_button=discord.ui.Button(label='Choose day',row=2)
                     async def day_choice(interaction):
@@ -1188,6 +1560,9 @@ def install(namespace):
                 self.button('Previous',lambda i:self.show(i,page=self.page-1))
             if (self.page+1)*PAGE_SIZE<len(entries):
                 self.button('Next',lambda i:self.show(i,page=self.page+1))
+            self.add_dashboard()
+            if hasattr(self,'embed'):
+                self.embed.color=0x6B9B77
 
         def button(self,label,callback):
             button=discord.ui.Button(label=label,row=1)
@@ -1211,32 +1586,67 @@ def install(namespace):
                   '**Plan together** · Reserve your week or see who’s doing what.\n\n'
                   'Button replies are private. Your changes stay saved for the household.\n' + HELP_HINT)
 
-    def help_embed():
-        embed = discord.Embed(title='How to use Sprig', description='Use the buttons to manage chores. This guide is private; everyone with access to the household panel can open it.')
-        for title, text in [
-            ('Sign up for a chore', 'Open chores → choose a chore → Claim. It then appears in My chores.'),
-            ('Mark work done', 'My chores → choose the chore → Done. Use Release to give up a one-off claim when that option is shown.'),
-            ('Drop or trade from My chores', 'Select your chore → Drop, Reassign, or Trade. Drop confirms the scope. Trade proposes an exchange; the other person accepts in My chores → Trade requests. No automatic DM is sent. Cancel or decline keeps chores unchanged.'),
-            ('Give a chore to someone else', 'Reassign → choose chore → choose This occurrence, Whole week (this or next), or Ongoing assignment → select a household member → Confirm reassignment. Anyone can do this. Names, history, and earned points stay saved. Weekly owners must be changed using the whole-week scope.'),
-            ('See everyone’s chores', 'Who’s doing what? offers By person / By chore / By day with This week / Next week, each person’s assignments and weekly sign-ups, and Nobody signed up. Single claims do not carry into next week. Refresh to see new changes.'),
-            ('Take a whole week', 'Weekly sign-ups → This week or Next week → choose a chore → Sign up for week. Daily chores stay yours after Done and return when due. Use Release week to give up the reservation.'),
-            ('Kas and Z’s weeks', 'Weeks switch Sunday at 6 p.m. Eastern. Once their accounts are saved in Household setup, Kas and Z can sign up only for their home weeks. Ask a household administrator if the accounts or week look wrong.'),
-            ('Add, edit, or remove', 'Everyone can use Add chore, Edit chore, and Remove chore. Removal asks for confirmation and hides the chore; Removed chores → Restore brings it back. Earned points and history stay saved.'),
-            ('Choose your weekly chore’s day', 'My chores → select a weekly chore → Choose day → pick a colored weekday → Save day. You can also use Edit chore, so another household member can set it. This changes the repeating day for future weeks too, keeping weekly sign-ups, history, and points.'),
-            ('If a chore is missed', 'Edit chore → choose it → Missed chores → Keep overdue or Skip if missed. Existing chores default to Keep overdue. Skip releases a missed single claim, never awards points, and keeps weekly reservations and history. One-time chores have no deadline.'),
-            ('Day colors', DAY_LEGEND),
-            ('When chores return', 'Daily: midnight. Twice daily: midnight and noon. Weekly: Sunday at 6 p.m. Monthly: first day of the month. Twice-weekly chores return on the two chosen weekdays. Every-other-week chores follow the selected Kas/Z home or away weeks. Scheduled chores follow their Keep overdue / Skip if missed setting. One-time chores do not repeat. Times are Eastern; notes do not send reminders.'),
-            ('Open fresh controls or get more help', 'Use /chores for a fully private panel once enabled, or !chores for fresh buttons with a public starter message. Button replies are private. Reopen after 10 minutes or a restart. Type !help for the older command guide. Household setup is for administrators.')
-        ]:
-            embed.add_field(name=title, value=text, inline=False)
+    HELP_TOPICS={
+        'overview':('Start here',[
+            ('Today','Open chores → Claim. My chores → choose a chore → Done. Drop releases it; Reassign gives it to someone; Trade waits for the other person’s acceptance.'),
+            ('Plan the week','Weekly sign-ups reserves this or next week. Release week gives it up. Weeks end Sunday at 6 p.m. The overview switches By person / By chore / By day.'),
+            ('Change chores','Add / Edit / Remove are shared household tools. Removed chores → Restore brings a chore back. Points already earned stay saved.'),
+            ('Private controls','Use /chores for a private dashboard. Button replies are private. Dashboard takes you back; reopen /chores after a restart or 10 minutes. !help lists older commands.'),
+            ('Day colors',DAY_LEGEND)]),
+        'daily':('Doing & changing your chores',[
+            ('Finish work','My chores → choose chore → Done. Points are awarded once for that occurrence.'),
+            ('Drop or give away','Drop confirms whether it releases one occurrence, this whole week, or an ongoing assignment. Reassign shows the person and scope before you confirm.'),
+            ('Trade','Offer your chore for another person’s owned chore. They accept in My chores → Trade requests. Decline or cancel keeps ownership unchanged. No DM is sent.')]),
+        'planning':('Planning the week',[
+            ('Weekly ownership','Sign up for this week or next week. Repeating daily chores stay yours after Done. Weeks change Sunday at 6 p.m. Eastern.'),
+            ('Pick a day','My chores or Edit chore → Choose day → Save day sets the recurring weekday for future weeks too.'),
+            ('Three ways to look','The overview can group By person, By chore, or By day. Needs someone means unclaimed. Flexible weekly work is not assigned an invented due day.')]),
+        'dates':('Trips & traded days',[
+            ('Add dates','Who’s home? → select person → Mark home / Mark away → first and last full dates (YYYY-MM-DD). Dates are Eastern and inclusive.'),
+            ('Rotation & coverage','Overrides expire automatically. Existing sign-ups stay saved; coverage warnings show work to review. Cancel an exception to restore the rotation.'),
+            ('Account setup','An administrator selects Kas and Zel in Household setup. The default handoff is Sunday 6 p.m. Specific dated exceptions take precedence.')]),
+        'manage':('Chore settings',[
+            ('Add or edit','Choose a schedule and fill in the form. New chores start at 5 points; explicit zero is allowed.'),
+            ('Keep or skip','Edit chore → Missed chores. Keep overdue leaves work due. Skip if missed drops an expired occurrence without points and releases only its single claim. Weekly sign-ups stay saved. One-time work has no deadline.'),
+            ('Remove or restore','Remove hides a chore after confirmation. Removed chores → Restore brings it back with history and points retained.')]),
+        'feedback':('Review effort & points',[('Give feedback','Choose a chore → Chore review. Add a comment, a better day/time, or an effort score. Common scores are 0, 1, 2, 3, 5, 8, 13, 21, but other whole numbers are allowed.'),('Review together','See each person’s latest point suggestion. Suggestions never change actual points automatically; use Edit chore if the household agrees. Mark reviewed keeps the feedback in All feedback.')]),
+        'timing':('Schedules & day colors',[
+            ('Reset times','Daily: midnight. Twice daily: midnight and noon. Weekly: Sunday 6 p.m. Monthly: first day of the month. All times are Eastern.'),
+            ('Fixed days','Weekday and every-other-week chores follow the chosen colored day and Keep / Skip setting. Notes do not send reminders. Away/home recurring chore dates follow the base rotation, independently of person exceptions.'),
+            ('Day colors',DAY_LEGEND)])}
+
+    def help_embed(topic='overview'):
+        title,fields=HELP_TOPICS.get(topic,HELP_TOPICS['overview'])
+        embed=discord.Embed(title='Sprig help · '+title,description='Choose a topic below. This guide is private.',color=0x6B9B77)
+        for name,value in fields:
+            embed.add_field(name=name,value=value,inline=False)
         return embed
+
+    class HelpView(SafeView):
+        def __init__(self,owner,topic='overview'):
+            super().__init__(timeout=600)
+            self.owner=owner
+            self.embed=help_embed(topic)
+            picker=discord.ui.Select(placeholder='What do you need help with?',options=[discord.SelectOption(label=value[0],value=key,default=key==topic) for key,value in HELP_TOPICS.items()])
+            async def choose(interaction):
+                view=HelpView(owner,picker.values[0])
+                await interaction.response.edit_message(embed=view.embed,view=view)
+            picker.callback=choose
+            self.add_item(picker)
+            self.add_dashboard()
+
+        async def interaction_check(self,interaction):
+            if interaction.user.id!=self.owner or not allowed(interaction):
+                await interaction.response.send_message('Open your own Help from the dashboard.',ephemeral=True)
+                return False
+            return True
 
     class Launcher(SafeView):
         def __init__(self,timeout=None):
             super().__init__(timeout=timeout)
             # Keep both the persistent dashboard and fresh panels in the same order.
             layout=[('My chores',0),('Open chores',0),('Weekly sign-ups',0),
-                    ('Who’s doing what?',1),('Reassign',1),('Help',1),
+                    ('Who’s doing what?',1),('Who’s home?',1),('Reassign',1),('Help',1),
                     ('Add chore',2),('Edit chore',2),('Remove chore',2),('Household setup',2)]
             buttons={item.label:item for item in self.children}
             self.clear_items()
@@ -1267,9 +1677,15 @@ def install(namespace):
             view=ReassignView(interaction.user.id)
             await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True)
 
+        @discord.ui.button(label="Who’s home?",custom_id="sprig:attendance:v1",row=3)
+        async def attendance_button(self,interaction,button):
+            view=AttendanceView(interaction.user.id)
+            await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True)
+
         @discord.ui.button(label="Help", custom_id="sprig:help:v1", row=1)
         async def help_button(self, interaction, button):
-            await interaction.response.send_message(embed=help_embed(), ephemeral=True)
+            view=HelpView(interaction.user.id)
+            await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True)
 
         @discord.ui.button(label="Open chores", style=discord.ButtonStyle.primary, custom_id="sprig:open:v1")
         async def open_button(self, interaction, button):
@@ -1289,7 +1705,7 @@ def install(namespace):
             if not interaction.user.guild_permissions.manage_guild:
                 await interaction.response.send_message("Household setup is for server administrators.", ephemeral=True)
                 return
-            await interaction.response.send_message("Select Kas and Z's Discord accounts, then Save. Weeks switch Sunday at 6 p.m. Eastern; Oct 18, 2026 starts an away week.", view=HouseholdSetup(interaction.user.id), ephemeral=True)
+            await interaction.response.send_message("Select Kas and Zel's Discord accounts, then Save. Weeks switch Sunday at 6 p.m. Eastern; Oct 18, 2026 starts an away week.", view=HouseholdSetup(interaction.user.id), ephemeral=True)
 
         @discord.ui.button(label="Add chore", style=discord.ButtonStyle.success, custom_id="sprig:add:v1")
         async def add_button(self, interaction, button):
@@ -1413,4 +1829,4 @@ def install(namespace):
             bot.tree.add_command(bot.tree.get_command('chores'),guild=discord.Object(id=int(saved[0])),override=True)
 
     bot.setup_hook = setup_hook
-    return SimpleNamespace(ChooseDayView=ChooseDayView, owned_scope=owned_scope, drop_chore=drop_chore, trade_snapshot=trade_snapshot, propose_trade=propose_trade, respond_trade=respond_trade, TradeOfferView=TradeOfferView, TradeInboxView=TradeInboxView, DropChoreView=DropChoreView, MissedChoreView=MissedChoreView, ReassignView=ReassignView, reassign=reassign, reassign_snapshot=reassign_snapshot, responsibility_view=responsibility_view, responsibility_rows=responsibility_rows, ResponsibilityView=ResponsibilityView, Launcher=Launcher, PersonalView=PersonalView, WeeklyView=WeeklyView, HouseholdSetup=HouseholdSetup, AddChoreModal=AddChoreModal, AddChoreMenu=AddChoreMenu, RemoveChoreView=RemoveChoreView, EditChoreView=EditChoreView, EditChoreModal=EditChoreModal, RepeatMenu=RepeatMenu, WeekdayMenu=WeekdayMenu, update_chore=update_chore, ready=timing.ready, completion_reset=timing.completion_reset, timing=timing, is_archived=is_archived, create_chore=create_chore, snapshot=snapshot, rows=rows, week_key=week_key, available=available, weekly_owner=weekly_owner, signup=signup)
+    return SimpleNamespace(FeedbackView=FeedbackView, FeedbackModal=FeedbackModal, save_feedback=save_feedback, feedback_votes=feedback_votes, feedback_context=feedback_context, HelpView=HelpView, ReturnView=ReturnView, attendance=attendance, week_status=week_status, can_take_week=can_take_week, coverage_warning=coverage_warning, AttendanceView=AttendanceView, AttendanceModal=AttendanceModal, ChooseDayView=ChooseDayView, owned_scope=owned_scope, drop_chore=drop_chore, trade_snapshot=trade_snapshot, propose_trade=propose_trade, respond_trade=respond_trade, TradeOfferView=TradeOfferView, TradeInboxView=TradeInboxView, DropChoreView=DropChoreView, MissedChoreView=MissedChoreView, ReassignView=ReassignView, reassign=reassign, reassign_snapshot=reassign_snapshot, responsibility_view=responsibility_view, responsibility_rows=responsibility_rows, ResponsibilityView=ResponsibilityView, Launcher=Launcher, PersonalView=PersonalView, WeeklyView=WeeklyView, HouseholdSetup=HouseholdSetup, AddChoreModal=AddChoreModal, AddChoreMenu=AddChoreMenu, RemoveChoreView=RemoveChoreView, EditChoreView=EditChoreView, EditChoreModal=EditChoreModal, RepeatMenu=RepeatMenu, WeekdayMenu=WeekdayMenu, update_chore=update_chore, ready=timing.ready, completion_reset=timing.completion_reset, timing=timing, is_archived=is_archived, create_chore=create_chore, snapshot=snapshot, rows=rows, week_key=week_key, available=available, weekly_owner=weekly_owner, signup=signup)
