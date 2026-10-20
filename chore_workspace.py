@@ -88,12 +88,13 @@ def install(ns, ui, lock):
             self.add_item(b)
             return b
         def nav(self, back=None):
+            self.recovery_parent = back
             if back: self.button('Back', lambda i: present(i, back()), row=4)
             self.button('Dashboard', lambda i: present(i, Dashboard(self.owner, i.guild, i.user)), row=4)
         async def on_error(self, i, error, item):
             import logging
             logging.getLogger('discord.sprig').exception('Workspace action failed', exc_info=error)
-            text = 'Check the chore before trying again; an action may already have saved. Reopen /chores if this screen has expired.'
+            text = 'An action may already have saved. Use Refresh / Resume to check the current state before trying again; it never repeats the old action.'
             if i.response.is_done(): await i.followup.send(text, ephemeral=True)
             else: await i.response.send_message(text, ephemeral=True)
 
@@ -146,6 +147,7 @@ def install(ns, ui, lock):
     def adapt(view, owner, back=None):
         if isinstance(view, View) or getattr(view, 'workspace_adapted', False): return view
         view.workspace_adapted = True
+        view.recovery_parent = back
         for item in list(view.children):
             if isinstance(item, discord.ui.Button) and item.label in ('Dashboard', 'My chores', 'Back'):
                 view.remove_item(item)
@@ -172,6 +174,9 @@ def install(ns, ui, lock):
             super().__init__(owner)
             incoming = db.execute("SELECT COUNT(*) FROM chore_trades WHERE recipient=? AND status='pending'", (str(owner),)).fetchone()[0]
             self.embed = discord.Embed(title='🌱 Your chore workspace', description='Pick a task, then use its chore card. Your controls are private; household changes are shared.\nNeed a hand? Open Help below.', color=0x6B9B77)
+            self.recovery_context = {'screen':'dashboard'}
+            if recovery.latest(owner):
+                self.button('Continue where I left off', recovery.resume_latest, row=3)
             def browse(area):
                 saved = memory.get((owner, area), {})
                 return Browse(owner, **dict(saved, area=area), guild=guild)
@@ -196,7 +201,7 @@ def install(ns, ui, lock):
                 if member and getattr(getattr(member, 'guild_permissions', None), 'manage_guild', False):
                     self.button('Household setup', lambda i: present(i, adapt(ui.HouseholdSetup(owner), owner)), row=3)
             total = db.execute('SELECT points,streak FROM users WHERE id=?', (str(owner),)).fetchone()
-            self.embed.set_footer(text=(f'{total[0]} points · {total[1]} day streak · ' if total else '') + 'Reopen /chores after ten minutes or a restart.')
+            self.embed.set_footer(text=(f'{total[0]} points · {total[1]} day streak · ' if total else '') + 'Refresh / Resume keeps your place after expiry or a restart.')
 
     class Points(View):
         def __init__(self,owner,guild=None,page=0):
@@ -207,6 +212,7 @@ def install(ns, ui, lock):
             chunk=records[page*5:(page+1)*5]
             self.name_ids=[r[0] for r in chunk]
             self.rebuild=lambda:Points(owner,guild,page)
+            self.recovery_context={'screen':'points','page':page}
             self.embed=discord.Embed(title='Points & standings',description=f'⭐ Your total: **{total[0]} points**\n🔥 Your streak: **{total[1]} day(s)**\nPoints belong to the person who completes the chore. They do not currently redeem rewards.',color=0x6B9B77)
             rank=0;previous=None
             for index,(uid,points) in enumerate(records):
@@ -231,6 +237,7 @@ def install(ns, ui, lock):
             self.target,self.reset_streaks=target,reset_streaks
             self.expected=score_rows(target)
             self.embed=discord.Embed(title='Reset points',color=0x6B9B77)
+            self.recovery_context={'screen':'points'}
             if owner!=OWNER:
                 self.embed.description='Only ginaria can reset points.'
                 self.nav()
@@ -428,6 +435,7 @@ def install(ns, ui, lock):
             memory[(owner, area)] = dict(self.state)
             self.name_ids=[ownership(q[0],offset)[0] for q in selected]
             self.rebuild=lambda:Browse(owner,**self.state,guild=guild)
+            self.recovery_context={'screen':'browse','state':dict(self.state)}
             back = lambda: Browse(owner, **self.state, guild=guild)
             chunk = rendered[page*5:(page+1)*5]
             title = {'mine': 'My chores', 'pickup': 'Pick up chores', 'household': 'Household'}[area]
@@ -511,7 +519,7 @@ def install(ns, ui, lock):
                             if not await source.interaction_check(i):return
                             if not can_done:
                                 return await present(i,Card(source.owner,qid,lambda:Browse(source.owner,**source.state,guild=i.guild),i.guild,1 if source.state['tab']=='next' else 0))
-                            if pending_steps or not ui.planning.complete(qid):return await present(i,ui.planning.Checklist(source.owner,qid,i.guild))
+                            if pending_steps or not ui.planning.complete(qid):return await present(i,ui.planning.Checklist(source.owner,qid,i.guild,lambda:Card(source.owner,qid,lambda:Browse(source.owner,**source.state,guild=i.guild),i.guild)))
                             async def complete():
                                 async with lock:
                                     ns['reset_due_quests']()
@@ -527,7 +535,7 @@ def install(ns, ui, lock):
                         button.callback=click
                         self.add_item(discord.ui.Section(content,accessory=button))
                     else:self.add_item(content)
-                footer=text('-# '+embed.footer.text) if embed.footer and embed.footer.text else None
+                footer=text('-# '+((embed.footer.text+' · ') if embed.footer and embed.footer.text else '')+'Refresh / Resume keeps your place if controls expire.')
                 if footer:self.add_item(footer)
             rows={}
             row_ids={child['custom_id']:index for index,row in enumerate(source.to_components()) for child in row.get('components',[]) if 'custom_id' in child}
@@ -542,6 +550,7 @@ def install(ns, ui, lock):
             self.add_item(discord.ui.Separator())
             for row,items in sorted(rows.items()):
                 self.add_item(discord.ui.ActionRow(*items))
+            recovery.attach(self,source)
 
         async def interaction_check(self,i):
             return await self.source.interaction_check(i)
@@ -648,6 +657,7 @@ def install(ns, ui, lock):
             q = chore(qid)
             back = back or (lambda: Browse(owner, 'mine', guild=guild))
             self.qid, self.expected = qid, ui.snapshot(qid)
+            self.recovery_context={'screen':'card','qid':qid,'offset':offset,'parent':recovery.bookmark(back())}
             self.embed = discord.Embed(title=clean(q[1], 200) if q else 'Chore unavailable', description=notice or '', color=0x6B9B77)
             if not q or ui.is_archived(qid):
                 self.embed.description = 'This chore is archived or unavailable. Manage chores → Archived chores can restore it.'
@@ -664,7 +674,7 @@ def install(ns, ui, lock):
             help_status=ui.planning.help_record(qid)
             if help_status and not q[5]:self.embed.add_field(name='⚠ '+help_status[4],value=clean(help_status[5],500),inline=False)
             self.button('Stuck / need help',lambda i:present(i,ui.planning.HelpStatus(owner,qid,i.guild)),row=2)
-            if ui.planning.steps(qid):self.button('Checklist',lambda i:present(i,ui.planning.Checklist(owner,qid,i.guild)),row=2)
+            if ui.planning.steps(qid):self.button('Checklist',lambda i:present(i,ui.planning.Checklist(owner,qid,i.guild,card)),row=2)
             if q[8]: self.embed.add_field(name='Instructions', value=clean(q[8], 1000), inline=False)
             card = lambda: Card(owner, qid, back, guild, offset)
             async def mutate(i, action):
@@ -809,6 +819,7 @@ def install(ns, ui, lock):
     class History(View):
         def __init__(self, owner, qid, back, page=0):
             super().__init__(owner)
+            self.recovery_context={'screen':'history','qid':qid,'page':page,'parent':recovery.bookmark(back())}
             records = db.execute('SELECT id,user_id,chore_name,points,completed_at,undone_at FROM completion_log WHERE quest_id=? ORDER BY id DESC', (qid,)).fetchall()
             page = min(max(page,0),max((len(records)-1)//5,0))
             chunk = records[page*5:(page+1)*5]
@@ -842,6 +853,7 @@ def install(ns, ui, lock):
     class Manage(View):
         def __init__(self, owner, guild=None):
             super().__init__(owner)
+            self.recovery_context={'screen':'manage'}
             self.embed = discord.Embed(title='Manage chores',description='Everyone can manage shared chores. Open any chore card to edit it. Archiving is reversible.',color=0x6B9B77)
             back = lambda: Manage(owner,guild)
             self.button('Add chore',lambda i:present(i,adapt(ui.AddChoreMenu(owner),owner,back)))
@@ -879,6 +891,7 @@ def install(ns, ui, lock):
     class Inbox(View):
         def __init__(self, owner, guild=None, page=0, resolved=False):
             super().__init__(owner)
+            self.recovery_context={'screen':'inbox','page':page,'resolved':resolved}
             self.embed = discord.Embed(title='Owner review inbox',color=0x6B9B77)
             if owner != OWNER:
                 self.embed.description = 'This inbox belongs to ginaria.'
@@ -974,6 +987,7 @@ def install(ns, ui, lock):
             super().__init__(owner)
             people = people or []
             self.people = people
+            self.recovery_context={'screen':'trips','people':list(people),'page':page}
             self.name_ids=people
             self.rebuild=lambda:Trips(owner,guild,people,page)
             back = lambda: Trips(owner,guild,people,page)
@@ -1042,14 +1056,15 @@ def install(ns, ui, lock):
         'Feedback and points':'Give feedback on a chore card to suggest timing, instructions, or points. Ginaria receives feedback DMs and resolves reviews in the owner inbox. Everyone can discuss; only ginaria resolves. Suggestions never apply themselves. Edits affect future points, not points already earned.',
         'History and mistakes':'Done awards points once per occurrence. Completion history records work after this update. Undo your most recent recorded completion only while its state and points remain unchanged. Undo reverses its points and streak changes. Earlier totals remain intact.',
         'Managing chores':'Manage chores groups Add and Archive/Restore. Edit any chore from its card. Room is optional and can be used as a filter. Archiving hides work and keeps records; restoring retains its state.',
-        'Planning and reminders':'Calendar previews scheduled chores by week or month; No fixed day keeps flexible work separate. Chore cards offer estimates and per-occurrence checklists. Finish steps before Done. Reminders are personal, off by default, with up to three Eastern times and an off switch.',
+        'Planning and reminders':'Calendar previews scheduled chores by week or month; No fixed day keeps flexible work separate. Chore cards offer estimates and per-occurrence checklists. Finish steps before Done. Reminders are personal, off by default, with up to ten Eastern times and an off switch.',
         'Help statuses and copies':'Stuck / need help on a chore lets its current responsible person explain the obstacle. Everyone sees active issues under Needs help and can confirm resolution without completing or dropping work. Status history keeps older notes. Duplicate chore copies settings into a fresh unassigned chore after reviewing a new name.',
         'Points and resets':'Points & standings shows your total and streak. Only ginaria can reset one person or everyone, with confirmation and optional streak reset. History stays saved. Ginaria can undo a reset from Reset history / Undo while affected scores have no newer activity.',
-        'Notifications and recovery':'Trades appear on the dashboard. Trade DMs are optional: turn them on in Notifications for your own account. Feedback DMs go to ginaria. Reopen /chores after a restart or ten minutes. Private controls edit shared household information.'}
+        'Notifications and recovery':'Trades appear on the dashboard. Trade DMs are optional: turn them on in Notifications for your own account. Feedback DMs go to ginaria. Use Refresh / Resume after a restart or ten minutes to restore your page, filters, and date. Expired actions and confirmations are never replayed. /chores also offers Continue where I left off. Private controls edit shared household information.'}
 
     class Guide(View):
         def __init__(self,owner,topic='Start here'):
             super().__init__(owner)
+            self.recovery_context={'screen':'guide','topic':topic}
             self.embed = discord.Embed(title=topic,description=TOPICS[topic],color=0x6B9B77)
             picker = discord.ui.Select(placeholder='What would you like to do?',options=[discord.SelectOption(label=k,value=k,default=k==topic) for k in TOPICS])
             async def choose(i): await present(i,Guide(owner,picker.values[0]))
@@ -1057,4 +1072,9 @@ def install(ns, ui, lock):
             self.add_item(picker)
             self.nav()
 
-    return SimpleNamespace(Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
+    result = SimpleNamespace(Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
+
+    from chore_recovery import install as install_recovery
+    recovery = install_recovery(ns, ui, result)
+    result.recovery = recovery
+    return result

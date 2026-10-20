@@ -1240,7 +1240,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_chores_prefix_opens_controls_here_without_jump(self):
         messages=[]
-        async def send(content,**kwargs):
+        async def send(content=None,**kwargs):
             messages.append((content,kwargs))
         channel=SimpleNamespace(permissions_for=lambda user:SimpleNamespace(view_channel=True,read_message_history=True))
         ctx=SimpleNamespace(interaction=None,guild=SimpleNamespace(id=1,get_channel=lambda cid:channel),channel=SimpleNamespace(id=99),author=SimpleNamespace(id=10),send=send)
@@ -1251,17 +1251,17 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Tap **Help**',content)
         self.assertFalse(options['ephemeral'])
         self.assertIn('Pick up chores',[c.label for c in options['view'].children])
-        self.assertEqual(options['view'].timeout,600)
+        self.assertIsNone(options['view'].timeout)
 
     async def test_slash_chores_is_private_and_actions_stay_private(self):
         messages=[]
-        async def send(content,**kwargs):
+        async def send(content=None,**kwargs):
             messages.append((content,kwargs))
         ctx=SimpleNamespace(interaction=object(),guild=SimpleNamespace(id=1),channel=SimpleNamespace(id=2),author=SimpleNamespace(id=10),send=send)
         await self.app.bot.get_command('chores').callback(ctx)
         self.assertTrue(messages[0][1]['ephemeral'])
         event=Interaction()
-        await next(c for c in messages[0][1]['view'].children if c.label=='Pick up chores').callback(event)
+        await next(c for c in messages[0][1]['view'].source.children if getattr(c,'label',None)=='Pick up chores').callback(event)
         self.assertIsInstance(event.response.payload,dict)
         self.assertIsInstance(event.response.payload['view'],self.ui.workspace.Browse)
 
@@ -2118,11 +2118,11 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_dashboard_back_navigation_never_changes_data(self):
         event=Interaction()
         view=self.ui.PersonalView(10)
-        before=list(self.db.iterdump())
+        before=[line for line in self.db.iterdump() if 'workspace_' not in line]
         await next(c for c in view.children if getattr(c,'label',None)=='Dashboard').callback(event)
         self.assertIsInstance(event.response.payload['view'],self.ui.workspace.Dashboard)
         self.assertEqual(event.response.payload['embed'].title,'🌱 Your chore workspace')
-        self.assertEqual(before,list(self.db.iterdump()))
+        self.assertEqual(before,[line for line in self.db.iterdump() if 'workspace_' not in line])
 
     async def test_help_topics_are_short_private_and_navigable(self):
         event=Interaction()
@@ -2851,7 +2851,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_points_button_is_private_read_only_and_rejects_other_viewers(self):
         self.db.executemany('INSERT INTO users(id,points,streak) VALUES(?,?,?)',[('10',20,3),('20',45,2)]);self.db.commit()
-        before=list(self.db.iterdump());w=self.ui.workspace;event=Interaction()
+        before=[line for line in self.db.iterdump() if 'workspace_' not in line];w=self.ui.workspace;event=Interaction()
         await next(c for c in w.Dashboard(10,event.guild).children if c.label=='Points & standings').callback(event)
         panel=event.response.wire_payload['view'];self.assertIsInstance(panel,w.LayoutPanel)
         self.assertIn('20 points',panel.source.embed.description)
@@ -2859,7 +2859,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await panel.interaction_check(event))
         other=Interaction(20);self.assertFalse(await panel.interaction_check(other))
         self.assertTrue(other.response.wire_payload[1]['ephemeral'])
-        self.assertEqual(before,list(self.db.iterdump()))
+        self.assertEqual(before,[line for line in self.db.iterdump() if 'workspace_' not in line])
 
     async def test_points_standings_handle_empty_users_ties_and_pagination(self):
         w=self.ui.workspace;before=list(self.db.iterdump());empty=w.Points(10)
@@ -3001,7 +3001,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
 
 
     async def test_help_button_is_persistent_private_and_changes_no_data(self):
-        before = list(self.db.iterdump())
+        before = [line for line in self.db.iterdump() if 'workspace_' not in line]
         view = self.ui.Launcher()
         self.assertTrue(view.is_persistent())
         button = next(c for c in view.children if c.label == 'Help')
@@ -3013,7 +3013,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         guide = str(options['embed'].to_dict())
         for phrase in ['My chores','Due now','Upcoming','Completed','Pick up chores','Household','same card']:
             self.assertIn(phrase, guide)
-        self.assertEqual(list(self.db.iterdump()), before)
+        self.assertEqual([line for line in self.db.iterdump() if 'workspace_' not in line], before)
 
     async def test_refresh_updates_existing_dashboard_help_without_reposting(self):
         message = SimpleNamespace(author=SimpleNamespace(id=77), edit=AsyncMock())
@@ -3040,6 +3040,243 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             await self.app.bot.get_command('enableprivatechores').callback(ctx)
             sync.assert_awaited_once()
         self.assertIsNotNone(self.app.bot.tree.get_command('chores',guild=discord.Object(id=1)))
+
+
+    def recovery_button(self, panel, label):
+        return next(c for c in panel.walk_children() if isinstance(c,discord.ui.Button) and c.label==label)
+
+    def recovery_list(self):
+        for index in range(12):
+            self.ui.create_chore(f'Task {index:02}','daily','5','Instructions','Kitchen')
+        self.db.execute("UPDATE quests SET assigned_to='10' WHERE name LIKE 'Task %'")
+        self.db.commit()
+        return self.ui.workspace.Browse(10,'household',tab='all',page=1,query='Task',person_id=10,room='Kitchen',group='chore',date_filter='2026-10-20')
+
+    async def test_recovery_expired_control_preserves_filters_page_and_no_action(self):
+        with self.clock('2026-10-20T10:00:00'):
+            w=self.ui.workspace;view=self.recovery_list();panel=w.render(view)
+            before=self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone()
+            panel.stop();event=Interaction()
+            await self.recovery_button(panel,'Next').callback(event)
+            self.assertEqual(event.response.payload['view'].state,view.state)
+            self.assertIn('expired',event.response.payload['content'])
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),before)
+
+    async def test_recovery_restart_routes_from_durable_record_without_live_callbacks(self):
+        with self.clock('2026-10-20T10:00:00'):
+            import re,sqlite3
+            from contextlib import closing
+            w=self.ui.workspace;view=self.recovery_list();panel=w.render(view)
+            old=self.recovery_button(panel,'Next');custom_id=old.custom_id
+            with closing(sqlite3.connect(self.temp.name+'/sprig.db')) as other:
+                self.assertIsNotNone(other.execute('SELECT bookmark FROM workspace_sessions WHERE token=?',(panel.recovery_token,)).fetchone())
+            w.recovery.live.clear()
+            event=Interaction();factory=w.recovery.RecoveryControl
+            fresh=await factory.from_custom_id(event,discord.ui.Button(label='Next',custom_id=custom_id),factory.__discord_ui_compiled_template__.fullmatch(custom_id))
+            await fresh.callback(event)
+            self.assertEqual(event.response.payload['view'].state,view.state)
+            self.assertIn('restarted',event.response.payload['content'])
+
+    async def test_recovery_expired_done_only_refreshes_then_fresh_done_works(self):
+        with self.clock('2026-10-20T10:00:00'):
+            w=self.ui.workspace;panel=w.render(w.Browse(10,'mine'));button=self.recovery_button(panel,'Done')
+            w.recovery.live[panel.recovery_token]['created']-=601
+            event=Interaction();await button.callback(event)
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=2').fetchone(),(0,))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+            fresh=event.response.wire_payload['view']
+            await self.recovery_button(fresh,'Done').callback(Interaction())
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(10,))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(1,))
+
+    async def test_recovery_stale_done_refreshes_without_overwriting_shared_change(self):
+        with self.clock('2026-10-20T10:00:00'):
+            w=self.ui.workspace;panel=w.render(w.Browse(10,'mine'))
+            self.db.execute("UPDATE quests SET assigned_to='20' WHERE id=2");self.db.commit()
+            event=Interaction();await self.recovery_button(panel,'Done').callback(event)
+            self.assertIn('no action was taken',event.response.payload['content'])
+            self.assertEqual(event.response.payload['view'].entries,[])
+            self.assertEqual(self.db.execute('SELECT completed,assigned_to FROM quests WHERE id=2').fetchone(),(0,'20'))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+
+    async def test_recovery_rejects_wrong_person_guild_and_lost_channel_access(self):
+        w=self.ui.workspace;panel=w.render(w.Browse(10,'household',query='private search'))
+        button=self.recovery_button(panel,'Refresh / Resume');w.recovery.live.clear()
+        events=[Interaction(20),Interaction(),Interaction()]
+        events[1].guild_id=2
+        events[2].channel_id=99
+        events[2].guild.get_channel=lambda cid:SimpleNamespace(permissions_for=lambda user:SimpleNamespace(view_channel=False,read_message_history=False))
+        for event in events:
+            await button.callback(event)
+            args,wire=event.response.wire_payload
+            self.assertTrue(wire['ephemeral']);self.assertNotIn('private search',args[0])
+            self.assertNotIn('view',wire)
+
+    async def test_recovery_live_and_dynamic_dispatch_do_not_double_complete(self):
+        with self.clock('2026-10-20T10:00:00'):
+            w=self.ui.workspace;panel=w.render(w.Browse(10,'mine'));button=self.recovery_button(panel,'Done')
+            event=Interaction();event.id=123456789
+            factory=w.recovery.RecoveryControl
+            dynamic=await factory.from_custom_id(event,discord.ui.Button(label='Done',custom_id=button.custom_id),factory.__discord_ui_compiled_template__.fullmatch(button.custom_id))
+            command=self.app.bot.get_command('done')
+            with patch.object(command,'_callback',new=AsyncMock(wraps=command.callback)) as complete:
+                await asyncio.gather(button.callback(event),dynamic.callback(event))
+                complete.assert_awaited_once()
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(1,))
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(10,))
+
+    async def test_recovery_select_uses_current_interaction_values(self):
+        with self.clock('2026-10-20T10:00:00'):
+            w=self.ui.workspace;view=w.Browse(10,'household',tab='all');panel=w.render(view)
+            picker=next(c for c in view.children if isinstance(c,discord.ui.Select))
+            event=Interaction();event.data={'component_type':3,'values':['1']}
+            await picker.callback(event)
+            self.assertEqual(event.response.payload['view'].qid,1)
+
+    async def test_recovery_nearest_page_after_other_person_archives_items(self):
+        with self.clock('2026-10-20T10:00:00'):
+            w=self.ui.workspace;view=self.recovery_list();view=w.Browse(10,**dict(view.state,page=2));panel=w.render(view)
+            self.db.execute("DELETE FROM quests WHERE name LIKE 'Task %' AND name!='Task 00'");self.db.commit()
+            event=Interaction();await self.recovery_button(panel,'Refresh / Resume').callback(event)
+            actual=event.response.payload['view']
+            self.assertEqual(actual.state['page'],0);self.assertEqual(actual.state['query'],'Task')
+            self.assertIn('nearest available page',event.response.payload['content'])
+
+    async def test_recovery_card_back_preserves_parent_list_after_restart(self):
+        with self.clock('2026-10-20T10:00:00'):
+            w=self.ui.workspace;view=self.recovery_list();qid=view.entries[5][0]
+            panel=w.render(w.Card(10,qid,lambda:w.Browse(10,**view.state),offset=1))
+            w.recovery.live.clear();event=Interaction();await self.recovery_button(panel,'Refresh / Resume').callback(event)
+            self.assertEqual(event.response.payload['view'].qid,qid)
+            self.assertEqual(event.response.payload['view'].recovery_context['offset'],1)
+            await next(c for c in event.response.payload['view'].children if getattr(c,'label',None)=='Back').callback(event)
+            self.assertEqual(event.response.payload['view'].state,view.state)
+
+    async def test_recovery_calendar_day_preserves_date_scope_mode_and_page(self):
+        with self.clock('2026-10-20T10:00:00'):
+            from datetime import date
+            w=self.ui.workspace;self.recovery_list();day=date(2026,10,20)
+            panel=w.render(self.ui.planning.Day(10,day,True,page=1,mode='month'))
+            w.recovery.live.clear();event=Interaction();await self.recovery_button(panel,'Next day').callback(event)
+            result=event.response.payload['view']
+            self.assertEqual((result.day,result.page,result.mine,result.mode),(day,1,True,'month'))
+            self.assertIn('Nothing was repeated',event.response.payload['content'])
+
+    async def test_recovery_expired_confirmation_returns_to_card_without_replaying(self):
+        with self.clock('2026-10-20T10:00:00'):
+            w=self.ui.workspace;save=AsyncMock();panel=w.render(w.Confirm(10,'Drop?','Confirm ownership change',save,lambda:w.Card(10,2)))
+            panel.stop();event=Interaction();await self.recovery_button(panel,'Confirm').callback(event)
+            save.assert_not_awaited();self.assertIsInstance(event.response.payload['view'],w.Card)
+            self.assertEqual(event.response.payload['view'].qid,2)
+
+    async def test_recovery_expired_points_reset_returns_to_scores_and_preserves_history(self):
+        w=self.ui.workspace;owner=301104023405199361
+        self.db.execute("INSERT INTO users(id,points,streak) VALUES('10',30,4)");self.db.commit()
+        panel=w.render(w.ResetPoints(owner,target='10',confirm=True));panel.stop();event=Interaction(owner)
+        await self.recovery_button(panel,'Confirm reset').callback(event)
+        self.assertIsInstance(event.response.payload['view'],w.Points)
+        self.assertEqual(self.db.execute("SELECT points,streak FROM users WHERE id='10'").fetchone(),(30,4))
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM points_reset_batches').fetchone(),(0,))
+
+    async def test_recovery_dashboard_continue_survives_reopen_and_is_per_person(self):
+        w=self.ui.workspace;view=w.Browse(10,'household',tab='next',query='bath',group='person');w.render(view)
+        self.assertIsNone(w.recovery.latest(20))
+        w.recovery.live.clear();dashboard=w.render(w.Dashboard(10));event=Interaction()
+        await self.recovery_button(dashboard,'Continue where I left off').callback(event)
+        self.assertEqual(event.response.payload['view'].state,view.state)
+        self.assertEqual(w.recovery.latest(10)['state'],view.state)
+        self.assertNotIn('Continue where I left off',[getattr(c,'label',None) for c in w.Dashboard(20).children])
+
+    async def test_recovery_unknown_token_fails_privately_without_mutation(self):
+        w=self.ui.workspace;event=Interaction();before=self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone()
+        await w.recovery.route(event,'0'*32,'0')
+        self.assertTrue(event.response.wire_payload[1]['ephemeral'])
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),before)
+
+    async def test_recovery_saved_view_not_supported_falls_back_safely(self):
+        w=self.ui.workspace;event=Interaction()
+        await w.recovery.open_saved(event,{'screen':'browse','state':{'removed_option':'old'}})
+        self.assertIsInstance(event.response.payload['view'],w.Dashboard)
+        self.assertIn('no action was taken',event.response.payload['content'])
+
+    async def test_recovery_rerendered_source_and_explicit_refresh_still_work(self):
+        with self.clock('2026-10-20T10:00:00'):
+            w=self.ui.workspace;source=w.Browse(10,'mine');w.render(source);panel=w.render(source)
+            event=Interaction();await self.recovery_button(panel,'Done').callback(event)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(1,))
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(10,))
+
+
+    def recovery_message(self,panel):
+        return discord.Message(state=self.app.bot._connection,channel=SimpleNamespace(id=2,guild=None),data={
+            'id':'123456789012345678','channel_id':'2','type':0,'content':'',
+            'author':{'id':'99','username':'ChoreSprite','discriminator':'0','avatar':None,'bot':True},
+            'attachments':[],'embeds':[],'flags':(1<<15)|64,'components':panel.to_components()})
+
+    async def test_recovery_real_view_store_dispatch_handles_dynamic_and_static_once(self):
+        with self.clock('2026-10-20T10:00:00'):
+            w=self.ui.workspace;panel=w.render(w.Browse(10,'mine'));button=self.recovery_button(panel,'Done')
+            message=self.recovery_message(panel);self.app.bot._connection._view_store.add_view(panel,message_id=message.id)
+            event=Interaction();event.id=987654321;event.message=message
+            event.data={'component_type':2,'custom_id':button.custom_id};event._state=self.app.bot._connection
+            store=self.app.bot._connection._view_store
+            store.dispatch_view(2,button.custom_id,event)
+            await asyncio.gather(*list(store._ViewStore__tasks))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(1,))
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(10,))
+            self.assertIsNotNone(event.response.wire_payload)
+
+    async def test_recovery_real_view_store_recovers_without_registered_old_view(self):
+        with self.clock('2026-10-20T10:00:00'):
+            w=self.ui.workspace;view=self.recovery_list();panel=w.render(view)
+            button=self.recovery_button(panel,'Next');message=self.recovery_message(panel)
+            # Match a new bot process: persistent factory exists, source view/callbacks do not.
+            w.recovery.live.clear();event=Interaction();event.id=987654322
+            event.message=message;event.data={'component_type':2,'custom_id':button.custom_id};event._state=self.app.bot._connection
+            store=self.app.bot._connection._view_store
+            store.dispatch_view(2,button.custom_id,event)
+            await asyncio.gather(*list(store._ViewStore__tasks))
+            self.assertIsNotNone(event.response.wire_payload)
+            self.assertEqual(event.response.payload['view'].state,view.state)
+            self.assertIn('restarted',event.response.payload['content'])
+
+
+    async def test_recovery_public_launcher_destinations_open_private_recoverable_views(self):
+        for label in ('Help','Who’s home?','Manage chores'):
+            event=Interaction();launcher=self.ui.Launcher()
+            await next(c for c in launcher.children if getattr(c,'label',None)==label).callback(event)
+            args,wire=event.response.wire_payload
+            self.assertTrue(wire['ephemeral'])
+            self.assertIsInstance(wire['view'],self.ui.workspace.LayoutPanel)
+            self.assertIsNotNone(self.recovery_button(wire['view'],'Refresh / Resume'))
+
+
+    async def test_recovery_checklist_restores_its_card_and_original_filtered_page(self):
+        with self.clock('2026-10-20T10:00:00'):
+            w=self.ui.workspace;view=self.recovery_list();qid=view.entries[5][0];p=self.ui.planning
+            p.save_plan(qid,'5','One step',p.plan(qid))
+            back=lambda:w.Card(10,qid,lambda:w.Browse(10,**view.state))
+            panel=w.render(p.Checklist(10,qid,back=back));w.recovery.live.clear()
+            event=Interaction();await self.recovery_button(panel,'Refresh / Resume').callback(event)
+            self.assertIsInstance(event.response.payload['view'],p.Checklist)
+            await next(c for c in event.response.payload['view'].children if getattr(c,'label',None)=='Open chore').callback(event)
+            self.assertEqual(event.response.payload['view'].qid,qid)
+            await next(c for c in event.response.payload['view'].children if getattr(c,'label',None)=='Back').callback(event)
+            self.assertEqual(event.response.payload['view'].state,view.state)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+
+    async def test_recovery_real_view_store_select_opens_selected_chore_privately(self):
+        with self.clock('2026-10-20T10:00:00'):
+            w=self.ui.workspace;view=w.Browse(10,'household',tab='all');panel=w.render(view)
+            picker=next(c for c in view.children if isinstance(c,discord.ui.Select));message=self.recovery_message(panel)
+            store=self.app.bot._connection._view_store;store.add_view(panel,message_id=message.id)
+            event=Interaction();event.id=987654323;event.message=message
+            event.data={'component_type':3,'custom_id':picker.custom_id,'values':['1']};event._state=self.app.bot._connection
+            store.dispatch_view(3,picker.custom_id,event)
+            await asyncio.gather(*list(store._ViewStore__tasks))
+            self.assertIsNotNone(event.response.wire_payload)
+            self.assertEqual(event.response.payload['view'].qid,1)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
 
 
 if __name__ == "__main__":

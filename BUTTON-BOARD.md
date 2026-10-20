@@ -24,6 +24,7 @@ Deploy all seven modules together:
 - household_availability.py. Base rotation and dated attendance exceptions.
 - chore_history.py. Append-only completion ledger and atomic conservative Undo.
 - chore_planning.py. Personal opt-in reminders, estimates, occurrence checklists, and private calendar previews.
+- chore_recovery.py. Durable owner/guild-bound navigation, expired-control recovery, and stale-action guards.
 - chore_workspace.py. Private dashboards, searchable lists, common chore cards, trip editor, and owner review queue.
 
 Dependencies remain discord.py 2.6 or newer below 3, python-dotenv, and tzdata. Configuration and the Discord token stay in the existing server environment; never put credentials into this guide or version control.
@@ -64,7 +65,7 @@ Once a message uses Components V2, every destination on it is also rendered as V
 
 /chores opens a private personal dashboard. !chores opens a public starter; subsequent buttons are private. The saved public launcher has six neutral destinations: My chores, Pick up chores, Household, Who’s home?, Manage chores, and Help. Owner/admin tools are shown on the personal dashboard according to account identity and permissions.
 
-The dashboard includes incoming trade counts and personal points/streaks. Browse, search, filter, card, confirmation, and specialized editor navigation replace the current private message. Validation errors may be separate private responses. Views expire after ten minutes of inactivity or a restart. Existing public messages are not automatically deleted.
+The dashboard includes incoming trade counts and personal points/streaks. Browse, search, filter, card, confirmation, and specialized editor navigation replace the current private message. Validation errors may be separate private responses. Action callbacks expire after ten minutes or a restart; persistent recovery routing refreshes the saved view rather than replaying an expired action. Existing public messages are not automatically deleted.
 
 Everyone with access to the configured chores channel and its history can manage routine chores and attendance. Specialized controls retain opener ownership and server/channel checks. Household setup requires Manage Server. Review resolution requires ginaria, account 301104023405199361.
 
@@ -78,7 +79,7 @@ occurrence_moves holds a single moved unfinished occurrence without replacing th
 
 Multi-person date changes validate every person before a single transaction. Editing an exception deactivates the old version and inserts its replacement; cancellation is also retained as inactive history. Duplicate exact trips do not create additional records. Overlaps and stale edits are rejected.
 
-The optional room uses the existing category field. It defaults to general; existing categories are preserved unless explicitly edited. Search covers names and instructions. Filters cover person, room, date, and unclaimed work. Per-person view preferences are remembered in process and reset on restart.
+The optional room uses the existing category field. It defaults to general; existing categories are preserved unless explicitly edited. Search covers names and instructions. Filters cover person, room, date, and unclaimed work. In-process per-area preferences remain available, and a durable per-person/guild last-place bookmark supports Continue where I left off after restart. Per-message recovery tokens retain the exact saved page/filter/card/calendar context for that screen.
 
 ## Notifications and owner review
 
@@ -95,7 +96,7 @@ Old saved public panel buttons must be refreshed after deployment. The persisten
 ## Verify and deploy
 
 1. Run offline tests against a temporary database: `python test_chore_board.py -q`. They use a dummy token and mocked Discord delivery; do not start a second real bot.
-2. Compile all seven modules with `python -m py_compile sprig_bot.py chore_board.py chore_timing.py household_availability.py chore_history.py chore_workspace.py chore_planning.py`.
+2. Compile all eight modules with `python -m py_compile sprig_bot.py chore_board.py chore_timing.py household_availability.py chore_history.py chore_workspace.py chore_planning.py chore_recovery.py`.
 3. Obtain approval for the exact commit, SignalPocket identity, main branch push, and deployment. These steps are separate from local preparation.
 4. Stop the existing sprig service interactively and verify inactive.
 5. Back up the entire server checkout and database, record the previous commit, and verify the backup database integrity before updating.
@@ -121,3 +122,14 @@ My chores shows the caller’s points total at the top and uses Completed for th
 ## Laptop backup and failure-alert tools
 
 See [BACKUP-RECOVERY.md](BACKUP-RECOVERY.md) for the installed server/laptop schedules, protected storage, verification, private ginaria alerts, restore commands, limitations, and tests. `backup_monitor.py` runs independently of the bot; `laptop_backup.py` downloads over SSH and encrypts with Windows CurrentUser DPAPI. `install_laptop_backup.ps1` and `run_laptop_backup.ps1` set up the hidden per-user Windows task. These tools do not modify chore records or require a bot restart. Tests: `python -m unittest test_backup_transport -q`, plus `test_backup_database` on Linux. Do not put credentials, snapshots, or local monitor state in Git.
+
+
+## Expired and outdated private controls
+
+Every V2 workspace screen includes Refresh / Resume. Persistent dynamic routing recognizes owner/guild-bound opaque session tokens even after the old view times out or the bot restarts. A recovery click rebuilds navigation from SQLite workspace_sessions/workspace_places, then presents fresh controls; it never replays an old mutation or confirmation. /chores opens the same V2 layout and includes Continue where I left off when a saved location exists. The public !chores starter remains a persistent launcher that opens private controls.
+
+Bookmarks retain list tabs/pages/search/person/room/date/group filters, chore IDs and parent return paths, calendar dates/month/week/personal scope and page, checklists, points/history pages, trips, owner review inbox, reminders, and help topics. Lists clamp to the nearest available page if rows disappear. Specialized editors/confirmations return to their safe parent or dashboard, not an old executable confirmation; unsaved modal text is not restored. Screens predating this release have no recovery tokens: reopen /chores once after deployment.
+
+For active controls, a current household-state fingerprint rejects stale mutating actions and presents the same location with an explanatory notice. Ordinary page/date/dashboard navigation and opening a checklist can still render current data in one click. Backend ownership, availability, occurrence snapshots, mutation locks, completion deduplication, and owner-only checks remain intact. Fingerprints ignore navigation and delivery bookkeeping. A shared interaction-ID claim prevents discord.py's dynamic and static dispatch paths from running the same action twice. Every route rechecks the caller and household channel access. No background polling, channel posts, or test DMs are added.
+
+Recovery metadata is navigation state, not chore history. UI read-only tests exclude only workspace metadata while continuing to compare all household data. Regression tests exercise the real discord.py ViewStore dispatcher and serialized V2 messages, restart recovery with no old view registered, select values, stale/expired Done, owner reset confirmations, filters/pages and calendar return paths, cross-person/guild/access rejection, shortened lists, duplicate dispatch, and message limits. Deploy chore_recovery.py with the other seven runtime modules; no new dependency or slash-command re-registration is needed. Live behavior remains unverified until the approved release is deployed and reopened in Discord.

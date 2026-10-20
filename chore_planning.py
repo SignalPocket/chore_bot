@@ -73,10 +73,12 @@ def install(ns, ui, w, lock):
             async with lock:text=save_plan(self.qid,self.minutes.value,self.items.value,self.expected)
             await w.present(i,self.back(),text)
     class Checklist(w.View):
-        def __init__(self,owner,qid,guild=None):
+        def __init__(self,owner,qid,guild=None,back=None):
             super().__init__(owner)
             ns['reset_due_quests']()
             q=chore(qid);items=steps(qid);done=checked(qid)
+            back=back or (lambda:w.Card(owner,qid,guild=guild))
+            self.recovery_context={'screen':'checklist','qid':qid,'parent':w.recovery.bookmark(back())}
             self.expected=(ui.snapshot(qid),plan(qid),cycle(qid),sorted(done))
             self.embed=discord.Embed(title='Checklist · '+w.clean(q[1],100) if q else 'Chore unavailable',description='Check steps as you go. Points are awarded once, when you press Done on the chore. Progress is shared with whoever takes this occurrence.',color=0x6B9B77)
             for idx,item in enumerate(items):self.embed.add_field(name=('☑ ' if idx in done else '☐ ')+w.clean(item,80),value='Checked' if idx in done else 'Not checked',inline=False)
@@ -98,7 +100,7 @@ def install(ns, ui, w, lock):
                                     db.execute('DELETE FROM checklist_checks WHERE quest_id=? AND cycle=?',(qid,self.expected[2]))
                                     db.executemany('INSERT INTO checklist_checks VALUES(?,?,?,?)',[(qid,self.expected[2],idx,str(owner)) for idx in values])
                                 text=f'{len(values)}/{len(items)} steps checked. Mark the chore Done when finished.'
-                    await w.present(i,Checklist(owner,qid,i.guild),text)
+                    await w.present(i,Checklist(owner,qid,i.guild,back),text)
                 picker.callback=change;self.add_item(picker)
             elif not items:self.embed.add_field(name='No checklist yet',value='Use Estimate / checklist from the chore card to add steps.')
             else:self.embed.add_field(name='View only',value='Only the person responsible for the current due occurrence can check or uncheck steps.')
@@ -113,10 +115,10 @@ def install(ns, ui, w, lock):
                             context=ui.Context(i)
                             await bot.get_command('done').callback(context,qid)
                             text='\n'.join(context.messages)
-                    await w.present(i,w.Card(owner,qid,guild=i.guild),text)
+                    await w.present(i,back(),text)
                 self.button('Done',finish,row=1,primary=True)
-            self.button('Open chore',lambda i:w.present(i,w.Card(owner,qid,guild=i.guild)),row=1)
-            self.nav()
+            self.button('Open chore',lambda i:w.present(i,back()),row=1)
+            self.nav(back)
 
     def settings(uid):
         return db.execute('SELECT enabled,times,revision FROM reminder_settings WHERE user_id=?',(str(uid),)).fetchone() or (0,'["09:00", "17:00"]',0)
@@ -143,6 +145,7 @@ def install(ns, ui, w, lock):
         def __init__(self,owner):
             super().__init__(owner)
             expected=settings(owner)
+            self.recovery_context={'screen':'reminders'}
             self.embed=discord.Embed(title='Your chore reminders',description='**'+('On' if expected[0] else 'Off')+'** · '+', '.join(json.loads(expected[1]))+' Eastern\nPrivate DMs for chores you own that are due and unfinished. No reminder when you are away or have nothing due. Turning this on authorizes Sprig to DM your own account.\nChoose up to 10 times per day. Change times or turn off whenever you like. Missed reminders are not replayed after downtime.',color=0x6B9B77)
             last=db.execute('SELECT slot,status FROM reminder_deliveries WHERE user_id=? ORDER BY slot DESC LIMIT 1',(str(owner),)).fetchone()
             if last:self.embed.add_field(name='Last reminder attempt',value=last[0]+' · '+('Sent' if last[1]=='sent' else 'Delivery uncertain or blocked; check Discord DM privacy. No automatic retry.' if last[1]=='failed_uncertain' else last[1]),inline=False)
@@ -221,6 +224,7 @@ def install(ns, ui, w, lock):
         def __init__(self,owner,guild=None,day=None,mode='week',mine=False):
             super().__init__(owner)
             day=day or timing.now().date();start=day-timedelta(days=day.weekday())
+            self.recovery_context={'screen':'calendar','day':day.isoformat(),'mode':mode,'mine':mine}
             self.embed=discord.Embed(title=('My' if mine else 'Household')+' calendar · '+(f'{start:%b %d}–{start+timedelta(days=6):%b %d}' if mode=='week' else f'{day:%B %Y}'),description='Schedule preview · Eastern time. Flexible chores are below; unfinished overdue work stays in Due now. Sunday ownership is shown before the 6 p.m. handoff. Past schedules are not a complete activity history.',color=0x6B9B77)
             def view(**changes):return Calendar(owner,guild,**dict(dict(day=day,mode=mode,mine=mine),**changes))
             self.button('Week',lambda i:w.present(i,view(mode='week')),row=0,primary=mode=='week')
@@ -255,6 +259,7 @@ def install(ns, ui, w, lock):
             super().__init__(owner)
             rows=project(day,owner if mine else None,flexible);page=min(max(page,0),max((len(rows)-1)//5,0));chunk=rows[page*5:(page+1)*5]
             self.day,self.page,self.mine,self.flexible,self.mode=day,page,mine,flexible,mode
+            self.recovery_context={'screen':'day','day':day.isoformat(),'page':page,'mine':mine,'flexible':flexible,'mode':mode}
             self.paging_labels=('Previous page','Next page')
             self.embed=discord.Embed(title=('No fixed day · '+day.strftime('%b %d')) if flexible else day_badge(WEEKDAYS[day.weekday()])+' '+day.strftime('%b %d, %Y'),description='Schedule preview. Calendar dates do not move chores or create a reservation. Choose a chore to see details.'+(' Weekly/monthly chores are flexible until given a day. Owners are shown for this date’s household week.' if flexible else ''),color=0x6B9B77)
             for q,uid in chunk:
@@ -368,6 +373,7 @@ def install(ns, ui, w, lock):
             else:self.embed.add_field(name='No active issues',value='New status notes appear here; ordinary unfinished work remains in chores.')
             if page:self.button('Previous',lambda i:w.present(i,NeedsHelp(owner,i.guild,page-1)),row=3)
             if (page+1)*5<len(rows):self.button('Next',lambda i:w.present(i,NeedsHelp(owner,i.guild,page+1)),row=3)
+            self.recovery_context={'screen':'needs_help','page':page}
             self.button('Refresh',lambda i:w.present(i,NeedsHelp(owner,i.guild,page)),row=3);self.nav()
 
     def duplicate_snapshot(qid):

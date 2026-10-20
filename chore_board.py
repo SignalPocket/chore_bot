@@ -1794,7 +1794,7 @@ def install(namespace):
         @discord.ui.button(label="Who’s home?",custom_id="sprig:attendance:v1",row=3)
         async def attendance_button(self,interaction,button):
             view=workspace.Trips(interaction.user.id,interaction.guild)
-            await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True)
+            await interaction.response.send_message(**workspace.payload(view),ephemeral=True)
 
         @discord.ui.button(label='Review inbox',custom_id='sprig:review-inbox:v1',row=3)
         async def review_inbox_button(self,interaction,button):
@@ -1807,7 +1807,7 @@ def install(namespace):
         @discord.ui.button(label="Help", custom_id="sprig:help:v1", row=1)
         async def help_button(self, interaction, button):
             view=workspace.Guide(interaction.user.id)
-            await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True)
+            await interaction.response.send_message(**workspace.payload(view),ephemeral=True)
 
         @discord.ui.button(label="Open chores", style=discord.ButtonStyle.primary, custom_id="sprig:open:v1")
         async def open_button(self, interaction, button):
@@ -1832,7 +1832,7 @@ def install(namespace):
         @discord.ui.button(label="Add chore", style=discord.ButtonStyle.success, custom_id="sprig:add:v1")
         async def add_button(self, interaction, button):
             view=workspace.Manage(interaction.user.id,interaction.guild)
-            await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True)
+            await interaction.response.send_message(**workspace.payload(view),ephemeral=True)
 
         @discord.ui.button(label="Remove chore", style=discord.ButtonStyle.secondary, custom_id="sprig:remove:v1", row=1)
         async def remove_button(self, interaction, button):
@@ -1853,11 +1853,12 @@ def install(namespace):
         if not allowed(check):
             await ctx.send("Use the household server with access to the chores channel. Check panel setup if it hasn't been completed.",ephemeral=private)
             return
-        text=BOARD_TEXT + '\nReopen **/chores** after 10 minutes or a restart.'
         if not private:
-            text+='\nThis starter message is public. Use **/chores** for a fully private panel without a channel message.'
+            text=BOARD_TEXT+'\nThis starter message is public. Its buttons open private controls. Use **/chores** for a fully private panel.'
+            await ctx.send(text,view=Launcher(),ephemeral=False,allowed_mentions=discord.AllowedMentions.none())
+            return
         view=workspace.Dashboard(ctx.author.id,ctx.guild,ctx.author)
-        await ctx.send(text,embed=view.embed,view=view,ephemeral=private,allowed_mentions=discord.AllowedMentions.none())
+        await ctx.send(**workspace.payload(view),ephemeral=True)
 
     @bot.command(name='enableprivatechores')
     @commands.guild_only()

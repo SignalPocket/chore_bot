@@ -190,7 +190,7 @@ Open a chore card → More actions → Edit chore. Edit details changes the name
 
 ## If something goes wrong
 
-- **Old or expired buttons.** Open /chores again.
+- **Old or expired buttons.** Use Refresh / Resume, or click the old control: it restores fresh controls in the same place without repeating the old action. You can also reopen /chores → Continue where I left off. Screens from before this update need a fresh /chores once.
 - **This chore changed.** Read the refreshed card; someone else or a reset changed its state.
 - **Nothing matches.** Clear filters and check another time tab.
 - **Away today.** Check Who’s home? and coverage; responsibilities have not disappeared.
@@ -225,3 +225,14 @@ This table describes available controls, not a promise that every action has uni
 | Trade notifications | Toggle on or off. | Already-sent DMs cannot be recalled. |
 
 Remaining improvements to consider: arbitrary owner score adjustments with an audit and reversal, correction after later work makes safe completion reversal impossible, editing feedback, and recovering a skipped occurrence. Point redemption is also not implemented; personal reminders are available as described above. None of these are implied by the current guide.
+
+
+## Keep your place when screens expire or change
+
+**Refresh / Resume** brings the current information back into your private screen. After ten minutes or a restart, an old button or selection refreshes the saved location first; it does not perform that old action. Review the new controls, then choose Done, Claim, or another action again if still appropriate.
+
+Your page, tab, search, filters, chore card and return path, and calendar date/view are kept. If a list becomes shorter, Sprig uses the nearest available page and tells you. Reopening **/chores → Continue where I left off** restores your last saved location after a restart. Your saved place is private to your Discord account and household.
+
+If another person changes chores while your screen is open, navigation still opens current information normally. An outdated action refreshes your location and explains that no action was taken. Expired confirmations return to the relevant card, scores, or other safe parent view so you can review a new confirmation. Unsaved form text is not recovered. If a saved location no longer exists, Sprig returns to the dashboard.
+
+After this feature is first deployed, reopen /chores once. Earlier messages were created without recovery information and cannot gain it retroactively. No private screens are posted publicly or automatically polled.
