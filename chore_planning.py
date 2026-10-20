@@ -124,16 +124,16 @@ def install(ns, ui, w, lock):
         if settings(uid)!=expected:return 'Reminder settings changed. Reopen them before saving.'
         values=sorted(set(v.strip() for v in text.split(',') if v.strip()))
         try:
-            if not 1<=len(values)<=3:raise ValueError
+            if not 1<=len(values)<=10:raise ValueError
             if any(datetime.strptime(v,'%H:%M').strftime('%H:%M')!=v for v in values):raise ValueError
-        except ValueError:return 'Use one to three times in 24-hour HH:MM format, separated by commas; for example 09:00, 17:00.'
+        except ValueError:return 'Use one to ten times in 24-hour HH:MM format, separated by commas; for example 09:00, 17:00.'
         with db:db.execute('INSERT OR REPLACE INTO reminder_settings VALUES(?,?,?,?)',(str(uid),int(enabled),json.dumps(values),expected[2]+1))
         return 'Chore reminders '+('on. Times are Eastern. Only your due responsibilities are included.' if enabled else 'off. Your chores and sign-ups are unchanged.')
     class ReminderTimes(discord.ui.Modal):
         def __init__(self,owner):
             super().__init__(title='Your reminder times')
             self.owner,self.expected=owner,settings(owner)
-            self.times=discord.ui.TextInput(label='Eastern times, comma separated (24-hour)',default=', '.join(json.loads(self.expected[1])),max_length=30)
+            self.times=discord.ui.TextInput(label='Up to 10 Eastern times (24-hour, commas)',default=', '.join(json.loads(self.expected[1])),max_length=70)
             self.add_item(self.times)
         async def on_submit(self,i):
             if not await w.View(self.owner).interaction_check(i):return
@@ -143,7 +143,7 @@ def install(ns, ui, w, lock):
         def __init__(self,owner):
             super().__init__(owner)
             expected=settings(owner)
-            self.embed=discord.Embed(title='Your chore reminders',description='**'+('On' if expected[0] else 'Off')+'** · '+', '.join(json.loads(expected[1]))+' Eastern\nPrivate DMs for chores you own that are due and unfinished. No reminder when you are away or have nothing due. Turning this on authorizes Sprig to DM your own account.\nChange times or turn off whenever you like. Missed reminders are not replayed after downtime.',color=0x6B9B77)
+            self.embed=discord.Embed(title='Your chore reminders',description='**'+('On' if expected[0] else 'Off')+'** · '+', '.join(json.loads(expected[1]))+' Eastern\nPrivate DMs for chores you own that are due and unfinished. No reminder when you are away or have nothing due. Turning this on authorizes Sprig to DM your own account.\nChoose up to 10 times per day. Change times or turn off whenever you like. Missed reminders are not replayed after downtime.',color=0x6B9B77)
             last=db.execute('SELECT slot,status FROM reminder_deliveries WHERE user_id=? ORDER BY slot DESC LIMIT 1',(str(owner),)).fetchone()
             if last:self.embed.add_field(name='Last reminder attempt',value=last[0]+' · '+('Sent' if last[1]=='sent' else 'Delivery uncertain or blocked; check Discord DM privacy. No automatic retry.' if last[1]=='failed_uncertain' else last[1]),inline=False)
             async def toggle(i):

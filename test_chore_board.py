@@ -410,13 +410,35 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_planning_reminder_time_validation_and_toggle_off(self):
         p=self.ui.planning;expected=p.settings(10)
-        for value in ('','9:00','25:00','09:60','09:00,10:00,11:00,12:00'):
+        for value in ('','9:00','25:00','09:60',','.join(f'{h:02}:00' for h in range(11))):
             self.assertIn('Use one',p.save_reminders(10,True,value,expected))
         self.assertIn('on',p.save_reminders(10,True,'17:00,09:00',expected))
         self.assertIn('changed',p.save_reminders(10,False,'09:00',expected))
         view=p.Reminders(10);toggle=next(c for c in view.children if getattr(c,'label',None)=='Turn off');await toggle.callback(Interaction())
         with self.clock('2026-10-20T09:00:00'):await p.send_due_reminders()
         self.dm.send.assert_not_awaited()
+
+    async def test_planning_reminder_ten_times_modal_and_eleventh_rejected(self):
+        import json
+        p=self.ui.planning
+        times=[f'{h:02}:00' for h in range(10)]
+        modal=p.ReminderTimes(10)
+        text=', '.join(reversed(times))
+        self.assertLessEqual(len(text),modal.times.max_length)
+        self.assertIn('10',modal.times.label)
+        modal.times._value=text
+        await modal.on_submit(Interaction(10))
+        saved=p.settings(10)
+        self.assertEqual(saved[0],0)
+        self.assertEqual(json.loads(saved[1]),times)
+        self.assertEqual(p.ReminderTimes(10).times.default,', '.join(times))
+        self.assertIn('one to ten',p.save_reminders(10,True,','.join(times+['10:00']),saved))
+        self.assertEqual(p.settings(10),saved)
+        self.assertIn('on',p.save_reminders(10,True,','.join(times),saved))
+        with self.clock('2026-10-20T09:00:00'):
+            await p.send_due_reminders()
+            await p.send_due_reminders()
+        self.dm.send.assert_awaited_once()
 
     async def test_planning_reminders_deduplicate_concurrent_and_restart(self):
         p=self.ui.planning;p.save_reminders(10,True,'09:00',p.settings(10))
