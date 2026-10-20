@@ -2164,6 +2164,26 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('Person 10',field.value);self.assertIn('Due now',field.value)
 
 
+    async def test_paging_buttons_immediately_follow_page_numbers_on_all_list_pages(self):
+        with self.clock('2026-10-20T10:00:00'):
+            for n in range(12):self.ui.create_chore(f'Paged chore {n}','daily','5','')
+            for page,expected in [(0,['Next']),(1,['Previous','Next']),(2,['Previous'])]:
+                panel=self.ui.workspace.render(self.ui.workspace.Browse(10,'household',tab='all',page=page))
+                footer=next(i for i,c in enumerate(panel.children) if isinstance(c,discord.ui.TextDisplay) and 'Page ' in c.content)
+                paging=panel.children[footer+1]
+                self.assertIsInstance(paging,discord.ui.ActionRow)
+                self.assertEqual([c.label for c in paging.children],expected)
+                self.assertIsInstance(panel.children[footer+2],discord.ui.Separator)
+                self.assertTrue(all(c.label in ('Previous','Next') for c in paging.children))
+                later=[c for row in panel.children[footer+2:] if isinstance(row,discord.ui.ActionRow) for c in row.children]
+                self.assertFalse(any(getattr(c,'label',None) in ('Previous','Next') for c in later))
+            event=Interaction()
+            middle=self.ui.workspace.render(self.ui.workspace.Browse(10,'household',tab='all',page=1))
+            paging=next(c for c in middle.children if isinstance(c,discord.ui.ActionRow) and [getattr(b,'label',None) for b in c.children]==['Previous','Next'])
+            await paging.children[1].callback(event)
+            self.assertEqual(event.response.payload['view'].state['page'],2)
+            self.assertEqual(event.response.payload['view'].state['area'],'household')
+
     async def test_help_button_is_persistent_private_and_changes_no_data(self):
         before = list(self.db.iterdump())
         view = self.ui.Launcher()

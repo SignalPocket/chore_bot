@@ -399,9 +399,14 @@ def install(ns, ui, lock):
                 if footer:self.add_item(footer)
             rows={}
             row_ids={child['custom_id']:index for index,row in enumerate(source.to_components()) for child in row.get('components',[]) if 'custom_id' in child}
+            paging=[]
             for item in source.children:
+                if isinstance(source,Browse) and isinstance(item,discord.ui.Button) and item.label in ('Previous','Next'):
+                    paging.append(item)
+                    continue
                 row=row_ids.get(item.custom_id,item.row if item.row is not None else 0)
                 rows.setdefault(row,[]).append(item)
+            if paging:self.add_item(discord.ui.ActionRow(*paging))
             self.add_item(discord.ui.Separator())
             for row,items in sorted(rows.items()):
                 self.add_item(discord.ui.ActionRow(*items))

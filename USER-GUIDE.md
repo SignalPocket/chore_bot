@@ -24,7 +24,7 @@ Private controls expire after ten minutes of inactivity or a bot restart. Reopen
 
 ## Read a chore card
 
-Lists use Discord Components V2 with five chores per page. Each row has Done beside work you own and can complete now; otherwise it has Details. Away-day Done buttons are disabled. Pressing Done refreshes the same private list. Details opens the chore card for instructions and other actions. Discord controls the actual width on each device.
+Lists use Discord Components V2 with five chores per page. Previous and Next sit directly below the page numbers, above the chore picker and view tabs. Each row has Done beside work you own and can complete now; otherwise it has Details. Away-day Done buttons are disabled. Pressing Done refreshes the same private list. Details opens the chore card for instructions and other actions. Discord controls the actual width on each device.
 
 Select a chore from My chores, Pick up chores, or Household. Each route opens the same card:
 
