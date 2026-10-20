@@ -970,7 +970,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('🟠',self.ui.AddChoreModal(10,'tuesday').title)
             daily_option=next(o for o in personal.children[0].options if o.value=='1')
             self.assertEqual(str(daily_option.emoji),'🟠')
-            self.assertIsNone(self.ui.timing.emoji('weekly'))
+            self.assertEqual(self.ui.timing.emoji('weekly'),'⭐')
 
     def setup_trade(self,weekly=False):
         self.ui.create_chore('Other chore','daily','7','')
@@ -1112,7 +1112,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             view=self.ui.ResponsibilityView(10,Interaction().guild,mode='day')
             headings=[r[1] for r in view.rendered]
             self.assertIn('Every day',headings)
-            self.assertIn('Any day this week',headings)
+            self.assertIn('⭐ Any day this week',headings)
             self.assertIn('🟠 Tue · Oct 20',headings)
             self.assertIn('🟡 Wed · Oct 21',headings)
             self.assertIn('🔵 Fri · Oct 23',headings)
@@ -1544,6 +1544,19 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('changed',event.response.payload['embed'].description)
             self.assertNotIn('+10 points',event.response.payload['embed'].description)
             self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone()[0],10)
+
+    async def test_weekly_monthly_dots_are_distinct_from_weekday_colors(self):
+        from chore_timing import DAY_COLORS,DAY_LEGEND
+        for frequency,dot in [('weekly','⭐'),('monthly','🌟')]:
+            self.assertNotIn(dot,DAY_COLORS.values())
+            self.assertIn(dot,self.ui.timing.compact_label(frequency))
+            self.assertIn(dot,self.ui.timing.label(frequency))
+            self.assertEqual(self.ui.timing.emoji(frequency),dot)
+            self.assertIn(dot,DAY_LEGEND)
+        menu=self.ui.AddChoreMenu(10)
+        options=menu.children[0].options
+        self.assertEqual(str(next(o for o in options if o.value=='weekly').emoji),'⭐')
+        self.assertEqual(str(next(o for o in options if o.value=='monthly').emoji),'🌟')
 
     async def test_help_button_is_persistent_private_and_changes_no_data(self):
         before = list(self.db.iterdump())

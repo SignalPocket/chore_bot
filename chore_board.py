@@ -439,7 +439,7 @@ def install(namespace):
                             date=start+timedelta(days=day_index+1)
                             rendered.append((day_index,f'{day_badge(day)} · {date:%b %d}',entry))
                     else:
-                        title={'weekly':'Any day this week','monthly':'Monthly · still open','one-time':'No fixed day'}.get(frequency,'Flexible schedule')
+                        title={'weekly':'⭐ Any day this week','monthly':'🌟 Monthly · still open','one-time':'No fixed day'}.get(frequency,'Flexible schedule')
                         rendered.append((7,title,entry))
                 rendered.sort(key=lambda item:(item[0],item[1],item[2][2].casefold(),item[2][1]))
             elif mode=='chore':
@@ -458,7 +458,7 @@ def install(namespace):
                 if ':' in frequency:
                     phase,day=frequency.split(':')
                     return f'Every other {day_badge(day)} ({phase})'
-                return {'twice-daily':'AM + PM','daily':'Daily','weekly':'Weekly','monthly':'Monthly','one-time':'One time'}.get(frequency,frequency)
+                return {'twice-daily':'AM + PM','daily':'Daily','weekly':'⭐ Weekly','monthly':'🌟 Monthly','one-time':'One time'}.get(frequency,frequency)
             heading=None
             lines=[]
             def flush():
@@ -1182,8 +1182,8 @@ def install(namespace):
             self.owner = owner
             select = discord.ui.Select(placeholder="How often does this chore repeat?", options=[
                 discord.SelectOption(label="Daily", value="daily", description="Returns at midnight; can be reserved for a week"),
-                discord.SelectOption(label="Weekly", value="weekly", description="Returns 🩷 Sun at 6 p.m.; can be reserved for a week"),
-                discord.SelectOption(label="Monthly", value="monthly", description="Returns on the first day of the month"),
+                discord.SelectOption(label="Weekly", value="weekly", emoji="⭐", description="Returns 🩷 Sun at 6 p.m.; can be reserved for a week"),
+                discord.SelectOption(label="Monthly", value="monthly", emoji="🌟", description="Returns on the first day of the month"),
                 discord.SelectOption(label="One time", value="one-time", description="Does not return automatically after completion"),
                 discord.SelectOption(label="Twice daily", value="twice-daily", description="One completion before noon; another after noon"),
                 discord.SelectOption(label="On a specific weekday", value="weekday", description="Choose Monday through Sunday; overdue chores stay due"),
