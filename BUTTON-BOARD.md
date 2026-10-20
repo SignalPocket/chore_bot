@@ -113,3 +113,11 @@ The responsibility overview resolves display names using the existing command lo
 ## Dashboard layout
 
 The saved dashboard and fresh panels use the same three rows: My chores / Open chores / Weekly sign-ups; Who’s doing what? / Help; Add chore / Edit chore / Remove chore / Household setup. My chores is blue; other entry buttons are neutral gray. The existing button IDs, privacy, and permissions are preserved. After deployment, !refreshchoreboard applies the layout and welcome text to the existing saved message; /chores opens the new layout immediately.
+
+## Reassign
+
+Anyone with household access can open Reassign, choose a chore, scope (this occurrence, this whole week, next whole week, or ongoing assignment), and a household member, then confirm. It is private. Bots and away-week recipients are rejected. Weekly owners must be changed through the matching weekly scope; ongoing assignments use their own scope. Setting an ongoing assignment requires current/future weekly reservations to be released first. Stale forms and Sunday handoff changes are rejected. History, completion status, earned points, other weeks, and chore names are retained. Refresh the existing dashboard after deployment to add the button.
+
+The household overview now groups compact chore lines under each person or Needs someone, with 12 chores per page and a short assigned/unclaimed count. Schedule labels are shortened (Wed, Tue / Fri, AM + PM). Single claims, ongoing assignments, and done status are marked only when relevant; long repeating explanations are removed.
+
+Day markers consistently run Monday red, Tuesday orange, Wednesday yellow, Thursday green, Friday blue, Saturday purple, Sunday pink. Both the day name and color are shown. They appear in weekday pickers, schedule labels, and the weekly overview; the overview and weekly sign-ups include a legend. Daily/weekly/monthly schedules keep their labels without implying a specific due weekday.

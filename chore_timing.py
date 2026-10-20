@@ -3,6 +3,14 @@ from datetime import datetime, timedelta
 from itertools import combinations
 
 WEEKDAYS = ('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday')
+DAY_COLORS = dict(zip(WEEKDAYS, ('🔴','🟠','🟡','🟢','🔵','🟣','🩷')))
+DAY_LEGEND = ' · '.join(f'{DAY_COLORS[day]} {day[:3].capitalize()}' for day in WEEKDAYS)
+
+
+def day_badge(day, full=False):
+    return f"{DAY_COLORS[day]} {day.capitalize() if full else day[:3].capitalize()}"
+
+
 PAIRED_DAYS = tuple('days:' + ','.join(pair) for pair in combinations(WEEKDAYS, 2))
 ALTERNATING_DAYS = tuple(f'{phase}:{day}' for phase in ('away', 'home') for day in WEEKDAYS)
 SCHEDULED = frozenset((*WEEKDAYS, *PAIRED_DAYS, *ALTERNATING_DAYS))
@@ -96,10 +104,10 @@ class ChoreTiming:
         if frequency == 'twice-daily':
             return 'Twice daily · morning (before noon) / afternoon-evening (after noon)'
         if frequency in WEEKDAYS:
-            return f'Every {frequency.capitalize()} · stays due until done'
+            return f'Every {day_badge(frequency,True)} · stays due until done'
         if frequency in PAIRED_DAYS:
-            return 'Every ' + ' and '.join(d.capitalize() for d in frequency[5:].split(',')) + ' · stays due until done'
+            return 'Every ' + ' and '.join(day_badge(d,True) for d in frequency[5:].split(',')) + ' · stays due until done'
         if frequency in ALTERNATING_DAYS:
             phase, day = frequency.split(':')
-            return f'Every other {day.capitalize()} · Kas/Z {phase} weeks · stays due until done'
+            return f'Every other {day_badge(day,True)} · Kas/Z {phase} weeks · stays due until done'
         return frequency.capitalize()

@@ -696,24 +696,135 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                 self.ui.create_chore('Chore '+str(number),'daily','0','')
             guild=SimpleNamespace(get_member=lambda uid:None)
             view=self.ui.ResponsibilityView(10,guild)
-            self.assertEqual(len(view.embed.fields),8)
+            self.assertLessEqual(len(view.embed.fields),3)
             self.assertIn('Account 10',str(view.embed.to_dict()))
             ids=[]
-            for page in range(4):
+            for page in range(3):
                 chunk=self.ui.ResponsibilityView(10,guild,page=page)
-                ids.extend(r[1] for r in chunk.entries[chunk.page*8:(chunk.page+1)*8])
+                ids.extend(r[1] for r in chunk.entries[chunk.page*12:(chunk.page+1)*12])
                 self.assertLess(len(str(chunk.embed.to_dict())),6000)
             self.assertEqual(len(ids),27)
             self.assertEqual(len(set(ids)),27)
 
     async def test_dashboard_layout_is_consistent_for_saved_and_fresh_panels(self):
-        expected=[('My chores',0),('Open chores',0),('Weekly sign-ups',0),('Who’s doing what?',1),('Help',1),('Add chore',2),('Edit chore',2),('Remove chore',2),('Household setup',2)]
+        expected=[('My chores',0),('Open chores',0),('Weekly sign-ups',0),('Who’s doing what?',1),('Reassign',1),('Help',1),('Add chore',2),('Edit chore',2),('Remove chore',2),('Household setup',2)]
         for timeout in [None,600]:
             view=self.ui.Launcher(timeout=timeout)
             self.assertEqual([(c.label,c.row) for c in view.children],expected)
             self.assertEqual([c.label for c in view.children if c.style==discord.ButtonStyle.primary],['My chores'])
             self.assertTrue(all(c.style==discord.ButtonStyle.secondary for c in view.children if c.label!='My chores'))
-            self.assertEqual(len({c.custom_id for c in view.children}),9)
+            self.assertEqual(len({c.custom_id for c in view.children}),10)
+
+    async def test_reassign_occurrence_retains_points_history_and_blocks_stale(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("INSERT INTO claims VALUES (1,'10')")
+            self.db.execute("INSERT INTO users(id,points) VALUES ('10',25)")
+            self.db.commit()
+            before=self.db.execute('SELECT * FROM users').fetchall()
+            expected=self.ui.reassign_snapshot(1)
+            self.assertIn('reassigned',self.ui.reassign(1,20,'occurrence',expected))
+            self.assertEqual(self.db.execute('SELECT user_id FROM claims WHERE quest_id=1').fetchone(),('20',))
+            self.assertIn('changed',self.ui.reassign(1,30,'occurrence',expected))
+            self.assertEqual(before,self.db.execute('SELECT * FROM users').fetchall())
+
+    async def test_reassign_week_does_not_change_other_week_or_completion(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.signup(10,1,self.ui.week_key())
+            self.ui.signup(30,1,self.ui.week_key(1))
+            self.db.execute('UPDATE quests SET completed=1,last_completed=?,reset_after=? WHERE id=1',('2026-10-20T09:00:00-04:00','2026-10-21T00:00:00-04:00'))
+            self.db.commit()
+            before=self.db.execute('SELECT completed,last_completed,points FROM quests WHERE id=1').fetchone()
+            self.assertIn('reassigned',self.ui.reassign(1,20,'week0',self.ui.reassign_snapshot(1)))
+            self.assertEqual(self.ui.weekly_owner(1),'20')
+            self.assertEqual(self.ui.weekly_owner(1,1),'30')
+            self.assertEqual(before,self.db.execute('SELECT completed,last_completed,points FROM quests WHERE id=1').fetchone())
+
+    async def test_reassign_checks_away_schedule_and_scope_conflicts(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("INSERT INTO alternating_members VALUES ('20')")
+            self.db.commit()
+            self.assertIn('away',self.ui.reassign(1,20,'week0',self.ui.reassign_snapshot(1)))
+            self.assertIn('reassigned',self.ui.reassign(1,20,'week1',self.ui.reassign_snapshot(1)))
+            self.assertIn('weekly sign-ups',self.ui.reassign(1,10,'assignment',self.ui.reassign_snapshot(1)))
+            self.assertIn('Ongoing assignment',self.ui.reassign(2,10,'week0',self.ui.reassign_snapshot(2)))
+
+    async def test_reassign_ongoing_preserves_name_and_no_current_occurrence_bypass(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.assertIn('saved',self.ui.reassign(2,20,'assignment',self.ui.reassign_snapshot(2)))
+            self.assertEqual(self.db.execute('SELECT name,assigned_to FROM quests WHERE id=2').fetchone(),('My bathroom','20'))
+            self.assertIn('scope',self.ui.reassign(2,10,'occurrence',self.ui.reassign_snapshot(2)))
+            self.ui.signup(10,1,self.ui.week_key())
+            self.assertIn('scope',self.ui.reassign(1,20,'occurrence',self.ui.reassign_snapshot(1)))
+
+    async def test_reassign_rejects_sunday_rollover_and_future_owner_change(self):
+        with self.clock('2026-10-24T10:00:00'):
+            expected=self.ui.reassign_snapshot(1)
+            self.ui.signup(30,1,self.ui.week_key(1))
+            self.assertIn('changed',self.ui.reassign(1,20,'week1',expected))
+            expected=self.ui.reassign_snapshot(1)
+        with self.clock('2026-10-25T18:00:00'):
+            self.assertIn('changed',self.ui.reassign(1,20,'week0',expected))
+
+    async def test_reassign_picker_confirms_only_a_human_in_this_server(self):
+        with self.clock('2026-10-20T10:00:00'):
+            expected=self.ui.reassign_snapshot(1)
+            view=self.ui.ReassignView(10,qid=1,scope='week0',expected=expected)
+            picker=next(c for c in view.children if isinstance(c,discord.ui.UserSelect))
+            event=Interaction()
+            picker._values=[SimpleNamespace(id=99,bot=True,guild=SimpleNamespace(id=1))]
+            await picker.callback(event)
+            self.assertIn('not a bot',event.response.payload[0][0])
+            person=SimpleNamespace(id=20,bot=False,guild=SimpleNamespace(id=1),display_name='New person')
+            picker._values=[person]
+            await picker.callback(event)
+            confirm=event.response.payload['view']
+            self.assertIn('New person',str(confirm.embed.to_dict()))
+            self.assertIsNone(self.ui.weekly_owner(1))
+            await confirm.confirm(event)
+            self.assertEqual(self.ui.weekly_owner(1),'20')
+            self.assertIn('reassigned',event.result['content'])
+            self.assertIsNone(event.result['view'])
+
+    async def test_overview_groups_people_and_unclaimed_without_repeated_paragraphs(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.create_chore('Sweep kitchen','daily','5','')
+            self.ui.create_chore('Morning room trash','days:tuesday,friday','5','')
+            view=self.ui.ResponsibilityView(10,Interaction().guild)
+            groups=[field for field in view.embed.fields if field.name=='Needs someone']
+            self.assertEqual(len(groups),1)
+            self.assertIn('Sweep kitchen',groups[0].value)
+            self.assertIn('🟠 Tue / 🔵 Fri',groups[0].value)
+            self.assertNotIn('Scheduled / outstanding next week',str(view.embed.to_dict()))
+            self.assertNotIn('Nobody signed up',str(view.embed.to_dict()))
+            self.assertLess(len(view.embed.description),400)
+            self.assertTrue(all(len(field.value)<=1024 for field in view.embed.fields))
+
+    async def test_reassign_private_ui_ownership_and_cancel(self):
+        event=Interaction()
+        button=next(c for c in self.ui.Launcher().children if c.label=='Reassign')
+        await button.callback(event)
+        self.assertTrue(event.response.payload[1]['ephemeral'])
+        view=event.response.payload[1]['view']
+        self.assertTrue(await view.interaction_check(event))
+        self.assertFalse(await view.interaction_check(Interaction(20)))
+        before=list(self.db.iterdump())
+        await view.cancel(event)
+        self.assertEqual(before,list(self.db.iterdump()))
+
+    async def test_rainbow_days_match_legend_schedules_and_weekday_picker(self):
+        from chore_timing import WEEKDAYS,DAY_COLORS,DAY_LEGEND
+        colors=['🔴','🟠','🟡','🟢','🔵','🟣','🩷']
+        self.assertEqual(list(DAY_COLORS.values()),colors)
+        picker=self.ui.WeekdayMenu(10).children[0]
+        for day,color,option in zip(WEEKDAYS,colors,picker.options):
+            self.assertIn(color,self.ui.timing.label(day))
+            self.assertIn(day.capitalize(),self.ui.timing.label(day))
+            self.assertEqual(str(option.emoji),color)
+        self.assertIn('🟠',self.ui.timing.label('days:tuesday,friday'))
+        self.assertIn('🔵',self.ui.timing.label('days:tuesday,friday'))
+        self.assertIn('🟣',self.ui.timing.label('away:saturday'))
+        view=self.ui.ResponsibilityView(10,Interaction().guild)
+        self.assertIn(DAY_LEGEND,view.embed.description)
 
     async def test_help_button_is_persistent_private_and_changes_no_data(self):
         before = list(self.db.iterdump())
