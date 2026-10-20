@@ -1358,7 +1358,8 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             rows={getattr(c,'label',None):c.row for c in view.children if isinstance(c,discord.ui.Button)}
             self.assertTrue(all(rows[label]==1 for label in ['Done','Drop','Reassign','Trade']))
             self.assertEqual(rows['Choose day'],2)
-            self.assertEqual(rows['My chores'],3)
+            self.assertEqual(rows['Back to list'],3)
+            self.assertNotIn('My chores',rows)
             self.assertEqual(rows['Previous'],4)
             self.assertEqual(rows['Dashboard'],4)
             self.assert_screen_limits(view)
@@ -1418,7 +1419,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_active_tab_and_clean_completion_notice(self):
         with self.clock('2026-10-20T10:00:00'):
             view=self.ui.PersonalView(10)
-            self.assertEqual(next(c for c in view.children if getattr(c,'label',None)=='Open chores').style,discord.ButtonStyle.primary)
+            self.assertNotIn('Open chores',[getattr(c,'label',None) for c in view.children])
             event=Interaction()
             await self.ui.PersonalView(10,selected=1).act(event,'claim')
             self.assertIn('Added to My chores',event.response.payload['embed'].description)
@@ -1511,6 +1512,38 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.db.commit()
         self.assertIn('no longer',self.ui.save_feedback(1,10,'Kas','Idea','','5','archived',self.ui.feedback_context(1)))
         self.assertEqual(self.db.execute('SELECT count(*) FROM chore_feedback').fetchone()[0],0)
+
+    async def test_chore_lists_do_not_repeat_the_current_list_name_as_a_button(self):
+        for mode,current,other in [('mine','My chores','Open chores'),('open','Open chores','My chores')]:
+            view=self.ui.PersonalView(10,mode)
+            buttons={c.label:c for c in view.children if isinstance(c,discord.ui.Button)}
+            self.assertNotIn(current,buttons)
+            self.assertIn(other,buttons)
+            self.assertIn('Dashboard',buttons)
+            self.assertIn('Refresh',buttons)
+            self.assertNotIn('Back to list',buttons)
+
+    async def test_selected_chore_back_to_list_stays_in_the_same_list(self):
+        event=Interaction()
+        view=self.ui.PersonalView(10,'mine',selected=2)
+        self.assertNotIn('My chores',[getattr(c,'label',None) for c in view.children])
+        await next(c for c in view.children if getattr(c,'label',None)=='Back to list').callback(event)
+        self.assertFalse(event.response.acknowledged)
+        self.assertIsNone(event.result)
+        self.assertEqual(event.response.payload['view'].mode,'mine')
+        self.assertIsNone(event.response.payload['view'].selected)
+        self.assertNotIn('Back to list',[getattr(c,'label',None) for c in event.response.payload['view'].children])
+
+    async def test_stale_done_click_does_not_claim_another_points_award(self):
+        with self.clock('2026-10-20T10:00:00'):
+            first=self.ui.PersonalView(10,'mine',selected=2)
+            stale=self.ui.PersonalView(10,'mine',selected=2)
+            await first.act(Interaction(),'done')
+            event=Interaction()
+            await stale.act(event,'done')
+            self.assertIn('changed',event.response.payload['embed'].description)
+            self.assertNotIn('+10 points',event.response.payload['embed'].description)
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone()[0],10)
 
     async def test_help_button_is_persistent_private_and_changes_no_data(self):
         before = list(self.db.iterdump())

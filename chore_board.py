@@ -264,8 +264,12 @@ def install(namespace):
                     await self.show(interaction, selected=int(select.values[0]))
                 select.callback = choose
                 self.add_item(select)
-            self.add_button("Open chores", lambda i: self.show(i, mode="open", page=0),style=discord.ButtonStyle.primary if mode=="open" else discord.ButtonStyle.secondary,row=3)
-            self.add_button("My chores", lambda i: self.show(i, mode="mine", page=0),style=discord.ButtonStyle.primary if mode=="mine" else discord.ButtonStyle.secondary,row=3)
+            if mode=='mine':
+                self.add_button('Open chores',lambda i:self.show(i,mode='open',page=0),row=3)
+            else:
+                self.add_button('My chores',lambda i:self.show(i,mode='mine',page=0),row=3)
+            if self.selected is not None or self.page:
+                self.add_button('Back to list',lambda i:self.show(i,page=0),row=3)
             if self.selected:
                 if mode == "open":
                     self.add_button("Claim", lambda i: self.act(i, "claim"), discord.ButtonStyle.success)
@@ -325,8 +329,13 @@ def install(namespace):
             return True
 
         async def show(self, interaction, mode=None, page=None, selected=None, notice=""):
+            started=monotonic()
             view = PersonalView(self.owner, mode or self.mode, self.page if page is None else page, selected, notice)
+            import logging
+            logger=logging.getLogger('discord.sprig')
+            logger.info('Chore list rendered in %.3fs; sending Discord response',monotonic()-started)
             await interaction.response.edit_message(embed=view.embed, view=view)
+            logger.info('Chore list navigation completed in %.3fs',monotonic()-started)
 
         async def act(self, interaction, action):
             started=monotonic()
@@ -341,10 +350,10 @@ def install(namespace):
                         context = Context(interaction)
                         await bot.get_command(action).callback(context, self.selected[0])
                         notice = "\n".join(context.messages)
-                    if action=='claim' and db.execute('SELECT user_id FROM claims WHERE quest_id=?',(self.selected[0],)).fetchone()==(str(self.owner),):
-                        notice='Added to My chores: **'+discord.utils.escape_markdown(self.selected[1])+'**.'
-                    elif action=='done' and db.execute('SELECT completed FROM quests WHERE id=?',(self.selected[0],)).fetchone()==(1,):
-                        notice='Done: **'+discord.utils.escape_markdown(self.selected[1])+'** · +'+str(self.selected[3])+' points.'
+                        if action=='claim' and db.execute('SELECT user_id FROM claims WHERE quest_id=?',(self.selected[0],)).fetchone()==(str(self.owner),):
+                            notice='Added to My chores: **'+discord.utils.escape_markdown(self.selected[1])+'**.'
+                        elif action=='done' and db.execute('SELECT completed FROM quests WHERE id=?',(self.selected[0],)).fetchone()==(1,):
+                            notice='Done: **'+discord.utils.escape_markdown(self.selected[1])+'** · +'+str(self.selected[3])+' points.'
                     view = PersonalView(self.owner, "mine" if action == "claim" else self.mode, notice=notice)
                 return view
             # Fast local mutations need one Discord response, not defer + edit.
@@ -360,7 +369,7 @@ def install(namespace):
             else:
                 await interaction.response.edit_message(**payload)
             import logging
-            logging.getLogger(__name__).info('Chore action %s completed in %.3fs (deferred=%s)',action,monotonic()-started,deferred)
+            logging.getLogger('discord.sprig').info('Chore action %s completed in %.3fs (deferred=%s)',action,monotonic()-started,deferred)
 
     def responsibility_rows(offset=0):
         api.reset_due_quests()
