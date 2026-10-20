@@ -129,3 +129,13 @@ Fast Claim/Done/Release actions update the private list in one response. If work
 ## Missed chores
 
 Edit chore → choose chore → Missed chores → Keep overdue / Skip if missed. Existing chores default to Keep overdue. Scheduled weekdays/alternating days expire at midnight after their due day. Daily/twice-daily slots expire at the next midnight/noon boundary, weekly on Sunday 6 p.m., monthly on the first. Skip advances missed scheduled chores and releases expired single claims without completion credit or points. Weekly reservations, assignments, names, and history remain. One-time chores have no deadline and cannot use Skip until given a repeating schedule. Changing to Skip may immediately drop an already-overdue occurrence; switching back to Keep does not resurrect previously skipped work. New chores start on Keep and can be changed through Edit.
+
+Day colors appear on My/Open chore list lines, chore dropdowns, weekly signup dropdowns, Add form titles, Reassign details/picker, Edit, and Remove/Restore. Daily and twice-daily chores use today’s day color, labeled Daily or AM + PM; flexible weekly/monthly chores are not given an invented due weekday. Two-day schedules show both colors in their description (one leading picker emoji). Names are kept alongside dots.
+
+## Actions in My chores
+
+Select a chore to use Done, Drop, Reassign, or Trade. Drop confirms whether it releases one occurrence, this week’s responsibility, or an ongoing assignment; other weeks and points/history remain. Reassign opens prefilled with the selected chore and its ownership scope. Trade lets you offer that responsibility for another person’s owned chore; each scope is shown explicitly. The other person accepts/declines in My chores → Trade requests; proposers can cancel. No DM or channel message is sent. Both sides exchange in one database transaction only on recipient acceptance; changed/archived/completed occurrences, Sunday rollover, or away recipients block the trade. Pending proposals persist across restarts. Chore names/instructions and earned points stay unchanged.
+
+## Different ways to view the week
+
+The household overview includes By person, By chore (alphabetical with owner), and By day (colored weekday/date headings). This week / Next week, Refresh, and paging preserve the selected view. Daily chores are grouped as Every day; flexible weekly/monthly/one-time work gets separate headings instead of an invented due day. Two-day chores appear under both chosen weekdays; headline totals count unique chores. Overdue work from an earlier week is grouped separately. All views are private and do not change assignments.

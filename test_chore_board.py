@@ -955,6 +955,193 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('changed',event.response.payload['content'])
         self.assertEqual(self.ui.timing.policy(1),'skip')
 
+    async def test_day_colors_in_chore_lists_and_management_pickers(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.create_chore('Tuesday chore','tuesday','5','')
+            qid=self.db.execute("SELECT id FROM quests WHERE name='Tuesday chore'").fetchone()[0]
+            for view in [self.ui.PersonalView(10),self.ui.WeeklyView(10),self.ui.EditChoreView(10),self.ui.RemoveChoreView(10),self.ui.ReassignView(10)]:
+                picker=next(c for c in view.children if isinstance(c,discord.ui.Select))
+                option=next(o for o in picker.options if o.value==str(qid))
+                self.assertEqual(str(option.emoji),'🟠')
+                self.assertIn('Tue',option.description)
+            personal=self.ui.PersonalView(10)
+            self.assertIn('🟠 Tue',str(personal.embed.to_dict()))
+            self.assertIn('Tuesday',self.ui.AddChoreModal(10,'tuesday').name.placeholder)
+            self.assertIn('🟠',self.ui.AddChoreModal(10,'tuesday').title)
+            daily_option=next(o for o in personal.children[0].options if o.value=='1')
+            self.assertEqual(str(daily_option.emoji),'🟠')
+            self.assertIsNone(self.ui.timing.emoji('weekly'))
+
+    def setup_trade(self,weekly=False):
+        self.ui.create_chore('Other chore','daily','7','')
+        other=self.db.execute("SELECT id FROM quests WHERE name='Other chore'").fetchone()[0]
+        if weekly:
+            self.ui.signup(10,1,self.ui.week_key())
+            self.ui.signup(20,other,self.ui.week_key())
+        else:
+            self.db.execute("INSERT INTO claims VALUES (1,'10')")
+            self.db.execute('INSERT INTO claims VALUES (?,?)',(other,'20'))
+            self.db.commit()
+        return other
+
+    async def test_my_chore_actions_and_private_inbox_are_available(self):
+        with self.clock('2026-10-20T10:00:00'):
+            other=self.setup_trade()
+            view=self.ui.PersonalView(10,'mine',selected=1)
+            labels=[c.label for c in view.children if isinstance(c,discord.ui.Button)]
+            for name in ['Done','Drop','Reassign','Trade','Trade requests (0)']:
+                self.assertIn(name,labels)
+            for name in ['Drop','Reassign','Trade','Trade requests (0)']:
+                event=Interaction()
+                await next(c for c in view.children if getattr(c,'label',None)==name).callback(event)
+                self.assertTrue(event.response.payload[1]['ephemeral'])
+
+    async def test_drop_week_retains_other_weeks_history_and_points(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.signup(10,1,self.ui.week_key())
+            self.ui.signup(10,1,self.ui.week_key(1))
+            before=self.db.execute('SELECT * FROM quests WHERE id=1').fetchone()
+            expected=self.ui.snapshot(1)
+            self.assertIn('Dropped',self.ui.drop_chore(10,1,expected))
+            self.assertIsNone(self.ui.weekly_owner(1))
+            self.assertEqual(self.ui.weekly_owner(1,1),'10')
+            self.assertEqual(before,self.db.execute('SELECT * FROM quests WHERE id=1').fetchone())
+            self.assertIn('changed',self.ui.drop_chore(10,1,expected))
+
+    async def test_drop_only_owner_and_confirm_or_cancel(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.setup_trade()
+            expected=self.ui.snapshot(1)
+            self.assertIn('no longer yours',self.ui.drop_chore(20,1,expected))
+            view=self.ui.DropChoreView(10,1,expected)
+            self.assertFalse(await view.interaction_check(Interaction(20)))
+            event=Interaction()
+            await view.children[1].callback(event)
+            self.assertEqual(self.ui.owned_scope(1),('10','occurrence'))
+            await view.children[0].callback(event)
+            self.assertEqual(self.ui.owned_scope(1),(None,None))
+
+    async def test_trade_proposal_waits_then_recipient_accepts_once(self):
+        with self.clock('2026-10-20T10:00:00'):
+            other=self.setup_trade()
+            self.db.execute("INSERT INTO users(id,points) VALUES('10',40)")
+            self.db.commit()
+            before=self.db.execute('SELECT * FROM quests ORDER BY id').fetchall()
+            self.assertIn('proposed',self.ui.propose_trade(10,1,other,self.ui.trade_snapshot(1),self.ui.trade_snapshot(other)))
+            self.assertEqual(self.ui.owned_scope(1),('10','occurrence'))
+            self.assertIn('already waiting',self.ui.propose_trade(10,1,other,self.ui.trade_snapshot(1),self.ui.trade_snapshot(other)))
+            self.assertIn('Only the recipient',self.ui.respond_trade(10,1,'accept'))
+            self.assertIn('accepted',self.ui.respond_trade(20,1,'accept'))
+            self.assertEqual(self.ui.owned_scope(1),('20','occurrence'))
+            self.assertEqual(self.ui.owned_scope(other),('10','occurrence'))
+            self.assertEqual(before,self.db.execute('SELECT * FROM quests ORDER BY id').fetchall())
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone()[0],40)
+            self.assertIn('no longer pending',self.ui.respond_trade(20,1,'accept'))
+
+    async def test_weekly_trade_keeps_next_week_and_completion_history(self):
+        with self.clock('2026-10-20T10:00:00'):
+            other=self.setup_trade(True)
+            self.ui.signup(30,1,self.ui.week_key(1))
+            self.ui.propose_trade(10,1,other,self.ui.trade_snapshot(1),self.ui.trade_snapshot(other))
+            self.assertIn('accepted',self.ui.respond_trade(20,1,'accept'))
+            self.assertEqual(self.ui.weekly_owner(1),'20')
+            self.assertEqual(self.ui.weekly_owner(other),'10')
+            self.assertEqual(self.ui.weekly_owner(1,1),'30')
+
+    async def test_changed_chore_and_sunday_rollover_expire_trade(self):
+        with self.clock('2026-10-20T10:00:00'):
+            other=self.setup_trade()
+            self.ui.propose_trade(10,1,other,self.ui.trade_snapshot(1),self.ui.trade_snapshot(other))
+            self.db.execute('UPDATE quests SET points=99 WHERE id=?',(other,))
+            self.db.commit()
+            self.assertIn('expired',self.ui.respond_trade(20,1,'accept'))
+            self.assertEqual(self.ui.owned_scope(1)[0],'10')
+            self.ui.propose_trade(10,1,other,self.ui.trade_snapshot(1),self.ui.trade_snapshot(other))
+        with self.clock('2026-10-25T18:00:00'):
+            self.assertIn('expired',self.ui.respond_trade(20,2,'accept'))
+
+    async def test_decline_cancel_and_away_trade_do_not_transfer(self):
+        with self.clock('2026-10-20T10:00:00'):
+            other=self.setup_trade()
+            self.ui.propose_trade(10,1,other,self.ui.trade_snapshot(1),self.ui.trade_snapshot(other))
+            self.assertIn('declined',self.ui.respond_trade(20,1,'decline'))
+            self.ui.propose_trade(10,1,other,self.ui.trade_snapshot(1),self.ui.trade_snapshot(other))
+            self.assertIn('canceled',self.ui.respond_trade(10,2,'cancel'))
+            self.db.execute("INSERT INTO alternating_members VALUES('20')")
+            self.db.commit()
+            self.assertNotIn('Trade proposed',self.ui.propose_trade(10,1,other,self.ui.trade_snapshot(1),self.ui.trade_snapshot(other)))
+            self.assertEqual(self.ui.owned_scope(1)[0],'10')
+
+    async def test_trade_transaction_rolls_back_both_sides_on_failure(self):
+        import sqlite3
+        with self.clock('2026-10-20T10:00:00'):
+            other=self.setup_trade()
+            self.ui.propose_trade(10,1,other,self.ui.trade_snapshot(1),self.ui.trade_snapshot(other))
+            self.db.execute(f"CREATE TRIGGER reject_swap BEFORE UPDATE ON claims WHEN NEW.quest_id={other} BEGIN SELECT RAISE(ABORT,'test failure'); END")
+            self.db.commit()
+            with self.assertRaises(sqlite3.IntegrityError):
+                self.ui.respond_trade(20,1,'accept')
+            self.assertEqual(self.ui.owned_scope(1)[0],'10')
+            self.assertEqual(self.ui.owned_scope(other)[0],'20')
+            self.assertEqual(self.db.execute('SELECT status FROM chore_trades WHERE id=1').fetchone()[0],'pending')
+
+    async def test_trade_inbox_acceptance_private_view_and_ownership(self):
+        with self.clock('2026-10-20T10:00:00'):
+            other=self.setup_trade()
+            self.ui.propose_trade(10,1,other,self.ui.trade_snapshot(1),self.ui.trade_snapshot(other))
+            inbox=self.ui.TradeInboxView(20,selected=1)
+            self.assertFalse(await inbox.interaction_check(Interaction(30)))
+            self.assertTrue(await inbox.interaction_check(Interaction(20)))
+            event=Interaction(20)
+            await next(c for c in inbox.children if getattr(c,'label',None)=='Accept trade').callback(event)
+            self.assertIn('accepted',event.response.payload['content'])
+
+    async def test_overview_chore_mode_is_alphabetical_and_identifies_owner(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.signup(10,1,self.ui.week_key())
+            view=self.ui.ResponsibilityView(10,Interaction().guild,mode='chore')
+            names=[entry[2][2] for entry in view.rendered]
+            self.assertEqual(names,sorted(names,key=str.casefold))
+            self.assertIn('Person 10',str(view.embed.to_dict()))
+            self.assertIn('What’s being done',view.embed.title)
+
+    async def test_overview_day_mode_separates_flexible_and_both_due_days(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.create_chore('Bins','days:tuesday,friday','5','')
+            self.ui.create_chore('Wednesday fridge','wednesday','5','')
+            view=self.ui.ResponsibilityView(10,Interaction().guild,mode='day')
+            headings=[r[1] for r in view.rendered]
+            self.assertIn('Every day',headings)
+            self.assertIn('Any day this week',headings)
+            self.assertIn('🟠 Tue · Oct 20',headings)
+            self.assertIn('🟡 Wed · Oct 21',headings)
+            self.assertIn('🔵 Fri · Oct 23',headings)
+            self.assertEqual(sum(r[2][2]=='Bins' for r in view.rendered),2)
+            self.assertLess(headings.index('🟠 Tue · Oct 20'),headings.index('🔵 Fri · Oct 23'))
+
+    async def test_overview_modes_preserved_on_week_switch_and_reset_page(self):
+        with self.clock('2026-10-20T10:00:00'):
+            event=Interaction()
+            view=self.ui.ResponsibilityView(10,event.guild)
+            await next(c for c in view.children if c.label=='By day').callback(event)
+            day_view=event.result['view']
+            self.assertEqual(day_view.mode,'day')
+            self.assertEqual(day_view.page,0)
+            await next(c for c in day_view.children if c.label=='Next week').callback(event)
+            self.assertEqual(event.result['view'].mode,'day')
+            self.assertEqual(event.result['view'].offset,1)
+            await next(c for c in event.result['view'].children if c.label=='By chore').callback(event)
+            self.assertEqual(event.result['view'].offset,1)
+            self.assertEqual(event.result['view'].mode,'chore')
+
+    async def test_overview_modes_do_not_change_ownership_or_points(self):
+        with self.clock('2026-10-20T10:00:00'):
+            before=list(self.db.iterdump())
+            for mode in ('person','chore','day'):
+                view=self.ui.ResponsibilityView(10,Interaction().guild,mode=mode)
+                self.assertTrue(all(len(f.value)<=1024 for f in view.embed.fields))
+            self.assertEqual(before,list(self.db.iterdump()))
+
     async def test_help_button_is_persistent_private_and_changes_no_data(self):
         before = list(self.db.iterdump())
         view = self.ui.Launcher()

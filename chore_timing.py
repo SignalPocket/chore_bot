@@ -160,6 +160,28 @@ class ChoreTiming:
             return f'Every other {day_badge(day,True)} · Kas/Z {phase} weeks'
         return frequency.capitalize()
 
+    def compact_label(self, frequency):
+        if frequency in WEEKDAYS:
+            return day_badge(frequency)
+        if frequency in PAIRED_DAYS:
+            return ' / '.join(day_badge(day) for day in frequency[5:].split(','))
+        if frequency in ALTERNATING_DAYS:
+            phase,day=frequency.split(':')
+            return f'Every other {day_badge(day)} ({phase})'
+        today=day_badge(WEEKDAYS[self.now().weekday()])
+        return {'daily':f'{today} · Daily','twice-daily':f'{today} · AM + PM','weekly':'Weekly','monthly':'Monthly','one-time':'One time'}.get(frequency,frequency)
+
+    def emoji(self, frequency):
+        if frequency in WEEKDAYS:
+            return DAY_COLORS[frequency]
+        if frequency in ALTERNATING_DAYS:
+            return DAY_COLORS[frequency.split(':')[1]]
+        if frequency in PAIRED_DAYS:
+            return DAY_COLORS[frequency[5:].split(',')[0]]
+        if frequency in ('daily','twice-daily'):
+            return DAY_COLORS[WEEKDAYS[self.now().weekday()]]
+        return None
+
     def label(self, frequency, quest_id=None):
         text=self.schedule_label(frequency)
         if quest_id is not None:
