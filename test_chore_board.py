@@ -2184,6 +2184,104 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(event.response.payload['view'].state['page'],2)
             self.assertEqual(event.response.payload['view'].state['area'],'household')
 
+    async def test_daily_am_pm_have_independent_weekly_owners_and_completions(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.create_chore('Empty dishwasher AM','daily-am','5','')
+            self.ui.create_chore('Empty dishwasher PM','daily-pm','5','')
+            am,pm=[r[0] for r in self.db.execute("SELECT id FROM quests WHERE name LIKE 'Empty dishwasher %' ORDER BY id")]
+            self.assertIn('signed up',self.ui.signup(10,am,self.ui.week_key()))
+            self.assertIn('signed up',self.ui.signup(20,pm,self.ui.week_key()))
+            self.assertTrue(self.ui.ready(am));self.assertFalse(self.ui.ready(pm))
+            await self.ui.PersonalView(10,'mine',selected=am).act(Interaction(10),'done')
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=?',(pm,)).fetchone(),(0,))
+        with self.clock('2026-10-20T13:00:00'):
+            self.assertTrue(self.ui.ready(pm))
+            await self.ui.PersonalView(20,'mine',selected=pm).act(Interaction(20),'done')
+            self.assertEqual(self.db.execute('SELECT id,points FROM users ORDER BY id').fetchall(),[('10',5),('20',5)])
+            self.assertEqual(self.ui.weekly_owner(am),'10');self.assertEqual(self.ui.weekly_owner(pm),'20')
+        with self.clock('2026-10-21T08:00:00'):
+            self.app.reset_due_quests()
+            self.assertIn(am,[r[0] for r in self.ui.rows(10,'mine')]);self.assertNotIn(pm,[r[0] for r in self.ui.rows(20,'mine')])
+        with self.clock('2026-10-21T12:00:00'):
+            self.app.reset_due_quests()
+            self.assertIn(pm,[r[0] for r in self.ui.rows(20,'mine')])
+
+    async def test_daily_shift_split_is_idempotent_keeps_points_reservations_and_fill_chore(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.create_chore('Empty dishwasher','twice-daily','5','Put dishes away','Kitchen')
+            qid=self.db.execute("SELECT id FROM quests WHERE name='Empty dishwasher'").fetchone()[0]
+            self.ui.signup(10,qid,self.ui.week_key());self.ui.signup(20,qid,self.ui.week_key(1))
+            self.db.execute("INSERT INTO users(id,points) VALUES('10',55)");self.db.commit()
+            fill=self.db.execute('SELECT * FROM quests WHERE id=1').fetchone()
+            expected=self.ui.reassign_snapshot(qid)
+            result=self.ui.workspace.split_daily_shifts(qid,expected);self.assertIn('Split into',result)
+            pm=self.db.execute('SELECT pm_id FROM chore_shift_splits WHERE original_id=?',(qid,)).fetchone()[0]
+            self.assertEqual(self.ui.weekly_owner(qid),'10');self.assertEqual(self.ui.weekly_owner(qid,1),'20')
+            self.assertIsNone(self.ui.weekly_owner(pm));self.assertIsNone(self.ui.weekly_owner(pm,1))
+            self.assertEqual(self.db.execute('SELECT frequency,name FROM quests WHERE id=?',(qid,)).fetchone(),('daily-am','Empty dishwasher · AM'))
+            self.assertEqual(self.db.execute('SELECT frequency,points,notes,category,assigned_to FROM quests WHERE id=?',(pm,)).fetchone(),('daily-pm',5,'Put dishes away','Kitchen',None))
+            self.assertEqual(self.db.execute('SELECT * FROM quests WHERE id=1').fetchone(),fill)
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(55,))
+            count=self.db.execute('SELECT COUNT(*) FROM quests').fetchone()[0]
+            self.assertIn('Already split',self.ui.workspace.split_daily_shifts(qid,expected))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM quests').fetchone()[0],count)
+
+    async def test_split_retains_already_completed_pm_without_another_award(self):
+        with self.clock('2026-10-20T13:00:00'):
+            self.db.execute("UPDATE quests SET frequency='twice-daily' WHERE id=1");self.db.commit()
+            await self.ui.PersonalView(10,selected=1).act(Interaction(),'claim')
+            await self.ui.PersonalView(10,'mine',selected=1).act(Interaction(),'done')
+            history=self.db.execute('SELECT * FROM completion_log').fetchall()
+            self.ui.workspace.split_daily_shifts(1,self.ui.reassign_snapshot(1))
+            pm=self.db.execute('SELECT pm_id FROM chore_shift_splits WHERE original_id=1').fetchone()[0]
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=?',(pm,)).fetchone(),(1,))
+            self.assertEqual(self.db.execute('SELECT * FROM completion_log').fetchall(),history)
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(5,))
+            self.assertFalse(self.ui.ready(1))
+
+    async def test_split_moves_only_current_pm_single_claim_and_rolls_back_on_failure(self):
+        with self.clock('2026-10-20T13:00:00'):
+            self.db.execute("UPDATE quests SET frequency='twice-daily' WHERE id=1")
+            self.db.execute("INSERT INTO claims VALUES(1,'10')");self.db.commit()
+            self.ui.workspace.split_daily_shifts(1,self.ui.reassign_snapshot(1))
+            pm=self.db.execute('SELECT pm_id FROM chore_shift_splits WHERE original_id=1').fetchone()[0]
+            self.assertEqual(self.db.execute('SELECT quest_id,user_id FROM claims').fetchall(),[(pm,'10')])
+            self.ui.create_chore('Split failure','twice-daily','5','')
+            qid=self.db.execute("SELECT id FROM quests WHERE name='Split failure'").fetchone()[0]
+            before=self.db.execute('SELECT * FROM quests').fetchall()
+            self.db.execute("CREATE TRIGGER reject_split BEFORE INSERT ON chore_shift_splits BEGIN SELECT RAISE(ABORT,'split failed'); END;");self.db.commit()
+            with self.assertRaises(Exception):self.ui.workspace.split_daily_shifts(qid,self.ui.reassign_snapshot(qid))
+            self.assertEqual(self.db.execute('SELECT * FROM quests').fetchall(),before)
+
+    async def test_daily_shift_skip_and_overdue_reset_behave_at_boundaries(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.create_chore('Morning shift','daily-am','5','')
+            am=self.db.execute("SELECT id FROM quests WHERE name='Morning shift'").fetchone()[0]
+            self.ui.timing.set_policy(am,'skip')
+            self.ui.create_chore('Evening shift','daily-pm','5','')
+            pm=self.db.execute("SELECT id FROM quests WHERE name='Evening shift'").fetchone()[0]
+        with self.clock('2026-10-20T12:00:00'):
+            self.app.reset_due_quests();self.assertFalse(self.ui.ready(am));self.assertTrue(self.ui.ready(pm))
+        with self.clock('2026-10-21T08:00:00'):
+            self.app.reset_due_quests();self.assertTrue(self.ui.ready(am));self.assertTrue(self.ui.ready(pm))
+            await self.ui.PersonalView(20,selected=pm).act(Interaction(20),'claim')
+            await self.ui.PersonalView(20,'mine',selected=pm).act(Interaction(20),'done')
+            self.assertIn('2026-10-21T12:00',self.db.execute('SELECT reset_after FROM quests WHERE id=?',(pm,)).fetchone()[0])
+
+    async def test_shift_labels_picker_and_split_confirmation_are_clear(self):
+        options=self.ui.AddChoreMenu(10).children[0].options
+        self.assertIn('daily-am',[o.value for o in options]);self.assertIn('daily-pm',[o.value for o in options])
+        self.assertIn('AM',self.ui.timing.label('daily-am'));self.assertIn('PM',self.ui.timing.label('daily-pm'))
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("UPDATE quests SET frequency='twice-daily' WHERE id=1");self.db.commit()
+            view=self.ui.workspace.Card(10,1);picker=next(c for c in view.children if isinstance(c,discord.ui.Select))
+            picker._values=['split'];event=Interaction();await picker.callback(event)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM chore_shift_splits').fetchone(),(0,))
+            self.assertIn('Existing weekly/ongoing ownership stays on AM',event.response.payload['embed'].description)
+            self.assertTrue(await event.response.wire_payload['view'].interaction_check(event))
+            self.assertFalse(await event.response.wire_payload['view'].interaction_check(Interaction(20)))
+
+
     async def test_help_button_is_persistent_private_and_changes_no_data(self):
         before = list(self.db.iterdump())
         view = self.ui.Launcher()

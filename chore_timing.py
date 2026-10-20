@@ -14,8 +14,9 @@ def day_badge(day, full=False):
 
 PAIRED_DAYS = tuple('days:' + ','.join(pair) for pair in combinations(WEEKDAYS, 2))
 ALTERNATING_DAYS = tuple(f'{phase}:{day}' for phase in ('away', 'home') for day in WEEKDAYS)
+DAILY_SHIFTS = frozenset(('daily-am','daily-pm'))
 SCHEDULED = frozenset((*WEEKDAYS, *PAIRED_DAYS, *ALTERNATING_DAYS))
-WEEKLY_FREQUENCIES = frozenset(('daily', 'twice-daily', 'weekly', *SCHEDULED))
+WEEKLY_FREQUENCIES = frozenset(('daily', 'twice-daily', 'weekly', *DAILY_SHIFTS, *SCHEDULED))
 
 
 class ChoreTiming:
@@ -25,8 +26,8 @@ class ChoreTiming:
         self.db.execute('CREATE TABLE IF NOT EXISTS chore_timing (quest_id INTEGER PRIMARY KEY, ready_from TEXT NOT NULL)')
         self.db.execute("CREATE TABLE IF NOT EXISTS missed_chore_policy (quest_id INTEGER PRIMARY KEY, policy TEXT NOT NULL CHECK(policy IN ('keep','skip')), deadline TEXT)")
         self.db.commit()
-        namespace['VALID_FREQUENCIES'].update(('twice-daily', *SCHEDULED))
-        namespace['FREQUENCY_ALIASES'].update({value: value for value in ('twice-daily', *SCHEDULED)})
+        namespace['VALID_FREQUENCIES'].update(('twice-daily', *DAILY_SHIFTS, *SCHEDULED))
+        namespace['FREQUENCY_ALIASES'].update({value: value for value in ('twice-daily', *DAILY_SHIFTS, *SCHEDULED)})
         namespace['calculate_reset_after'] = self.calculate_reset
 
     def now(self):
@@ -66,6 +67,10 @@ class ChoreTiming:
 
     def calculate_reset(self, when, frequency):
         local=when.astimezone(self.ns['QUEST_TIMEZONE'])
+        if frequency in DAILY_SHIFTS:
+            hour=0 if frequency=='daily-am' else 12
+            days=0 if frequency=='daily-pm' and local.hour<12 else 1
+            return (local+timedelta(days=days)).replace(hour=hour,minute=0,second=0,microsecond=0).isoformat()
         if frequency == 'twice-daily':
             if local.hour < 12:
                 return local.replace(hour=12,minute=0,second=0,microsecond=0).isoformat()
@@ -75,7 +80,13 @@ class ChoreTiming:
         return self.original_reset(when,frequency)
 
     def initialize(self, quest_id, frequency):
-        if frequency in SCHEDULED:
+        if frequency in DAILY_SHIFTS:
+            hour=0 if frequency=='daily-am' else 12
+            ready=self.now().replace(hour=hour,minute=0,second=0,microsecond=0)
+            if frequency=='daily-am' and self.now().hour>=12:
+                ready+=timedelta(days=1)
+            self.db.execute('INSERT OR REPLACE INTO chore_timing VALUES (?,?)',(quest_id,ready.isoformat()))
+        elif frequency in SCHEDULED:
             ready=self.next_due(self.now(),frequency)
             self.db.execute('INSERT OR REPLACE INTO chore_timing VALUES (?,?)',(quest_id,ready.isoformat()))
         else:
@@ -91,6 +102,10 @@ class ChoreTiming:
         return self.db.execute('SELECT policy,deadline FROM missed_chore_policy WHERE quest_id=?',(quest_id,)).fetchone()
 
     def deadline(self, quest_id, frequency):
+        if frequency in DAILY_SHIFTS:
+            state=self.state(quest_id)
+            start=datetime.fromisoformat(state[0]) if state else self.now().replace(hour=0 if frequency=='daily-am' else 12,minute=0,second=0,microsecond=0)
+            return (start+timedelta(hours=12)).isoformat()
         if frequency in SCHEDULED:
             state=self.state(quest_id)
             ready=datetime.fromisoformat(state[0]) if state else self.next_due(self.now(),frequency)
@@ -123,7 +138,9 @@ class ChoreTiming:
                 self.db.execute('DELETE FROM occurrence_moves WHERE quest_id=?',(qid,))
                 if not completed:
                     self.db.execute('DELETE FROM claims WHERE quest_id=?',(qid,))
-                if frequency in SCHEDULED:
+                if frequency in DAILY_SHIFTS:
+                    self.initialize(qid,frequency)
+                elif frequency in SCHEDULED:
                     self.db.execute('INSERT OR REPLACE INTO chore_timing VALUES(?,?)',(qid,self.next_due(now,frequency).isoformat()))
                 self.db.execute('UPDATE missed_chore_policy SET deadline=? WHERE quest_id=?',(self.deadline(qid,frequency),qid))
 
@@ -133,7 +150,7 @@ class ChoreTiming:
     def ready(self, quest_id):
         from datetime import datetime
         row=self.db.execute('SELECT frequency FROM quests WHERE id=?',(quest_id,)).fetchone()
-        if not row or row[0] not in SCHEDULED:
+        if not row or row[0] not in SCHEDULED | DAILY_SHIFTS:
             return True
         state=self.state(quest_id)
         if not state:
@@ -144,13 +161,15 @@ class ChoreTiming:
 
     def completion_reset(self, quest_id, when, frequency):
         reset=self.calculate_reset(when,frequency)
-        if frequency in SCHEDULED:
+        if frequency in SCHEDULED | DAILY_SHIFTS:
             self.db.execute('INSERT OR REPLACE INTO chore_timing VALUES (?,?)',(quest_id,reset))
         if self.policy(quest_id)=='skip':
             self.db.execute('UPDATE missed_chore_policy SET deadline=? WHERE quest_id=?',(self.deadline(quest_id,frequency),quest_id))
         return reset
 
     def schedule_label(self, frequency):
+        if frequency in DAILY_SHIFTS:
+            return 'Daily · AM (morning)' if frequency=='daily-am' else 'Daily · PM (afternoon/evening, from noon)'
         if frequency == 'twice-daily':
             return 'Twice daily · morning (before noon) / afternoon-evening (after noon)'
         if frequency in WEEKDAYS:
@@ -171,7 +190,7 @@ class ChoreTiming:
             phase,day=frequency.split(':')
             return f'Every other {day_badge(day)} ({phase})'
         today=day_badge(WEEKDAYS[self.now().weekday()])
-        return {'daily':f'{today} · Daily','twice-daily':f'{today} · AM + PM','weekly':'🤍 Weekly','monthly':'🟫 Monthly','one-time':'One time'}.get(frequency,frequency)
+        return {'daily-am':f'{today} · AM','daily-pm':f'{today} · PM','daily':f'{today} · Daily','twice-daily':f'{today} · AM + PM','weekly':'🤍 Weekly','monthly':'🟫 Monthly','one-time':'One time'}.get(frequency,frequency)
 
     def emoji(self, frequency):
         if frequency in PERIOD_COLORS:
@@ -182,7 +201,7 @@ class ChoreTiming:
             return DAY_COLORS[frequency.split(':')[1]]
         if frequency in PAIRED_DAYS:
             return DAY_COLORS[frequency[5:].split(',')[0]]
-        if frequency in ('daily','twice-daily'):
+        if frequency in ('daily','twice-daily',*DAILY_SHIFTS):
             return DAY_COLORS[WEEKDAYS[self.now().weekday()]]
         return None
 

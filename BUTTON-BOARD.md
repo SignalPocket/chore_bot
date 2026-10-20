@@ -15,6 +15,12 @@ Deploy all six modules together:
 
 Dependencies remain discord.py 2.6 or newer below 3, python-dotenv, and tzdata. Configuration and the Discord token stay in the existing server environment; never put credentials into this guide or version control.
 
+## Separate morning and evening responsibilities
+
+Schedules `daily-am` and `daily-pm` are independent daily chores with midnight/noon Eastern readiness and separate weekly sign-ups. The chore-card confirmation splits a twice-daily chore transactionally: the original ID and reservations stay on AM; the new PM ID copies details and starts open unless carrying a current single PM claim. Existing completion records and user points are unchanged. Current-day completion state is retained to prevent duplicate awards. `chore_shift_splits` makes repeat conversion idempotent. Existing occurrence moves must be canceled before splitting. No live chore is converted merely by deploying this feature.
+
+Validation: 186 tests pass, including independent owners/completions, boundary times, preserved reservations/points, repeated conversion, and transaction rollback.
+
 ## Components V2 layout
 
 Private lists use LayoutView, TextDisplay, and Section accessory buttons. Eligible current owned occurrences have inline Done buttons; other rows have Details. Five entries per page keep nested components below Discord limits. Completion captures the displayed occurrence snapshot and rechecks it after acquiring the mutation lock, preserving points/history and blocking repeated or stale clicks. Away, upcoming, next-week, and other people’s work cannot be completed through the row button.

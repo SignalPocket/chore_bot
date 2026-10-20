@@ -36,6 +36,14 @@ Select a chore from My chores, Pick up chores, or Household. Each route opens th
 
 The three responsibility durations are **Just this time**, **This week / Next week**, and **Every week · ongoing**. A chore’s name does not assign it: a chore called “Kas: laundry” still needs an actual Discord-account assignment or sign-up.
 
+## Separate morning and evening responsibilities
+
+Use **Daily · AM** and **Daily · PM** when different people should handle morning and afternoon/evening work. Each shift has its own sign-ups, weekly owner, completion, and points. AM opens at midnight; PM opens at noon, Eastern time. Each shift follows its own Keep overdue or Skip if missed setting.
+
+For an existing twice-daily chore, open its card → **More actions → Separate AM and PM sign-ups**, then confirm. The existing chore becomes AM and a separate PM chore appears. Existing weekly reservations and ongoing ownership stay with AM; PM starts open, except an existing single PM claim follows the PM shift. Both keep the original points and instructions. Already-earned points and completion history are preserved, and an already-completed shift cannot earn points again that day. Splitting after noon starts an unfinished AM shift the following morning.
+
+For **Empty dishwasher**, reserve **Empty dishwasher · AM** and **Empty dishwasher · PM** separately. Filling the dishwasher remains a separate chore.
+
 ## See your work and find chores
 
 **My chores** has Due now, This week, Next week, Upcoming, and Completed tabs. Being away does not erase your responsibilities. Upcoming work stays visible, but cannot be completed before it becomes available. Completed lists chores with recorded completions by you; open the card’s Completion history for individual records.

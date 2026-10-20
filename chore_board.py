@@ -74,7 +74,7 @@ def install(namespace):
             return ''
         frequency=frequency[0]
         days=attendance.week(user_id,week_start(offset))
-        if frequency in ('daily','twice-daily'):
+        if frequency in ('daily','twice-daily','daily-am','daily-pm'):
             away=[when for when,home in days if not home]
         elif frequency in WEEKDAYS or ':' in frequency:
             away=[when for when,home in days[1:] if timing.matches(when.date(),frequency) and not home]
@@ -431,7 +431,7 @@ def install(namespace):
             if mode=='day':
                 for entry in entries:
                     frequency=entry[3]
-                    if frequency in ('daily','twice-daily'):
+                    if frequency in ('daily','twice-daily','daily-am','daily-pm'):
                         rendered.append((-2,'Every day',entry))
                     elif not timing.in_week(frequency,start):
                         rendered.append((-1,'Overdue from an earlier week',entry))
@@ -1202,6 +1202,8 @@ def install(namespace):
             self.owner = owner
             select = discord.ui.Select(placeholder="How often does this chore repeat?", options=[
                 discord.SelectOption(label="Daily", value="daily", description="Returns at midnight; can be reserved for a week"),
+                discord.SelectOption(label="Daily · AM",value="daily-am",description="Separate morning responsibility; returns at midnight"),
+                discord.SelectOption(label="Daily · PM",value="daily-pm",description="Separate afternoon/evening responsibility; opens at noon"),
                 discord.SelectOption(label="Weekly", value="weekly", emoji="🤍", description="Returns 🩷 Sun at 6 p.m.; can be reserved for a week"),
                 discord.SelectOption(label="Monthly", value="monthly", emoji="🟫", description="Returns on the first day of the month"),
                 discord.SelectOption(label="One time", value="one-time", description="Does not return automatically after completion"),

@@ -13,7 +13,8 @@ def install(ns, ui, lock):
     bot, db, timing = ns['bot'], ns['db'], ui.timing
     db.executescript('''CREATE TABLE IF NOT EXISTS occurrence_moves(quest_id INTEGER PRIMARY KEY,day TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS notification_preferences(user_id TEXT PRIMARY KEY,trade_dm INTEGER NOT NULL DEFAULT 0);
-    CREATE TABLE IF NOT EXISTS trade_notifications(trade_id INTEGER PRIMARY KEY,status TEXT NOT NULL);''')
+    CREATE TABLE IF NOT EXISTS trade_notifications(trade_id INTEGER PRIMARY KEY,status TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS chore_shift_splits(original_id INTEGER PRIMARY KEY,pm_id INTEGER UNIQUE NOT NULL);''')
     db.commit()
     original_ready = timing.ready
     def ready(qid):
@@ -67,6 +68,7 @@ def install(ns, ui, lock):
         if q[5]:
             return 'Completed · returns ' + datetime.fromisoformat(q[7]).strftime('%a %b %d, %I:%M %p') if q[7] else 'Completed · does not repeat'
         if ready(q[0]):
+            if q[2] in ('daily-am','daily-pm'):return 'Due now · '+('AM shift' if q[2]=='daily-am' else 'PM shift')
             return 'Due now' + (' · AM slot' if q[2] == 'twice-daily' and timing.now().hour < 12 else ' · PM slot' if q[2] == 'twice-daily' else '')
         state = timing.state(q[0])
         return 'Next due ' + datetime.fromisoformat(state[0]).strftime('%a %b %d') if state else timing.compact_label(q[2])
@@ -259,7 +261,7 @@ def install(ns, ui, lock):
                     move=db.execute('SELECT day FROM occurrence_moves WHERE quest_id=?',(q[0],)).fetchone()
                     if move:
                         if move[0]!=date_filter: continue
-                    elif q[2] in ('daily','twice-daily'):
+                    elif q[2] in ('daily','twice-daily','daily-am','daily-pm'):
                         if q[5] and q[7] and datetime.fromisoformat(q[7]).date()>target: continue
                     elif q[2] in WEEKDAYS or ':' in q[2]:
                         if not timing.matches(target,q[2]): continue
@@ -270,7 +272,7 @@ def install(ns, ui, lock):
                 if area != 'household' or group == 'chore': return ('Chores A–Z', q[1].casefold())
                 if group == 'person': return (person(ownership(q[0], offset)[0], guild), q[1].casefold())
                 f = q[2]
-                if f in ('daily', 'twice-daily'): return ('Every day', q[1].casefold())
+                if f in ('daily', 'twice-daily', 'daily-am', 'daily-pm'): return ('Every day', q[1].casefold())
                 if f in WEEKDAYS: return (f'{WEEKDAYS.index(f)+1} · {day_badge(f)}', q[1].casefold())
                 return (timing.compact_label(f), q[1].casefold())
             selected.sort(key=groupkey)
@@ -280,7 +282,7 @@ def install(ns, ui, lock):
                 rendered = []
                 for q in selected:
                     f = q[2]
-                    if f in ('daily','twice-daily'):
+                    if f in ('daily','twice-daily','daily-am','daily-pm'):
                         rendered.append(('0 · Every day',q))
                     elif f in WEEKDAYS or ':' in f:
                         if not timing.in_week(f,ui.week_start(offset)):
@@ -463,6 +465,50 @@ def install(ns, ui, lock):
                 self.button(label, choose)
             self.nav(lambda: Browse(owner, **state, guild=guild))
 
+    def split_daily_shifts(qid,expected):
+        existing=db.execute('SELECT pm_id FROM chore_shift_splits WHERE original_id=?',(qid,)).fetchone()
+        if existing:return 'Already split into separate AM and PM chores. Nothing duplicated.'
+        q=chore(qid)
+        if not q or ui.is_archived(qid) or q[2]!='twice-daily' or ui.reassign_snapshot(qid)!=expected:
+            return 'This chore changed. Reopen its card before splitting.'
+        if db.execute('SELECT 1 FROM occurrence_moves WHERE quest_id=?',(qid,)).fetchone():
+            return 'Cancel this occurrence’s move before splitting its daily shifts.'
+        am_name=q[1][:94]+' · AM';pm_name=q[1][:94]+' · PM'
+        names={row[0].casefold() for row in db.execute('SELECT name FROM quests WHERE id!=?',(qid,))}
+        if am_name.casefold() in names or pm_name.casefold() in names:
+            return 'An AM or PM chore with that name already exists. No changes made.'
+        now=timing.now();lasts={'daily-am':None,'daily-pm':None}
+        history=[r[0] for r in db.execute('SELECT completed_at FROM completion_log WHERE quest_id=? AND undone_at IS NULL',(qid,))]
+        if q[6]:history.append(q[6])
+        for value in history:
+            try:
+                when=datetime.fromisoformat(value)
+                if when.tzinfo is None:when=when.replace(tzinfo=ns['QUEST_TIMEZONE'])
+                when=when.astimezone(ns['QUEST_TIMEZONE'])
+            except (ValueError,TypeError):continue
+            shift='daily-am' if when.hour<12 else 'daily-pm'
+            if lasts[shift] is None or when>lasts[shift]:lasts[shift]=when
+        old_claim=db.execute('SELECT user_id FROM claims WHERE quest_id=?',(qid,)).fetchone()
+        keep_claim_on_pm=now.hour>=12 and old_claim and not q[4] and not ui.weekly_owner(qid)
+        policy=timing.policy(qid)
+        with db:
+            db.execute('UPDATE quests SET name=?,frequency=? WHERE id=?',(am_name,'daily-am',qid))
+            difficulty=db.execute('SELECT difficulty FROM quests WHERE id=?',(qid,)).fetchone()[0]
+            pm_id=db.execute('INSERT INTO quests(name,frequency,points,notes,category,difficulty) VALUES(?,?,?,?,?,?)',(pm_name,'daily-pm',q[3],q[8],q[9],difficulty)).lastrowid
+            for key,frequency in [(qid,'daily-am'),(pm_id,'daily-pm')]:
+                last=lasts[frequency]
+                completed=bool(last and last.date()==now.date())
+                timing.initialize(key,frequency)
+                reset=timing.calculate_reset(last,frequency) if completed else None
+                db.execute('UPDATE quests SET completed=?,last_completed=?,reset_after=? WHERE id=?',(int(completed),last.isoformat() if last else None,reset,key))
+                if completed:db.execute('INSERT OR REPLACE INTO chore_timing VALUES(?,?)',(key,reset))
+                if policy=='skip':db.execute('INSERT OR REPLACE INTO missed_chore_policy VALUES(?,?,?)',(key,policy,timing.deadline(key,frequency)))
+            if keep_claim_on_pm:
+                db.execute('DELETE FROM claims WHERE quest_id=?',(qid,))
+                db.execute('INSERT INTO claims VALUES(?,?)',(pm_id,old_claim[0]))
+            db.execute('INSERT INTO chore_shift_splits VALUES(?,?)',(qid,pm_id))
+        return 'Split into separate AM and PM chores. Existing weekly/ongoing ownership stays on AM; PM is open except for a current PM single claim. Earned points and old history are unchanged.'
+
     class Card(View):
         def __init__(self, owner, qid, back=None, guild=None, offset=0, notice=None):
             super().__init__(owner)
@@ -535,6 +581,7 @@ def install(ns, ui, lock):
                     await present(i,Confirm(owner,'Take ongoing responsibility?','This keeps future occurrences assigned to you across weeks, until you drop or reassign it.',save,card))
                 self.button('Every week · ongoing',ongoing,row=0)
             options = [('Give feedback','feedback'), ('Edit chore','edit'), ('Reassign','reassign'), ('Completion history','history')]
+            if q[2]=='twice-daily':options.append(('Separate AM and PM sign-ups','split'))
             if not q[5]: options.append(('Move this occurrence','move'))
             if db.execute('SELECT 1 FROM occurrence_moves WHERE quest_id=?',(qid,)).fetchone(): options.append(('Cancel occurrence move','unmove'))
             if uid == str(owner) and offset == 0: options.extend([('Drop responsibility','drop'),('Propose trade','trade')])
@@ -543,6 +590,12 @@ def install(ns, ui, lock):
             async def more(i):
                 value = picker.values[0]
                 if value == 'history': return await present(i, History(owner, qid, card))
+                if value == 'split':
+                    expected_split=ui.reassign_snapshot(qid)
+                    async def save(event):
+                        async with lock:text=split_daily_shifts(qid,expected_split)
+                        await present(event,card(),text)
+                    return await present(i,Confirm(owner,'Separate morning and evening?',f'This creates two independent  {q[3]}-point daily chores. Existing weekly/ongoing ownership stays on AM. PM starts open, except a current PM single claim moves with it. Earned points and old records stay saved.',save,card))
                 if value == 'move': return await i.response.send_modal(MoveModal(owner, qid, self.expected, card))
                 if value == 'unmove':
                     async def save(event):
@@ -823,7 +876,7 @@ def install(ns, ui, lock):
         'Start here':'My chores shows your points total, Due now, This week, Upcoming, and Completed. Points & standings on the dashboard shows scores without commands. Pick up chores lets you take work just once or for a week. Household shows everyone’s work; every chore opens the same card.',
         'Taking responsibility':'Just this time takes one due occurrence. Take this week / next week reserves repeating work until Sunday 6 p.m. An ongoing assignment continues across weeks. Drop and Reassign show scope before saving. Trades change nothing until accepted.',
         'Dates and colors':DAY_LEGEND+'\nAll times are Eastern. Daily resets at midnight, twice daily at noon and midnight, weekly Sunday 6 p.m., monthly on the first. Flexible weekly/monthly markers do not imply a weekday.',
-        'Schedules and missed work':'Change regular day changes future weeks. Move this occurrence changes one unfinished occurrence. Edit chore → Missed chores chooses Keep overdue or Skip if missed. Notes such as “afternoon” are instructions, not automatic reminders.',
+        'Schedules and missed work':'Daily AM and Daily PM can have different weekly owners. A twice-daily chore card offers Separate AM and PM sign-ups. Change regular day changes future weeks. Move this occurrence changes one unfinished occurrence. Edit chore → Missed chores chooses Keep overdue or Skip if missed. Notes such as “afternoon” are instructions, not automatic reminders.',
         'Trips and traded days':'Who’s home? accepts multiple people, date shortcuts, and full-day ranges. Preview before confirming. Edit saved exceptions directly. Normal rotation resumes afterward; existing responsibilities remain saved. Base home/away chore schedules do not shift with a person’s trip.',
         'Feedback and points':'Give feedback on a chore card to suggest timing, instructions, or points. Ginaria receives feedback DMs and resolves reviews in the owner inbox. Everyone can discuss; only ginaria resolves. Suggestions never apply themselves. Edits affect future points, not points already earned.',
         'History and mistakes':'Done awards points once per occurrence. Completion history records work after this update. Undo your most recent recorded completion only while its state and points remain unchanged. Undo reverses its points and streak changes. Earlier totals remain intact.',
@@ -840,4 +893,4 @@ def install(ns, ui, lock):
             self.add_item(picker)
             self.nav()
 
-    return SimpleNamespace(Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
+    return SimpleNamespace(split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
