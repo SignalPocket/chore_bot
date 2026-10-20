@@ -116,3 +116,8 @@ Local preparation, pushed code, installed code, a running service, and verified 
 
 ## Personal list polish and button-based scores
 My chores shows the caller’s points total at the top and uses Completed for the history tab. Due-now rows omit the repeated caller name/status while retaining twice-daily slot and coverage information. Other household views retain owner/status context. Dashboard → Points & standings opens a private V2 score view with caller total/streak, paged household rankings, shared ranks for ties, Refresh, and Dashboard. Reading scores does not create users or change points.
+
+
+## Laptop backup and failure-alert tools
+
+See [BACKUP-RECOVERY.md](BACKUP-RECOVERY.md) for the installed server/laptop schedules, protected storage, verification, private ginaria alerts, restore commands, limitations, and tests. `backup_monitor.py` runs independently of the bot; `laptop_backup.py` downloads over SSH and encrypts with Windows CurrentUser DPAPI. `install_laptop_backup.ps1` and `run_laptop_backup.ps1` set up the hidden per-user Windows task. These tools do not modify chore records or require a bot restart. Tests: `python -m unittest test_backup_transport -q`, plus `test_backup_database` on Linux. Do not put credentials, snapshots, or local monitor state in Git.
