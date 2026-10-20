@@ -726,6 +726,66 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assert_screen_limits(view);self.assertTrue(w.render(view).to_components())
 
 
+    def calendar_navigation_rows(self):
+        self.db.execute("UPDATE quests SET assigned_to='10' WHERE id=1")
+        self.db.executemany("INSERT INTO quests(name,frequency,points,assigned_to) VALUES(?,'daily',5,'10')",[(f'Daily {i:02}',) for i in range(10)])
+        self.db.commit()
+
+    async def test_calendar_navigation_day_paging_counts_and_boundaries(self):
+        p=self.ui.planning;self.calendar_navigation_rows();day=datetime(2026,10,20).date()
+        first=p.Day(10,day,True,mode='month')
+        self.assertIn('Page 1 of 3',first.embed.footer.text)
+        self.assertIn('Chores 1–5 of 11',first.embed.footer.text)
+        next_page=next(c for c in first.children if getattr(c,'label',None)=='Next page')
+        i=Interaction();await next_page.callback(i);second=i.response.payload['view']
+        self.assertEqual((second.day,second.page,second.mine,second.mode),(day,1,True,'month'))
+        i=Interaction();await next(c for c in second.children if getattr(c,'label',None)=='Next page').callback(i)
+        last=i.response.payload['view'];self.assertIn('Page 3 of 3',last.embed.footer.text)
+        self.assertNotIn('Next page',[getattr(c,'label',None) for c in last.children])
+        self.assertIn('Chores 11–11 of 11',last.embed.footer.text)
+        i=Interaction();await next(c for c in last.children if getattr(c,'label',None)=='Previous page').callback(i)
+        self.assertEqual(i.response.payload['view'].page,1)
+
+    async def test_calendar_navigation_next_previous_today_preserve_scope_reset_page(self):
+        p=self.ui.planning;self.calendar_navigation_rows();day=datetime(2026,10,31).date()
+        view=p.Day(10,day,True,page=2,mode='month')
+        i=Interaction();await next(c for c in view.children if getattr(c,'label',None)=='Next day').callback(i)
+        tomorrow=i.response.payload['view'];self.assertEqual((tomorrow.day,tomorrow.page,tomorrow.mine,tomorrow.mode),(datetime(2026,11,1).date(),0,True,'month'))
+        i=Interaction();await next(c for c in tomorrow.children if getattr(c,'label',None)=='Previous day').callback(i)
+        self.assertEqual(i.response.payload['view'].day,day)
+        with self.clock('2026-10-20T10:00:00'):
+            i=Interaction();await next(c for c in tomorrow.children if getattr(c,'label',None)=='Today').callback(i)
+            self.assertEqual(i.response.payload['view'].day,datetime(2026,10,20).date())
+
+    async def test_calendar_navigation_month_and_chore_back_preserve_mode_page(self):
+        p=self.ui.planning;day=datetime(2026,10,20).date();self.calendar_navigation_rows()
+        month=p.Calendar(10,day=day,mode='month',mine=True)
+        picker=next(c for c in month.children if isinstance(c,discord.ui.Select));picker._values=['20']
+        # Month has two pickers: use the second range for the 20th.
+        picker=[c for c in month.children if isinstance(c,discord.ui.Select)][1];picker._values=['20']
+        i=Interaction();await picker.callback(i);self.assertEqual(i.response.payload['view'].mode,'month')
+        with self.clock('2026-10-20T10:00:00'):
+            view=p.Day(10,day,True,page=1,mode='month');picker=next(c for c in view.children if isinstance(c,discord.ui.Select));picker._values=[picker.options[0].value]
+            i=Interaction();await picker.callback(i);card=i.response.payload['view']
+            i=Interaction();await next(c for c in card.children if getattr(c,'label',None)=='Back').callback(i)
+            restored=i.response.payload['view'];self.assertEqual((restored.page,restored.mine,restored.mode),(1,True,'month'))
+            i=Interaction();await next(c for c in restored.children if getattr(c,'label',None)=='Back').callback(i)
+            self.assertIn('My calendar',i.response.payload['view'].embed.title)
+            self.assertTrue(next(c for c in i.response.payload['view'].children if getattr(c,'label',None)=='Month').style==discord.ButtonStyle.primary)
+
+    async def test_calendar_navigation_page_buttons_below_count_and_empty_limits(self):
+        p=self.ui.planning;w=self.ui.workspace;self.calendar_navigation_rows();day=datetime(2026,10,20).date()
+        view=p.Day(10,day,page=1);wire=w.render(view)
+        footer=next(i for i,c in enumerate(wire.children) if isinstance(c,discord.ui.TextDisplay) and 'Page 2 of 3' in c.content)
+        paging=next(i for i,c in enumerate(wire.children) if isinstance(c,discord.ui.ActionRow) and any(getattr(b,'label',None)=='Next page' for b in c.children))
+        separator=next(i for i,c in enumerate(wire.children) if isinstance(c,discord.ui.Separator))
+        self.assertEqual(paging,footer+1);self.assertLess(paging,separator)
+        empty=p.Day(20,day,mine=True);self.assertIn('Page 1 of 1',empty.embed.footer.text);self.assertIn('0 chores',empty.embed.footer.text)
+        for screen in (view,empty,p.Day(10,day,flexible=True,mode='month')):
+            self.assert_screen_limits(screen);self.assertTrue(w.render(screen).to_components())
+            self.assertFalse(await screen.interaction_check(Interaction(99)))
+
+
     async def test_claim_done_and_repeat_click_awards_once(self):
         claim_view = self.ui.PersonalView(10, selected=1)
         event = Interaction()

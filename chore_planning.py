@@ -233,7 +233,7 @@ def install(ns, ui, w, lock):
                     preview='\n'.join(w.clean(q[1],65) for q,uid in rows[:3]) or 'No fixed-day chores'
                     if len(rows)>3:preview+=f'\n+ {len(rows)-3} more'
                     self.embed.add_field(name=f'{day_badge(WEEKDAYS[idx])} {date:%b %d} · {len(rows)} chore(s)',value=preview+(f'\n~{minutes} known minutes' if minutes else ''),inline=False)
-                    self.button(f'{WEEKDAYS[idx].title()} {date.day}',lambda i,date=date:w.present(i,Day(owner,date,mine,i.guild)),row=1 if idx<4 else 2)
+                    self.button(f'{WEEKDAYS[idx].title()} {date.day}',lambda i,date=date:w.present(i,Day(owner,date,mine,i.guild,mode=mode)),row=1 if idx<4 else 2)
                 earlier=start-timedelta(days=7);later=start+timedelta(days=7)
             else:
                 grid=calendar.Calendar(firstweekday=0).monthdayscalendar(day.year,day.month)
@@ -242,36 +242,42 @@ def install(ns, ui, w, lock):
                 count=calendar.monthrange(day.year,day.month)[1]
                 for row,values in enumerate((range(1,min(count,16)+1),range(17,count+1)),1):
                     picker=discord.ui.Select(placeholder='Choose date '+('1–16' if row==1 else f'17–{count}'),row=row,options=[discord.SelectOption(label=day.replace(day=d).strftime('%a %b %d')+f' · {len(project(day.replace(day=d),owner if mine else None))} chores',value=str(d)) for d in values])
-                    async def select(i,picker=picker):await w.present(i,Day(owner,day.replace(day=int(picker.values[0])),mine,i.guild))
+                    async def select(i,picker=picker):await w.present(i,Day(owner,day.replace(day=int(picker.values[0])),mine,i.guild,mode=mode))
                     picker.callback=select;self.add_item(picker)
                 earlier=day.replace(day=1)-timedelta(days=1);later=(day.replace(day=28)+timedelta(days=4)).replace(day=1)
             self.button('Previous',lambda i:w.present(i,view(day=earlier)),row=3)
             self.button('Today',lambda i:w.present(i,view(day=timing.now().date())),row=3)
             self.button('Next',lambda i:w.present(i,view(day=later)),row=3)
-            self.button('No fixed day',lambda i:w.present(i,Day(owner,day,mine,i.guild,flexible=True)),row=0)
+            self.button('No fixed day',lambda i:w.present(i,Day(owner,day,mine,i.guild,flexible=True,mode=mode)),row=0)
             self.nav()
     class Day(w.View):
-        def __init__(self,owner,day,mine=False,guild=None,page=0,flexible=False):
+        def __init__(self,owner,day,mine=False,guild=None,page=0,flexible=False,mode='week'):
             super().__init__(owner)
             rows=project(day,owner if mine else None,flexible);page=min(max(page,0),max((len(rows)-1)//5,0));chunk=rows[page*5:(page+1)*5]
+            self.day,self.page,self.mine,self.flexible,self.mode=day,page,mine,flexible,mode
+            self.paging_labels=('Previous page','Next page')
             self.embed=discord.Embed(title=('No fixed day · '+day.strftime('%b %d')) if flexible else day_badge(WEEKDAYS[day.weekday()])+' '+day.strftime('%b %d, %Y'),description='Schedule preview. Calendar dates do not move chores or create a reservation. Choose a chore to see details.'+(' Weekly/monthly chores are flexible until given a day. Owners are shown for this date’s household week.' if flexible else ''),color=0x6B9B77)
             for q,uid in chunk:
                 when=datetime.combine(day,datetime.min.time(),tzinfo=ns['QUEST_TIMEZONE']).replace(hour=12)
                 away=uid and not ui.attendance.at(uid,when)
                 self.embed.add_field(name=w.clean(q[1],100),value=w.clean(w.person(uid,guild),100)+f' · {q[3]} points'+summary(q[0])+(' · ⚠ Away' if away else ''),inline=False)
+            self.embed.set_footer(text=f'Page {page+1} of {max((len(rows)-1)//5+1,1)} · '+(f'Chores {page*5+1}–{page*5+len(chunk)} of {len(rows)}' if rows else '0 chores')+' · Eastern time')
             if chunk:
                 picker=discord.ui.Select(placeholder='Choose chore',row=0,options=[discord.SelectOption(label=q[1][:100],value=str(q[0])) for q,uid in chunk])
                 async def select(i):
                     qid=int(picker.values[0]);q=chore(qid)
-                    if day==timing.now().date():return await w.present(i,w.Card(owner,qid,guild=i.guild))
+                    if day==timing.now().date():return await w.present(i,w.Card(owner,qid,back=lambda:Day(owner,day,mine,i.guild,page,flexible,mode),guild=i.guild))
                     preview=w.View(owner);preview.embed=discord.Embed(title=w.clean(q[1],100),description=f'Calendar preview for {day:%a %b %d}. This is not a dated claim. Open the current chore to manage its current responsibility.',color=0x6B9B77)
-                    preview.button('Open current chore',lambda event:w.present(event,w.Card(owner,qid,guild=event.guild)),row=0);preview.nav(lambda:Day(owner,day,mine,guild,page,flexible))
+                    preview.button('Open current chore',lambda event:w.present(event,w.Card(owner,qid,back=lambda:Day(owner,day,mine,event.guild,page,flexible,mode),guild=event.guild)),row=0);preview.nav(lambda:Day(owner,day,mine,guild,page,flexible,mode))
                     await w.present(i,preview)
                 picker.callback=select;self.add_item(picker)
             else:self.embed.add_field(name='No chores here',value='Try Household, No fixed day, or Due now for overdue work.')
-            if page:self.button('Previous',lambda i:w.present(i,Day(owner,day,mine,i.guild,page-1,flexible)),row=3)
-            if (page+1)*5<len(rows):self.button('Next',lambda i:w.present(i,Day(owner,day,mine,i.guild,page+1,flexible)),row=3)
-            self.nav(lambda:Calendar(owner,guild,day,mine=mine))
+            if page:self.button('Previous page',lambda i:w.present(i,Day(owner,day,mine,i.guild,page-1,flexible,mode)),row=3)
+            if (page+1)*5<len(rows):self.button('Next page',lambda i:w.present(i,Day(owner,day,mine,i.guild,page+1,flexible,mode)),row=3)
+            self.button('Previous day',lambda i:w.present(i,Day(owner,day-timedelta(days=1),mine,i.guild,0,flexible,mode)),row=1)
+            self.button('Today',lambda i:w.present(i,Day(owner,timing.now().date(),mine,i.guild,0,flexible,mode)),row=1)
+            self.button('Next day',lambda i:w.present(i,Day(owner,day+timedelta(days=1),mine,i.guild,0,flexible,mode)),row=1)
+            self.nav(lambda:Calendar(owner,guild,day,mode=mode,mine=mine))
     def occurrence(qid):
         q=chore(qid)
         if not q:return ''

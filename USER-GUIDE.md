@@ -83,7 +83,7 @@ Delivery is checked each minute with a 15-minute grace window. Older missed remi
 
 ## Calendar
 
-Open **Dashboard → Calendar**. Switch **Week / Month** or **My calendar / Household**, and use Previous, Today, and Next. Week view uses colored weekday headings with dates, counts, and known estimated minutes. Month view shows a Monday-first grid and two date pickers. Choose a day to open its paged chore list, including responsibility and away warnings.
+Open **Dashboard → Calendar**. Switch **Week / Month** or **My calendar / Household**, and use Previous, Today, and Next. Week view uses colored weekday headings with dates, counts, and known estimated minutes. Month view shows a Monday-first grid and two date pickers. Choose a day to open its chore list, including responsibility and away warnings. Each day shows Page X of Y and the chore range. Previous page / Next page sit directly below that count; Previous day / Today / Next day move between dates without returning to the calendar. Date changes start at page one. Personal/household scope and Week/Month mode are retained, including when returning from a chore card.
 
 **No fixed day** keeps flexible weekly/monthly/one-time chores separate rather than inventing a date. Move an occurrence or choose a regular day to put it on a date. Its owners are shown for the selected date’s household week. Daily AM and PM appear as separate chores; a twice-daily chore’s known workload counts both completions.
 
