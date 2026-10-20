@@ -212,10 +212,135 @@ def install(ns, ui, lock):
                 if page*5<=index<(page+1)*5:
                     self.embed.add_field(name=f'{rank}. '+clean(person(uid,guild),100),value=f'{points} points',inline=False)
             if not records:self.embed.add_field(name='No scores yet',value='Finish a chore to start earning points.')
+            if owner==OWNER:self.button('Reset points',lambda i:present(i,ResetPoints(owner,i.guild)),row=2)
+            if owner==OWNER:self.button('Reset history / Undo',lambda i:present(i,ResetHistory(owner,i.guild)),row=2)
             if page:self.button('Previous',lambda i:present(i,Points(owner,i.guild,page-1)),row=3)
             if (page+1)*5<len(records):self.button('Next',lambda i:present(i,Points(owner,i.guild,page+1)),row=3)
             self.button('Refresh',lambda i:present(i,Points(owner,i.guild,page)),row=3)
             self.nav()
+
+    def score_rows(target=None):
+        return db.execute('SELECT id,points,streak,last_completed FROM users'+(' WHERE id=?' if target else '')+' ORDER BY id', (str(target),) if target else ()).fetchall()
+
+    class ResetPoints(View):
+        def __init__(self,owner,guild=None,target=None,reset_streaks=False,confirm=False):
+            super().__init__(owner)
+            self.target,self.reset_streaks=target,reset_streaks
+            self.expected=score_rows(target)
+            self.embed=discord.Embed(title='Reset points',color=0x6B9B77)
+            if owner!=OWNER:
+                self.embed.description='Only ginaria can reset points.'
+                self.nav()
+                return
+            if confirm:
+                who=clean(person(target,guild),100) if target else 'Everyone with a saved score'
+                self.embed.description=f'Confirm reset for **{who}**: {len(self.expected)} account(s), {sum(r[1] for r in self.expected)} points.\nStreaks: **'+('reset to zero' if reset_streaks else 'keep unchanged')+'**.\nCompletion history and chore responsibilities stay unchanged. Undo is available in reset history only while affected scores remain unchanged; an audit record is kept.'
+                self.name_ids=[target] if target else []
+                self.rebuild=lambda:ResetPoints(owner,guild,target,reset_streaks,True)
+                self.button('Confirm reset',self.apply,row=0,disabled=not self.expected)
+                self.button('Cancel',lambda i:present(i,Points(owner,i.guild)),row=0)
+            else:
+                self.embed.description='Choose one person or everyone, then review the confirmation. Completion history is kept.\nStreaks: **'+('reset too' if reset_streaks else 'keep')+'**.'
+                picker=discord.ui.UserSelect(placeholder='Choose one person',min_values=1,max_values=1,row=0)
+                async def choose(i):
+                    if not await self.interaction_check(i):return
+                    chosen=picker.values[0]
+                    if getattr(chosen,'bot',False) or not score_rows(chosen.id):
+                        await i.response.send_message('Choose a person with a saved score.',ephemeral=True)
+                        return
+                    await present(i,ResetPoints(owner,i.guild,str(chosen.id),reset_streaks,True))
+                picker.callback=choose
+                self.add_item(picker)
+                self.button('Everyone',lambda i:present(i,ResetPoints(owner,i.guild,None,reset_streaks,True)),row=1)
+                self.button('Keep streaks' if reset_streaks else 'Reset streaks too',lambda i:present(i,ResetPoints(owner,i.guild,None,not reset_streaks)),row=1)
+                self.nav(lambda:Points(owner,guild))
+
+        async def interaction_check(self,i):
+            if self.owner!=OWNER or i.user.id!=OWNER:
+                await i.response.send_message('Only ginaria can reset points.',ephemeral=True)
+                return False
+            return await super().interaction_check(i)
+
+        async def apply(self,i):
+            if not await self.interaction_check(i):return
+            await i.response.defer()
+            async with lock:
+                if not self.expected or score_rows(self.target)!=self.expected:
+                    await present(i,ResetPoints(self.owner,i.guild),notice='Scores changed. Review a fresh confirmation before resetting.')
+                    return
+                import json
+                with db:
+                    details=[]
+                    for uid,points,streak,last in self.expected:
+                        after=(0,0,None) if self.reset_streaks else (0,streak,last)
+                        db.execute('INSERT INTO points_reset_log(actor,user_id,before_state,after_state,created_at) VALUES(?,?,?,?,?)',(str(i.user.id),uid,json.dumps([points,streak,last]),json.dumps(after),timing.now().isoformat()))
+                        db.execute('UPDATE users SET points=?,streak=?,last_completed=? WHERE id=?',(*after,uid))
+                        epoch=db.execute('SELECT MAX(id) FROM points_reset_log WHERE user_id=?',(uid,)).fetchone()[0]
+                        last_event=db.execute('SELECT COALESCE(MAX(id),0) FROM completion_log WHERE user_id=?',(uid,)).fetchone()[0]
+                        details.append(dict(uid=uid,before=[points,streak,last],after=list(after),epoch=epoch,last_event=last_event))
+                    db.execute('INSERT INTO points_reset_batches(actor,details,created_at) VALUES(?,?,?)',(str(i.user.id),json.dumps(details),timing.now().isoformat()))
+                self.expected=[]
+            await present(i,Points(self.owner,i.guild),notice='Points reset. '+('Streaks reset too.' if self.reset_streaks else 'Streaks kept.')+' Completion history preserved.')
+
+
+    def undo_points_reset(actor,batch_id,expected):
+        if actor!=OWNER:return 'Only ginaria can undo a points reset.'
+        import json
+        batch=db.execute('SELECT id,actor,details,created_at,undone_at FROM points_reset_batches WHERE id=?',(batch_id,)).fetchone()
+        if not batch or batch!=expected or batch[4]:return 'This reset changed or was already undone. Reopen reset history.'
+        details=json.loads(batch[2])
+        for entry in details:
+            current=db.execute('SELECT points,streak,last_completed FROM users WHERE id=?',(entry['uid'],)).fetchone()
+            epoch=db.execute('SELECT COALESCE(MAX(id),0) FROM points_reset_log WHERE user_id=?',(entry['uid'],)).fetchone()[0]
+            last_event=db.execute('SELECT COALESCE(MAX(id),0) FROM completion_log WHERE user_id=?',(entry['uid'],)).fetchone()[0]
+            if current!=tuple(entry['after']) or epoch!=entry['epoch'] or last_event!=entry['last_event']:
+                return 'Someone affected has newer score activity. Nothing restored; undo cannot overwrite later work or another reset.'
+        with db:
+            for entry in details:
+                db.execute('UPDATE users SET points=?,streak=?,last_completed=? WHERE id=?',(*entry['before'],entry['uid']))
+                db.execute('INSERT INTO points_reset_log(actor,user_id,before_state,after_state,created_at) VALUES(?,?,?,?,?)',(str(actor),entry['uid'],json.dumps(entry['after']),json.dumps(entry['before']),timing.now().isoformat()))
+            db.execute('UPDATE points_reset_batches SET undone_at=? WHERE id=?',(timing.now().isoformat(),batch_id))
+            db.execute('INSERT INTO owner_action_log(actor,action,target,details,created_at) VALUES(?,?,?,?,?)',(str(actor),'undo_points_reset',str(batch_id),batch[2],timing.now().isoformat()))
+        return 'Points reset undone. The saved totals and streak state were restored together. Completion history is unchanged.'
+
+    class ResetHistory(View):
+        def __init__(self,owner,guild=None,page=0):
+            super().__init__(owner)
+            self.embed=discord.Embed(title='Points reset history',color=0x6B9B77)
+            if owner!=OWNER:
+                self.embed.description='Only ginaria can view or undo points resets.'
+                self.nav()
+                return
+            import json
+            records=db.execute('SELECT id,actor,details,created_at,undone_at FROM points_reset_batches ORDER BY id DESC').fetchall()
+            page=min(max(page,0),max(len(records)-1,0))
+            if records:
+                record=records[page];entries=json.loads(record[2])
+                names=', '.join(clean(person(e['uid'],guild),70) for e in entries[:5])
+                if len(entries)>5:names+=f' and {len(entries)-5} more'
+                self.embed.description=f'Reset #{record[0]} · {record[3][:16]}\n{names}\n{len(entries)} account(s) · {sum(e["before"][0] for e in entries)} points before reset.\n'+('Already undone.' if record[4] else 'Undo restores saved totals and streak state only if none of these people has newer score activity.')
+                self.name_ids=[e['uid'] for e in entries[:5]]
+                self.rebuild=lambda:ResetHistory(owner,guild,page)
+                if not record[4]:
+                    async def ask(i):
+                        if not await self.interaction_check(i):return
+                        async def apply(event):
+                            if not await self.interaction_check(event):return
+                            await event.response.defer()
+                            async with lock:text=undo_points_reset(event.user.id,record[0],record)
+                            await present(event,ResetHistory(owner,event.guild,page),text)
+                        await present(i,Confirm(owner,'Undo this points reset?',f'Restore {sum(e["before"][0] for e in entries)} points across {len(entries)} account(s): {names}. Saved streak values are restored too. Later score activity blocks the entire undo. Chore history and responsibilities stay unchanged.',apply,lambda:ResetHistory(owner,guild,page)))
+                    self.button('Undo points reset',ask,row=0)
+                if page:self.button('Previous',lambda i:present(i,ResetHistory(owner,i.guild,page-1)),row=3)
+                if page+1<len(records):self.button('Next',lambda i:present(i,ResetHistory(owner,i.guild,page+1)),row=3)
+            else:self.embed.description='No recorded points resets yet.'
+            self.nav(lambda:Points(owner,guild))
+        async def interaction_check(self,i):
+            if self.owner!=OWNER or i.user.id!=OWNER:
+                await i.response.send_message('Only ginaria can view or undo points resets.',ephemeral=True)
+                return False
+            return await super().interaction_check(i)
+
 
     class Search(discord.ui.Modal):
         def __init__(self, owner, state):
@@ -673,18 +798,26 @@ def install(ns, ui, lock):
             records = db.execute('SELECT id,user_id,chore_name,points,completed_at,undone_at FROM completion_log WHERE quest_id=? ORDER BY id DESC', (qid,)).fetchall()
             page = min(max(page,0),max((len(records)-1)//5,0))
             chunk = records[page*5:(page+1)*5]
-            self.embed = discord.Embed(title='Completion history', description='History begins with this update. Earlier totals stay intact; older individual completions cannot be reconstructed. Undo is available for your most recent recorded completion while its occurrence and points remain unchanged.', color=0x6B9B77)
+            self.embed = discord.Embed(title='Completion history', description='History begins with this update. Earlier totals stay intact; older individual completions cannot be reconstructed. Undo is available for your most recent recorded completion while its occurrence and points remain unchanged. Ginaria can correct another person’s latest completion with the same safety checks.', color=0x6B9B77)
             for event,uid,name,points,when,undone in chunk:
                 self.embed.add_field(name=clean(name,100),value=f'{when[:16].replace("T"," ")} · <@{uid}> · {points} points'+(' · Undone' if undone else ''),inline=False)
-            choices = [r for r in chunk if r[1] == str(owner) and not r[5]]
+            choices = [r for r in chunk if (r[1] == str(owner) or owner==OWNER) and not r[5]]
             if choices:
-                picker = discord.ui.Select(placeholder='Choose your completion to undo',options=[discord.SelectOption(label=f'{r[4][:16]} · {r[3]} points',value=str(r[0])) for r in choices])
+                picker = discord.ui.Select(placeholder='Choose completion to correct' if owner==OWNER else 'Choose your completion to undo',options=[discord.SelectOption(label=f'{r[4][:16]} · {r[3]} points',value=str(r[0])) for r in choices])
                 async def select(i):
+                    if not await self.interaction_check(i):return
                     event = int(picker.values[0])
                     async def save(e):
-                        async with lock: text = ui.undo_completion(owner,event)
+                        if owner==OWNER:
+                            if i.user.id!=OWNER or e.user.id!=OWNER or not await View(owner).interaction_check(e):return
+                            async with lock:text=ui.owner_undo_completion(e.user.id,event)
+                        else:
+                            if not await View(owner).interaction_check(e):return
+                            async with lock:text=ui.undo_completion(owner,event)
                         await present(e,History(owner,qid,back,page),text)
-                    await present(i,Confirm(owner,'Undo completion?','This reverses its points and restores the previous chore state. Later changes can prevent undo.',save,lambda:History(owner,qid,back,page)))
+                    selected=next(r for r in choices if r[0]==event)
+                    text=f'This reverses {selected[3]} points for '+clean(person(selected[1]),100)+'. The previous chore responsibility and streak state are restored together. Later work or score changes can block correction.'
+                    await present(i,Confirm(owner,'Correct completion?' if owner==OWNER else 'Undo completion?',text,save,lambda:History(owner,qid,back,page)))
                 picker.callback = select
                 self.add_item(picker)
             if not chunk: self.embed.add_field(name='No recorded completions yet',value='Completions made after this update will appear here.')
@@ -730,18 +863,18 @@ def install(ns, ui, lock):
         with db: db.execute('UPDATE trade_notifications SET status=? WHERE trade_id=?',(status,trade_id))
 
     class Inbox(View):
-        def __init__(self, owner, guild=None, page=0):
+        def __init__(self, owner, guild=None, page=0, resolved=False):
             super().__init__(owner)
             self.embed = discord.Embed(title='Owner review inbox',color=0x6B9B77)
             if owner != OWNER:
                 self.embed.description = 'This inbox belongs to ginaria.'
                 self.nav()
                 return
-            records = db.execute('SELECT f.id,f.quest_id,q.name,f.author_name,f.comment,f.timing,f.suggested_points FROM chore_feedback f JOIN quests q ON q.id=f.quest_id WHERE f.reviewed=0 ORDER BY f.id').fetchall()
+            records = db.execute('SELECT f.id,f.quest_id,q.name,f.author_name,f.comment,f.timing,f.suggested_points FROM chore_feedback f JOIN quests q ON q.id=f.quest_id WHERE f.reviewed=? ORDER BY f.id', (int(resolved),)).fetchall()
             page = min(max(page,0),max(len(records)-1,0))
             if records:
                 r = records[page]
-                self.embed.description = f'{page+1} of {len(records)} open reviews · '+clean(r[2],100)
+                self.embed.description = f'{page+1} of {len(records)} '+('resolved' if resolved else 'open')+' reviews · '+clean(r[2],100)
                 self.embed.add_field(name='From',value=clean(r[3],100),inline=False)
                 if r[4]:
                     escaped = clean(r[4],2000)
@@ -749,18 +882,32 @@ def install(ns, ui, lock):
                 if r[5]: self.embed.add_field(name='Timing',value=clean(r[5]),inline=False)
                 if r[6] is not None: self.embed.add_field(name='Suggested points',value=str(r[6]),inline=False)
                 async def resolve(i):
-                    if i.user.id != OWNER: return
+                    if not await self.interaction_check(i):return
                     with db: db.execute('UPDATE chore_feedback SET reviewed=1 WHERE id=?',(r[0],))
-                    await present(i,Inbox(owner,i.guild,page))
-                self.button('Resolve and next',resolve,primary=True)
-                self.button('Open chore',lambda i:present(i,Card(owner,r[1],lambda:Inbox(owner,guild,page),i.guild)))
+                    await present(i,Inbox(owner,i.guild,page,resolved))
+                if resolved:
+                    async def reopen(i):
+                        if not await self.interaction_check(i):return
+                        async def save(event):
+                            if not await self.interaction_check(event):return
+                            await event.response.defer()
+                            async with lock:
+                                with db:
+                                    changed=db.execute('UPDATE chore_feedback SET reviewed=0 WHERE id=? AND reviewed=1',(r[0],)).rowcount
+                                    if changed:db.execute('INSERT INTO owner_action_log(actor,action,target,details,created_at) VALUES(?,?,?,?,?)',(str(event.user.id),'reopen_review',str(r[0]),'Resolved review returned to the open inbox; no notification sent.',timing.now().isoformat()))
+                            await present(event,Inbox(owner,event.guild,page,True),'Review reopened in the open inbox.' if changed else 'This review is already open. Nothing changed.')
+                        await present(i,Confirm(owner,'Reopen this review?',clean(r[2],100)+' · '+clean(r[3],100)+'. Return this saved review to the open inbox without sending another DM.',save,lambda:Inbox(owner,guild,page,True)))
+                    self.button('Reopen review',reopen,primary=True)
+                else:self.button('Resolve and next',resolve,primary=True)
+                self.button('Open chore',lambda i:present(i,Card(owner,r[1],lambda:Inbox(owner,guild,page,resolved),i.guild)))
                 if not ui.is_archived(r[1]):
                     ids = [v[0] for v in db.execute('SELECT id FROM quests ORDER BY name COLLATE NOCASE,id') if not ui.is_archived(v[0])]
-                    self.button('Edit chore',lambda i:present(i,adapt(ui.EditChoreView(owner,ids.index(r[1])//20,r[1]),owner,lambda:Inbox(owner,guild,page))))
-                if page: self.button('Previous',lambda i:present(i,Inbox(owner,i.guild,page-1)),row=3)
-                if page+1 < len(records): self.button('Next',lambda i:present(i,Inbox(owner,i.guild,page+1)),row=3)
-            else: self.embed.description = 'All caught up. Resolved reviews stay saved on each chore.'
-            self.button('Refresh',lambda i:present(i,Inbox(owner,i.guild,page)),row=3)
+                    self.button('Edit chore',lambda i:present(i,adapt(ui.EditChoreView(owner,ids.index(r[1])//20,r[1]),owner,lambda:Inbox(owner,guild,page,resolved))))
+                if page: self.button('Previous',lambda i:present(i,Inbox(owner,i.guild,page-1,resolved)),row=3)
+                if page+1 < len(records): self.button('Next',lambda i:present(i,Inbox(owner,i.guild,page+1,resolved)),row=3)
+            else: self.embed.description = 'No resolved reviews yet.' if resolved else 'All caught up. Resolved reviews stay saved on each chore.'
+            self.button('Open reviews' if resolved else 'Resolved reviews',lambda i:present(i,Inbox(owner,i.guild,0,not resolved)),row=2)
+            self.button('Refresh',lambda i:present(i,Inbox(owner,i.guild,page,resolved)),row=3)
             self.nav()
         async def interaction_check(self,i):
             if self.owner != OWNER or i.user.id != OWNER:
@@ -881,6 +1028,7 @@ def install(ns, ui, lock):
         'Feedback and points':'Give feedback on a chore card to suggest timing, instructions, or points. Ginaria receives feedback DMs and resolves reviews in the owner inbox. Everyone can discuss; only ginaria resolves. Suggestions never apply themselves. Edits affect future points, not points already earned.',
         'History and mistakes':'Done awards points once per occurrence. Completion history records work after this update. Undo your most recent recorded completion only while its state and points remain unchanged. Undo reverses its points and streak changes. Earlier totals remain intact.',
         'Managing chores':'Manage chores groups Add and Archive/Restore. Edit any chore from its card. Room is optional and can be used as a filter. Archiving hides work and keeps records; restoring retains its state.',
+        'Points and resets':'Points & standings shows your total and streak. Only ginaria can reset one person or everyone, with confirmation and optional streak reset. History stays saved. Ginaria can undo a reset from Reset history / Undo while affected scores have no newer activity.',
         'Notifications and recovery':'Trades appear on the dashboard. Trade DMs are optional: turn them on in Notifications for your own account. Feedback DMs go to ginaria. Reopen /chores after a restart or ten minutes. Private controls edit shared household information.'}
 
     class Guide(View):
@@ -893,4 +1041,4 @@ def install(ns, ui, lock):
             self.add_item(picker)
             self.nav()
 
-    return SimpleNamespace(split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
+    return SimpleNamespace(undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)

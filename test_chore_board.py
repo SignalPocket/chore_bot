@@ -90,6 +90,241 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.db.close()
         self.temp.cleanup()
 
+    async def test_points_reset_owner_only_button_and_forged_confirmation(self):
+        w=self.ui.workspace;owner=301104023405199361
+        self.assertNotIn('Reset points',[getattr(c,'label',None) for c in w.Points(10).children])
+        self.assertIn('Reset points',[getattr(c,'label',None) for c in w.Points(owner).children])
+        self.db.execute("INSERT INTO users(id,points,streak) VALUES('10',25,3)");self.db.commit()
+        view=w.ResetPoints(owner,target='10',confirm=True)
+        await view.apply(Interaction(20))
+        await w.ResetPoints(10,target='10',confirm=True).apply(Interaction(10))
+        self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(25,))
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM points_reset_log').fetchone(),(0,))
+
+    async def test_points_reset_one_keeps_streak_history_and_other_accounts(self):
+        w=self.ui.workspace;owner=301104023405199361
+        await self.ui.PersonalView(10,'mine',selected=2).act(Interaction(),'done')
+        self.db.execute("INSERT INTO users(id,points,streak) VALUES('20',40,8)");self.db.commit()
+        before=self.db.execute("SELECT streak,last_completed FROM users WHERE id='10'").fetchone()
+        history=self.db.execute('SELECT * FROM completion_log').fetchall()
+        quests=self.db.execute('SELECT * FROM quests').fetchall()
+        view=w.ResetPoints(owner,target='10',confirm=True)
+        self.assertIn('keep unchanged',view.embed.description)
+        await view.apply(Interaction(owner))
+        self.assertEqual(self.db.execute("SELECT points,streak,last_completed FROM users WHERE id='10'").fetchone(),(0,*before))
+        self.assertEqual(self.db.execute("SELECT points,streak FROM users WHERE id='20'").fetchone(),(40,8))
+        self.assertEqual(self.db.execute('SELECT * FROM completion_log').fetchall(),history)
+        self.assertEqual(self.db.execute('SELECT * FROM quests').fetchall(),quests)
+        self.assertEqual(self.db.execute('SELECT actor,user_id FROM points_reset_log').fetchall(),[(str(owner),'10')])
+
+    async def test_points_reset_everyone_optional_streaks_and_duplicate_click(self):
+        owner=301104023405199361;w=self.ui.workspace
+        self.db.executemany('INSERT INTO users(id,points,streak,last_completed) VALUES(?,?,?,?)',[('10',25,3,'2026-10-20'),('20',40,8,'2026-10-19')]);self.db.commit()
+        view=w.ResetPoints(owner,reset_streaks=True,confirm=True)
+        self.assertIn('2 account(s), 65 points',view.embed.description)
+        self.assertIn('reset to zero',view.embed.description)
+        await asyncio.gather(view.apply(Interaction(owner)),view.apply(Interaction(owner)))
+        self.assertEqual(self.db.execute('SELECT points,streak,last_completed FROM users').fetchall(),[(0,0,None),(0,0,None)])
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM points_reset_log').fetchone(),(2,))
+
+    async def test_points_reset_stale_confirmation_and_cancel_are_read_only(self):
+        w=self.ui.workspace;owner=301104023405199361
+        self.db.execute("INSERT INTO users(id,points,streak) VALUES('10',25,3)");self.db.commit()
+        view=w.ResetPoints(owner,confirm=True)
+        cancel=next(c for c in view.children if getattr(c,'label',None)=='Cancel')
+        await cancel.callback(Interaction(owner))
+        self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(25,))
+        self.db.execute("INSERT INTO users(id,points,streak) VALUES('20',5,1)");self.db.commit()
+        await view.apply(Interaction(owner))
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM points_reset_log').fetchone(),(0,))
+        self.assertEqual(self.db.execute('SELECT SUM(points) FROM users').fetchone(),(30,))
+
+    async def test_points_reset_atomic_rollback_and_epoch_blocks_old_undo(self):
+        owner=301104023405199361;w=self.ui.workspace
+        await self.ui.PersonalView(10,'mine',selected=2).act(Interaction(),'done')
+        event=self.db.execute('SELECT MAX(id) FROM completion_log').fetchone()[0]
+        self.db.execute("CREATE TRIGGER fail_reset BEFORE INSERT ON points_reset_log BEGIN SELECT RAISE(ABORT,'fail'); END");self.db.commit()
+        with self.assertRaises(Exception):await w.ResetPoints(owner,target='10',confirm=True).apply(Interaction(owner))
+        self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(10,))
+        self.db.execute('DROP TRIGGER fail_reset');self.db.commit()
+        await w.ResetPoints(owner,target='10',confirm=True).apply(Interaction(owner))
+        self.db.execute("UPDATE users SET points=10 WHERE id='10'");self.db.commit()
+        result=self.ui.undo_completion(10,event)
+        self.assertIn('cannot safely',result)
+        self.assertEqual(self.db.execute('SELECT undone_at FROM completion_log WHERE id=?',(event,)).fetchone(),(None,))
+
+    async def test_points_reset_selector_and_v2_confirmation_limits(self):
+        owner=301104023405199361;w=self.ui.workspace
+        self.db.execute("INSERT INTO users(id,points,streak) VALUES('10',25,3)");self.db.commit()
+        view=w.ResetPoints(owner)
+        picker=next(c for c in view.children if isinstance(c,discord.ui.UserSelect))
+        picker._values=[SimpleNamespace(id=10,bot=False)]
+        interaction=Interaction(owner)
+        await picker.callback(interaction)
+        confirm=interaction.response.payload['view']
+        self.assertEqual(confirm.target,'10')
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM points_reset_log').fetchone(),(0,))
+        self.assert_screen_limits(confirm)
+        self.assertTrue(w.render(confirm).to_components())
+
+
+    def reset_batch(self):
+        return self.db.execute('SELECT id,actor,details,created_at,undone_at FROM points_reset_batches ORDER BY id DESC LIMIT 1').fetchone()
+
+    async def test_owner_recovery_reset_undo_preserves_or_restores_streaks(self):
+        owner=301104023405199361;w=self.ui.workspace
+        for reset_streaks in (False,True):
+            self.db.execute("INSERT OR REPLACE INTO users(id,points,streak,last_completed) VALUES('10',35,4,'2026-10-20')");self.db.commit()
+            await w.ResetPoints(owner,target='10',reset_streaks=reset_streaks,confirm=True).apply(Interaction(owner))
+            batch=self.reset_batch()
+            self.assertIn('undone',w.undo_points_reset(owner,batch[0],batch))
+            self.assertEqual(self.db.execute("SELECT points,streak,last_completed FROM users WHERE id='10'").fetchone(),(35,4,'2026-10-20'))
+            self.assertIsNotNone(self.reset_batch()[4])
+            self.assertIn('already undone',w.undo_points_reset(owner,batch[0],batch))
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM owner_action_log WHERE action='undo_points_reset'").fetchone(),(2,))
+
+    async def test_owner_recovery_reset_undo_everyone_is_atomic_and_rejects_new_activity(self):
+        owner=301104023405199361;w=self.ui.workspace
+        self.db.executemany('INSERT INTO users(id,points,streak) VALUES(?,?,?)',[('10',15,2),('20',20,3)]);self.db.commit()
+        await w.ResetPoints(owner,confirm=True).apply(Interaction(owner))
+        batch=self.reset_batch()
+        self.db.execute("UPDATE users SET points=5 WHERE id='20'");self.db.commit()
+        self.assertIn('Nothing restored',w.undo_points_reset(owner,batch[0],batch))
+        self.assertEqual(self.db.execute('SELECT points FROM users ORDER BY id').fetchall(),[(0,),(5,)])
+        self.db.execute("UPDATE users SET points=0 WHERE id='20'");self.db.commit()
+        self.db.execute("CREATE TRIGGER fail_recovery BEFORE INSERT ON owner_action_log BEGIN SELECT RAISE(ABORT,'fail'); END");self.db.commit()
+        with self.assertRaises(Exception):w.undo_points_reset(owner,batch[0],batch)
+        self.assertEqual(self.db.execute('SELECT points FROM users ORDER BY id').fetchall(),[(0,),(0,)])
+        self.assertIsNone(self.reset_batch()[4])
+        self.db.execute('DROP TRIGGER fail_recovery');self.db.commit()
+        self.assertIn('undone',w.undo_points_reset(owner,batch[0],batch))
+        self.assertEqual(self.db.execute('SELECT points FROM users ORDER BY id').fetchall(),[(15,),(20,)])
+
+    async def test_owner_recovery_reset_undo_checks_completion_watermark_and_later_resets(self):
+        owner=301104023405199361;w=self.ui.workspace
+        self.db.execute("INSERT INTO users(id,points,streak) VALUES('10',10,2)");self.db.commit()
+        await w.ResetPoints(owner,target='10',confirm=True).apply(Interaction(owner))
+        batch=self.reset_batch()
+        await self.ui.PersonalView(10,'mine',selected=2).act(Interaction(),'done')
+        self.db.execute("UPDATE users SET points=0,streak=2,last_completed=NULL WHERE id='10'");self.db.commit()
+        self.assertIn('Nothing restored',w.undo_points_reset(owner,batch[0],batch))
+        await w.ResetPoints(owner,target='10',confirm=True).apply(Interaction(owner))
+        self.assertIn('Nothing restored',w.undo_points_reset(owner,batch[0],batch))
+
+    async def test_owner_recovery_reset_undo_private_confirmation_permissions_and_cancel(self):
+        owner=301104023405199361;w=self.ui.workspace
+        self.db.execute("INSERT INTO users(id,points,streak) VALUES('10',10,2)");self.db.commit()
+        await w.ResetPoints(owner,target='10',confirm=True).apply(Interaction(owner))
+        batch=self.reset_batch()
+        self.assertIn('Only ginaria',w.undo_points_reset(10,batch[0],batch))
+        self.assertNotIn('Reset history / Undo',[getattr(c,'label',None) for c in w.Points(10).children])
+        history=w.ResetHistory(owner)
+        self.assertFalse(await history.interaction_check(Interaction(10)))
+        button=next(c for c in history.children if getattr(c,'label',None)=='Undo points reset')
+        bad=Interaction(10);await button.callback(bad)
+        self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(0,))
+        good=Interaction(owner);await button.callback(good)
+        confirmation=good.response.payload['view']
+        self.assertIn('Undo this points reset',confirmation.embed.title)
+        cancel=next(c for c in confirmation.children if getattr(c,'label',None)=='Cancel')
+        await cancel.callback(Interaction(owner))
+        self.assertIsNone(self.reset_batch()[4])
+        confirm=next(c for c in confirmation.children if getattr(c,'label',None)=='Confirm')
+        await asyncio.gather(confirm.callback(Interaction(owner)),confirm.callback(Interaction(owner)))
+        self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(10,))
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM owner_action_log WHERE action='undo_points_reset'").fetchone(),(1,))
+
+    async def test_owner_recovery_completion_correction_preserves_audit_and_original_user(self):
+        owner=301104023405199361
+        await self.ui.PersonalView(10,'mine',selected=2).act(Interaction(),'done')
+        event=self.db.execute('SELECT MAX(id) FROM completion_log').fetchone()[0]
+        self.assertIn('Only ginaria',self.ui.owner_undo_completion(20,event))
+        self.assertIn('restored',self.ui.owner_undo_completion(owner,event))
+        self.assertEqual(self.db.execute("SELECT points,streak FROM users WHERE id='10'").fetchone(),(0,0))
+        self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=2').fetchone(),(0,))
+        self.assertIsNotNone(self.db.execute('SELECT undone_at FROM completion_log').fetchone()[0])
+        self.assertEqual(self.db.execute('SELECT actor,action,target FROM owner_action_log').fetchall(),[(str(owner),'correct_completion',str(event))])
+        self.assertIn('no longer available',self.ui.owner_undo_completion(owner,event))
+
+    async def test_owner_recovery_completion_correction_confirmation_and_guardrails(self):
+        owner=301104023405199361;w=self.ui.workspace
+        await self.ui.PersonalView(10,'mine',selected=2).act(Interaction(),'done')
+        event=self.db.execute('SELECT MAX(id) FROM completion_log').fetchone()[0]
+        ordinary=w.History(20,2,lambda:w.Dashboard(20))
+        self.assertFalse(any(isinstance(c,discord.ui.Select) for c in ordinary.children))
+        history=w.History(owner,2,lambda:w.Dashboard(owner))
+        picker=next(c for c in history.children if isinstance(c,discord.ui.Select));picker._values=[str(event)]
+        interaction=Interaction(owner);await picker.callback(interaction)
+        confirmation=interaction.response.payload['view']
+        self.assertEqual(confirmation.embed.title,'Correct completion?')
+        self.assertIn('10 points',confirmation.embed.description)
+        confirm=next(c for c in confirmation.children if getattr(c,'label',None)=='Confirm')
+        await confirm.callback(Interaction(20))
+        self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(10,))
+        self.db.execute("UPDATE users SET points=15 WHERE id='10'");self.db.commit()
+        await confirm.callback(Interaction(owner))
+        self.assertIsNone(self.db.execute('SELECT undone_at FROM completion_log').fetchone()[0])
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM owner_action_log').fetchone(),(0,))
+
+    async def test_owner_recovery_completion_correction_transaction_rolls_back(self):
+        owner=301104023405199361
+        await self.ui.PersonalView(10,'mine',selected=2).act(Interaction(),'done')
+        event=self.db.execute('SELECT MAX(id) FROM completion_log').fetchone()[0]
+        self.db.execute("CREATE TRIGGER fail_correction BEFORE INSERT ON owner_action_log BEGIN SELECT RAISE(ABORT,'fail'); END");self.db.commit()
+        with self.assertRaises(Exception):self.ui.owner_undo_completion(owner,event)
+        self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(10,))
+        self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=2').fetchone(),(1,))
+        self.assertIsNone(self.db.execute('SELECT undone_at FROM completion_log').fetchone()[0])
+
+    async def resolved_review_fixture(self):
+        result=self.ui.save_feedback(1,10,'Kid','Too hard','afternoon','8','recovery-review',self.ui.feedback_context(1))
+        review=self.db.execute('SELECT MAX(id) FROM chore_feedback').fetchone()[0]
+        self.db.execute('UPDATE chore_feedback SET reviewed=1 WHERE id=?',(review,));self.db.commit()
+        return review
+
+    async def test_owner_recovery_review_reopen_confirmation_permissions_and_no_dm(self):
+        owner=301104023405199361;w=self.ui.workspace
+        review=await self.resolved_review_fixture()
+        view=w.Inbox(owner,resolved=True)
+        self.assertFalse(await view.interaction_check(Interaction(10)))
+        self.assertFalse(any(getattr(c,'label',None)=='Reopen review' for c in w.Inbox(10,resolved=True).children))
+        reopen=next(c for c in view.children if getattr(c,'label',None)=='Reopen review')
+        bad=Interaction(10);await reopen.callback(bad)
+        self.assertEqual(self.db.execute('SELECT reviewed FROM chore_feedback WHERE id=?',(review,)).fetchone(),(1,))
+        good=Interaction(owner);await reopen.callback(good)
+        confirmation=good.response.payload['view']
+        self.assertIn('Reopen this review',confirmation.embed.title)
+        confirm=next(c for c in confirmation.children if getattr(c,'label',None)=='Confirm')
+        await confirm.callback(Interaction(20))
+        self.assertEqual(self.db.execute('SELECT reviewed FROM chore_feedback WHERE id=?',(review,)).fetchone(),(1,))
+        await asyncio.gather(confirm.callback(Interaction(owner)),confirm.callback(Interaction(owner)))
+        self.assertEqual(self.db.execute('SELECT reviewed FROM chore_feedback WHERE id=?',(review,)).fetchone(),(0,))
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM owner_action_log WHERE action='reopen_review'").fetchone(),(1,))
+        self.dm.send.assert_not_awaited()
+        self.assertIn('1 of 1 open reviews',w.Inbox(owner).embed.description)
+
+    async def test_owner_recovery_review_reopen_rolls_back_if_audit_fails(self):
+        owner=301104023405199361;w=self.ui.workspace
+        review=await self.resolved_review_fixture()
+        view=w.Inbox(owner,resolved=True)
+        button=next(c for c in view.children if getattr(c,'label',None)=='Reopen review')
+        i=Interaction(owner);await button.callback(i)
+        confirm=next(c for c in i.response.payload['view'].children if getattr(c,'label',None)=='Confirm')
+        self.db.execute("CREATE TRIGGER fail_reopen BEFORE INSERT ON owner_action_log BEGIN SELECT RAISE(ABORT,'fail'); END");self.db.commit()
+        with self.assertRaises(Exception):await confirm.callback(Interaction(owner))
+        self.assertEqual(self.db.execute('SELECT reviewed FROM chore_feedback WHERE id=?',(review,)).fetchone(),(1,))
+
+    async def test_owner_recovery_views_fit_discord_and_empty_history(self):
+        owner=301104023405199361;w=self.ui.workspace
+        self.assertIn('No recorded',w.ResetHistory(owner).embed.description)
+        await self.resolved_review_fixture()
+        self.db.execute("INSERT INTO users(id,points,streak) VALUES('10',25,3)");self.db.commit()
+        await w.ResetPoints(owner,target='10',confirm=True).apply(Interaction(owner))
+        for view in (w.Points(owner),w.ResetHistory(owner),w.Inbox(owner,resolved=True)):
+            self.assert_screen_limits(view)
+            self.assertTrue(w.render(view).to_components())
+
+
     async def test_claim_done_and_repeat_click_awards_once(self):
         claim_view = self.ui.PersonalView(10, selected=1)
         event = Interaction()

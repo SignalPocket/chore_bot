@@ -56,6 +56,12 @@ Use **Search** for a name or words in instructions. **Filters** can select a per
 
 Your points total appears at the top of My chores and updates when you mark work done. The dashboard’s **Points & standings** button shows your total, streak, and household standings without typing commands. Tied scores share a rank. Points stay with the completing Discord account and do not currently redeem anything.
 
+## Reset points — ginaria only
+
+Open **Dashboard → Points & standings → Reset points**. Only ginaria sees this button and can confirm a reset. Choose one person with a saved score or **Everyone**. Streaks are kept by default; choose **Reset streaks too** to clear the streak and its last-completion date as well. Review the selected person or account count, total points, and streak choice, then **Confirm reset**. Cancel leaves everything unchanged. If scores or the affected roster change before confirmation, start again with a fresh preview.
+
+The reset sets the selected totals to zero. Chore history, completed chores, assignments, and sign-ups are kept. Each affected account gets a reset audit record. Old completion Undo cannot restore points from before a reset. **Reset history / Undo** shows saved resets. Only ginaria can choose **Undo points reset**, review the confirmation, and restore the selected reset’s saved scores and streak state. All affected people are restored together or none. New completions, another reset, or changed scores block Undo so later work is not overwritten. Reset and recovery audit records remain saved; completion history is unchanged. Undoing a reset does not re-enable Undo on completions from before that reset. There is no arbitrary manual score-adjustment control.
+
 ## Take work and finish it
 
 From an available chore’s card:
@@ -83,6 +89,8 @@ Trade DMs start off. A person can authorize notifications to their own account i
 After Done, the chore card offers **Undo completion** for your most recent recorded completion. Completion history also offers Undo with confirmation.
 
 Undo restores the previous chore state, claim, points, and streak values together. It is deliberately conservative: you must undo your most recent recorded completion first, and its occurrence, ownership, schedule, and points must still match. A later reset or edit can make safe undo unavailable. It cannot reconstruct completions made before this update.
+
+**Ginaria can assist another person** from the chore card → Completion history → Choose completion to correct. The confirmation identifies the original person and points being reversed. It restores that person’s prior points/streak and the chore responsibility together, keeps the completion marked Undone, and records who corrected it. This uses the same safety rules: it must be that person’s latest completion, with no conflicting later state or score changes. It cannot force a rewind of later work or reconstruct unrecorded completions.
 
 **Completion history starts with this release.** Earlier point totals remain intact, but earlier individual completions were not recorded in a reconstructable ledger. Undone records remain visible as Undone.
 
@@ -127,7 +135,7 @@ From a chore card choose **Give feedback**. Add comments, a better day/time, sug
 
 Feedback is household information displayed through private controls. It is not an anonymous or confidential message to the owner. New feedback is also DMed to ginaria. If Discord blocks the DM, it remains saved in the inbox. Older feedback appears in the inbox without a DM backlog.
 
-Ginaria’s **Review inbox** opens each review directly. **Resolve and next** advances the queue. **Edit chore** opens the relevant settings. Only ginaria can resolve reviews; everyone can contribute and read the individual chore discussion. Resolving a review does not apply a suggestion or delete it. Edits change future point awards and schedules deliberately.
+Ginaria’s **Review inbox** opens each review directly. **Resolve and next** advances the queue. **Edit chore** opens the relevant settings. Only ginaria can resolve reviews; everyone can contribute and read the individual chore discussion. Resolving a review does not apply a suggestion or delete it. Ginaria can open **Review inbox → Resolved reviews → Reopen review**, then confirm. This returns the same saved review to the open inbox, records the owner action, and sends no duplicate DM. Edits change future point awards and schedules deliberately.
 
 ## Add, edit, archive, and restore
 
@@ -148,3 +156,25 @@ Open a chore card → More actions → Edit chore. Edit details changes the name
 - **Undo unavailable.** Later work or changes prevent an automatic safe reversal; no second award or partial reversal is performed.
 
 Administrator setup and deployment instructions are in BUTTON-BOARD.md and the household’s How I Do Things manual.
+
+## What can be changed or undone?
+
+This table describes available controls, not a promise that every action has universal Undo.
+
+| Action | Change or reverse it | Limit |
+| --- | --- | --- |
+| Claim, weekly reservation, ongoing assignment | Drop or Reassign from the chore card. | Earned points stay with the completing person. |
+| Done | Completing person uses Undo; ginaria can correct another person through Completion history, with confirmation. | Latest completion for the original person first; later state changes or a points reset can prevent correction. |
+| Reassign or accepted trade | Reassign again or arrange a new accepted trade. | No one-click reversal of the original transfer. |
+| Pending trade | Sender cancels; recipient declines or accepts. | Accepted proposals are not cancelable. |
+| Name, instructions, room, point value, regular schedule | Edit the chore again. | No edit-version restore; a regular schedule change clears an occurrence move. |
+| One occurrence moved to another date | Cancel occurrence move, or replace its date. | Does not restore a previous move automatically. |
+| Missed chore skipped | Change future missed-work policy. | No control to recover that missed occurrence; no completion or points were awarded. |
+| Archive | Restore from Archived chores. | Restores saved state, not an earlier version. |
+| Trip or attendance exception | Edit dates or cancel the exception. | No generic restore button for a canceled exception. |
+| Feedback and point suggestions | Submit follow-up feedback; latest point vote per person is shown. Ginaria can reopen a resolved review with confirmation. | No edit/delete feedback button; reopening sends no duplicate DM. |
+| AM/PM split | Edit or archive either resulting chore. | No merge-back control; original history stays with the original chore ID. |
+| Points reset | Ginaria can undo through Reset history / Undo, with confirmation and an audit record. | Newer score activity for any affected person blocks the whole restoration; no arbitrary point adjustment. |
+| Trade notifications | Toggle on or off. | Already-sent DMs cannot be recalled. |
+
+Remaining improvements to consider: arbitrary owner score adjustments with an audit and reversal, correction after later work makes safe completion reversal impossible, editing feedback, and recovering a skipped occurrence. Automatic reminders and point redemption are also not implemented. None of these are implied by the current guide.
