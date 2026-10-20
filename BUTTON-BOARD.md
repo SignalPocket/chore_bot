@@ -73,3 +73,7 @@ The first-ever installation uses !choreboard once in the intended channel, then 
 The suite covers existing scheduling, points, claims, weekly reservations, date exceptions, stale actions, archive/restore, and access boundaries. Redesign coverage adds personal upcoming views, actionable household cards, common navigation, search/filters, owner-only resolution, transaction rollback on history-write failure, safe Undo, multi-person trip atomicity, edited exception history, occurrence moves, opt-in notification deduplication, and Discord message/component limits.
 
 Local preparation, pushed code, installed code, a running service, and verified live Discord behavior are distinct states. Record the actual state in the deployment manual.
+
+
+## Personal list polish and button-based scores
+My chores shows the caller’s points total at the top and uses Completed for the history tab. Due-now rows omit the repeated caller name/status while retaining twice-daily slot and coverage information. Other household views retain owner/status context. Dashboard → Points & standings opens a private V2 score view with caller total/streak, paged household rankings, shared ranks for ties, Refresh, and Dashboard. Reading scores does not create users or change points.

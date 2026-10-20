@@ -12,6 +12,7 @@ Open **/chores** in the household Discord server. Sprig opens your private works
 | Who’s home? | Normal attendance, trips, and traded days. |
 | Manage chores | Add chores and archive or restore them. Open a chore card to edit its details. |
 | Trades | Incoming and outgoing proposals. The dashboard shows your incoming count. |
+| Points & standings | Your total and streak, plus household standings, shown privately with buttons. |
 | Notifications | Opt in to private trade notifications for your own account. |
 | Help | Short task-oriented explanations, including the color legend. |
 | Review inbox | Ginaria’s queue of household feedback. This button is visible only to ginaria. |
@@ -37,13 +38,15 @@ The three responsibility durations are **Just this time**, **This week / Next we
 
 ## See your work and find chores
 
-**My chores** has Due now, This week, Next week, Upcoming, and Done tabs. Being away does not erase your responsibilities. Upcoming work stays visible, but cannot be completed before it becomes available. Done lists chores with recorded completions by you; open the card’s Completion history for individual records.
+**My chores** has Due now, This week, Next week, Upcoming, and Completed tabs. Being away does not erase your responsibilities. Upcoming work stays visible, but cannot be completed before it becomes available. Completed lists chores with recorded completions by you; open the card’s Completion history for individual records.
 
 **Pick up chores** offers Due now, This week, Next week, and All chores. Weekly reservations are available only for eligible recurring chores. Monthly and one-time work can be taken when its occurrence is available or assigned on an ongoing basis where applicable.
 
 **Household** offers the same time views, plus By person / By chore / By day and an Unclaimed only filter. A two-day chore appears on both scheduled days; totals count the chore once. Daily work has an Every day group. Flexible work keeps its weekly/monthly label without an invented weekday. The view warns when an owner is away for scheduled work.
 
 Use **Search** for a name or words in instructions. **Filters** can select a person, room, or exact date. The date filter shows dated occurrences; flexible weekly/monthly work has no exact day until a day or occurrence move is chosen. Clear filters to return to the full list. View preferences are remembered for your account while the bot is running.
+
+Your points total appears at the top of My chores and updates when you mark work done. The dashboard’s **Points & standings** button shows your total, streak, and household standings without typing commands. Tied scores share a rank. Points stay with the completing Discord account and do not currently redeem anything.
 
 ## Take work and finish it
 

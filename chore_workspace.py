@@ -181,6 +181,7 @@ def install(ns, ui, lock):
             self.button('Help', lambda i: present(i, Guide(owner)), row=1)
             self.button(f'Trades ({incoming} incoming)', lambda i: present(i, adapt(ui.TradeInboxView(owner), owner)), row=2)
             self.button('Notifications', lambda i: present(i, Notifications(owner)), row=2)
+            self.button('Points & standings',lambda i:present(i,Points(owner,i.guild)),row=2)
             if incoming: self.embed.add_field(name='Waiting for you', value=f'{incoming} incoming trade request(s).', inline=False)
             if owner == OWNER:
                 count = db.execute('SELECT COUNT(*) FROM chore_feedback WHERE reviewed=0').fetchone()[0]
@@ -191,6 +192,28 @@ def install(ns, ui, lock):
                     self.button('Household setup', lambda i: present(i, adapt(ui.HouseholdSetup(owner), owner)), row=3)
             total = db.execute('SELECT points,streak FROM users WHERE id=?', (str(owner),)).fetchone()
             self.embed.set_footer(text=(f'{total[0]} points · {total[1]} day streak · ' if total else '') + 'Reopen /chores after ten minutes or a restart.')
+
+    class Points(View):
+        def __init__(self,owner,guild=None,page=0):
+            super().__init__(owner)
+            total=db.execute('SELECT points,streak FROM users WHERE id=?',(str(owner),)).fetchone() or (0,0)
+            records=db.execute('SELECT id,points FROM users ORDER BY points DESC,id').fetchall()
+            page=min(max(page,0),max((len(records)-1)//5,0))
+            chunk=records[page*5:(page+1)*5]
+            self.name_ids=[r[0] for r in chunk]
+            self.rebuild=lambda:Points(owner,guild,page)
+            self.embed=discord.Embed(title='Points & standings',description=f'⭐ Your total: **{total[0]} points**\n🔥 Your streak: **{total[1]} day(s)**\nPoints belong to the person who completes the chore. They do not currently redeem rewards.',color=0x6B9B77)
+            rank=0;previous=None
+            for index,(uid,points) in enumerate(records):
+                if points!=previous:rank=index+1
+                previous=points
+                if page*5<=index<(page+1)*5:
+                    self.embed.add_field(name=f'{rank}. '+clean(person(uid,guild),100),value=f'{points} points',inline=False)
+            if not records:self.embed.add_field(name='No scores yet',value='Finish a chore to start earning points.')
+            if page:self.button('Previous',lambda i:present(i,Points(owner,i.guild,page-1)),row=3)
+            if (page+1)*5<len(records):self.button('Next',lambda i:present(i,Points(owner,i.guild,page+1)),row=3)
+            self.button('Refresh',lambda i:present(i,Points(owner,i.guild,page)),row=3)
+            self.nav()
 
     class Search(discord.ui.Modal):
         def __init__(self, owner, state):
@@ -283,6 +306,9 @@ def install(ns, ui, lock):
             if date_filter: description+=' · Dated occurrences: '+date_filter
             if tab in ('week','next'):
                 description += f'\n{ui.week_start(offset):%b %d}, 6 p.m. → {ui.week_start(offset+1):%b %d}, 6 p.m. Eastern'
+            if area=='mine':
+                total=db.execute('SELECT points FROM users WHERE id=?',(str(owner),)).fetchone()
+                description='⭐ Your total: **'+str(total[0] if total else 0)+' points**\n'+description
             if area == 'mine' and not ui.available(owner): description += '\nYou’re away today. Responsibilities remain saved; review coverage before completing work.'
             self.embed = discord.Embed(title=title, description=description, color=0x6B9B77)
             self.quick_rows=[]
@@ -295,7 +321,15 @@ def install(ns, ui, lock):
                     last=db.execute('SELECT completed_at FROM completion_log WHERE quest_id=? AND user_id=? AND undone_at IS NULL ORDER BY id DESC LIMIT 1',(q[0],str(owner))).fetchone()
                     status='Last completed '+last[0][:16].replace('T',' ') if last else status
                 self.quick_rows.append((q[0],ui.snapshot(q[0]),tab not in ('next','upcoming','done') and offset==0 and uid==str(owner) and not q[5] and ready(q[0])))
-                self.embed.add_field(name=clean(heading, 200), value=(f'{timing.compact_label(q[2])} · {q[3]} points\n{clean(person(uid,guild),100)} · {status}' + ('\n⚠ ' + clean(warning, 180) if warning else ''))[:450], inline=False)
+                details=f'{timing.compact_label(q[2])} · {q[3]} points'
+                if area=='mine':
+                    if tab=='due':
+                        slot='AM slot' if q[2]=='twice-daily' and timing.now().hour<12 else 'PM slot' if q[2]=='twice-daily' else ''
+                        if slot:details+='\n'+slot
+                    else:details+='\n'+status
+                else:details+='\n'+clean(person(uid,guild),100)+' · '+status
+                if warning:details+='\n⚠ '+clean(warning,180)
+                self.embed.add_field(name=clean(heading,200),value=details[:450],inline=False)
             if not chunk: self.embed.add_field(name='Nothing matches', value='Try another tab or clear your filters. Upcoming work and saved responsibilities remain in the other views.')
             if chunk:
                 unique = {q[0]:q for heading,q in chunk}
@@ -303,7 +337,7 @@ def install(ns, ui, lock):
                 async def choose(i): await present(i, Card(owner, int(picker.values[0]), back=back, guild=i.guild, offset=offset))
                 picker.callback = choose
                 self.add_item(picker)
-            tabs = [('Due now', 'due'), ('This week', 'week'), ('Next week','next'), ('Upcoming', 'upcoming'), ('Done', 'done')] if area == 'mine' else [('Due now', 'due'), ('This week', 'week'), ('Next week', 'next'), ('All chores','all')]
+            tabs = [('Due now', 'due'), ('This week', 'week'), ('Next week','next'), ('Upcoming', 'upcoming'), ('Completed', 'done')] if area == 'mine' else [('Due now', 'due'), ('This week', 'week'), ('Next week', 'next'), ('All chores','all')]
             for label, value in tabs:
                 async def switch(i, value=value): await present(i, Browse(owner, **dict(self.state, tab=value, page=0), guild=i.guild))
                 self.button(label, switch, row=1, primary=value == tab)
@@ -781,7 +815,7 @@ def install(ns, ui, lock):
             self.nav(back)
 
     TOPICS = {
-        'Start here':'My chores shows Due now, This week, Upcoming, and Done. Pick up chores lets you take work just once or for a week. Household shows everyone’s work; every chore opens the same card.',
+        'Start here':'My chores shows your points total, Due now, This week, Upcoming, and Completed. Points & standings on the dashboard shows scores without commands. Pick up chores lets you take work just once or for a week. Household shows everyone’s work; every chore opens the same card.',
         'Taking responsibility':'Just this time takes one due occurrence. Take this week / next week reserves repeating work until Sunday 6 p.m. An ongoing assignment continues across weeks. Drop and Reassign show scope before saving. Trades change nothing until accepted.',
         'Dates and colors':DAY_LEGEND+'\nAll times are Eastern. Daily resets at midnight, twice daily at noon and midnight, weekly Sunday 6 p.m., monthly on the first. Flexible weekly/monthly markers do not imply a weekday.',
         'Schedules and missed work':'Change regular day changes future weeks. Move this occurrence changes one unfinished occurrence. Edit chore → Missed chores chooses Keep overdue or Skip if missed. Notes such as “afternoon” are instructions, not automatic reminders.',
@@ -801,4 +835,4 @@ def install(ns, ui, lock):
             self.add_item(picker)
             self.nav()
 
-    return SimpleNamespace(LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
+    return SimpleNamespace(Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)

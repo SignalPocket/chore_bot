@@ -2099,6 +2099,71 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(params.payload['embeds'],[])
             self.assertEqual(params.payload['allowed_mentions']['parse'],[])
 
+    async def test_polished_my_due_list_omits_repeated_name_status_and_keeps_slot(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("UPDATE quests SET frequency='twice-daily' WHERE id=1")
+            self.db.execute("INSERT INTO claims VALUES(1,'10')");self.db.commit()
+            view=self.ui.workspace.Browse(10,'mine',guild=Interaction().guild)
+            for field in view.embed.fields:
+                self.assertNotIn('Person 10',field.value)
+                self.assertNotIn('Due now',field.value)
+            self.assertIn('AM slot',str(view.embed.to_dict()))
+            self.assertIn('Due now',view.embed.description)
+            self.assertIn('5 points',str(view.embed.to_dict()))
+
+    async def test_polished_completed_tab_has_distinct_label_from_done_action(self):
+        with self.clock('2026-10-20T10:00:00'):
+            view=self.ui.workspace.Browse(10,'mine')
+            labels=[getattr(c,'label',None) for c in view.children]
+            self.assertIn('Completed',labels);self.assertNotIn('Done',labels)
+            panel=self.ui.workspace.render(view)
+            self.assertTrue(any(isinstance(c,discord.ui.Section) and c.accessory.label=='Done' for c in panel.children))
+            event=Interaction();await next(c for c in view.children if getattr(c,'label',None)=='Completed').callback(event)
+            self.assertEqual(event.response.payload['view'].state['tab'],'done')
+
+    async def test_polished_personal_total_refreshes_after_inline_done_and_undo(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("INSERT INTO users(id,points) VALUES('10',40)");self.db.commit()
+            w=self.ui.workspace;panel=w.render(w.Browse(10,'mine'))
+            self.assertIn('40 points',panel.children[0].content)
+            event=Interaction();await next(c.accessory for c in panel.children if isinstance(c,discord.ui.Section) and 'My bathroom' in c.children[0].content).callback(event)
+            self.assertIn('50 points',event.response.payload['embed'].description)
+            self.assertIn('undone',self.ui.undo_completion(10,1))
+            self.assertIn('40 points',w.Browse(10,'mine').embed.description)
+
+    async def test_points_button_is_private_read_only_and_rejects_other_viewers(self):
+        self.db.executemany('INSERT INTO users(id,points,streak) VALUES(?,?,?)',[('10',20,3),('20',45,2)]);self.db.commit()
+        before=list(self.db.iterdump());w=self.ui.workspace;event=Interaction()
+        await next(c for c in w.Dashboard(10,event.guild).children if c.label=='Points & standings').callback(event)
+        panel=event.response.wire_payload['view'];self.assertIsInstance(panel,w.LayoutPanel)
+        self.assertIn('20 points',panel.source.embed.description)
+        self.assertIn('3 day(s)',panel.source.embed.description)
+        self.assertTrue(await panel.interaction_check(event))
+        other=Interaction(20);self.assertFalse(await panel.interaction_check(other))
+        self.assertTrue(other.response.wire_payload[1]['ephemeral'])
+        self.assertEqual(before,list(self.db.iterdump()))
+
+    async def test_points_standings_handle_empty_users_ties_and_pagination(self):
+        w=self.ui.workspace;before=list(self.db.iterdump());empty=w.Points(10)
+        self.assertIn('0 points',empty.embed.description)
+        self.assertEqual(before,list(self.db.iterdump()))
+        self.db.executemany('INSERT INTO users(id,points) VALUES(?,?)',[(str(n),100 if n<3 else 90-n) for n in range(1,9)]);self.db.commit()
+        first=w.Points(10,Interaction().guild)
+        self.assertTrue(first.embed.fields[0].name.startswith('1.'))
+        self.assertTrue(first.embed.fields[1].name.startswith('1.'))
+        self.assertTrue(first.embed.fields[2].name.startswith('3.'))
+        event=Interaction();await next(c for c in first.children if getattr(c,'label',None)=='Next').callback(event)
+        self.assertEqual(len(event.response.payload['embed'].fields),3)
+        self.assertTrue(event.response.payload['embed'].fields[0].name.startswith('6.'))
+        self.assertLessEqual(len(event.response.wire_payload['view'].to_components()),40)
+
+    async def test_household_keeps_owner_and_due_status_for_context(self):
+        with self.clock('2026-10-20T10:00:00'):
+            view=self.ui.workspace.Browse(10,'household',tab='due',guild=Interaction().guild)
+            field=next(f for f in view.embed.fields if 'My bathroom' in f.name)
+            self.assertIn('Person 10',field.value);self.assertIn('Due now',field.value)
+
+
     async def test_help_button_is_persistent_private_and_changes_no_data(self):
         before = list(self.db.iterdump())
         view = self.ui.Launcher()
@@ -2110,7 +2175,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         options = event.response.payload[1]
         self.assertTrue(options['ephemeral'])
         guide = str(options['embed'].to_dict())
-        for phrase in ['My chores','Due now','Upcoming','Done','Pick up chores','Household','same card']:
+        for phrase in ['My chores','Due now','Upcoming','Completed','Pick up chores','Household','same card']:
             self.assertIn(phrase, guide)
         self.assertEqual(list(self.db.iterdump()), before)
 
