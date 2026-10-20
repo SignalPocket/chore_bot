@@ -723,8 +723,7 @@ async def done(ctx, quest_id: int):
         f"+{points_val} points\n"
         f"🔥 Streak: {streak}\n"
         f"⭐ Total: {new_points}\n"
-        f"🕰️ {reset_message}\n\n"
-        "Sprig is spinning in a tiny circle of celebration 💫"
+        f"🕰️ {reset_message}"
     )
 
 
