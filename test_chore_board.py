@@ -668,6 +668,50 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(event.result['view'].offset,1)
             self.assertIn('Next week',event.result['embed'].description)
 
+    async def test_claim_and_done_fast_path_use_single_response(self):
+        with self.clock('2026-10-20T10:00:00'):
+            claim=Interaction()
+            await self.ui.PersonalView(10,selected=1).act(claim,'claim')
+            self.assertFalse(claim.response.acknowledged)
+            self.assertIsNotNone(claim.response.payload['view'])
+            self.assertIsNone(claim.result)
+            done=Interaction()
+            await self.ui.PersonalView(10,'mine',selected=1).act(done,'done')
+            self.assertFalse(done.response.acknowledged)
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone()[0],5)
+
+    async def test_slow_claim_defers_and_mutates_only_once(self):
+        import chore_board
+        command=self.app.bot.get_command('claim')
+        original=command.callback
+        calls=[]
+        async def slow(ctx,qid):
+            calls.append(qid)
+            await asyncio.sleep(0.03)
+            await original(ctx,qid)
+        with self.clock('2026-10-20T10:00:00'),patch.object(chore_board,'ACTION_ACK_SECONDS',0.001),patch.object(command,'_callback',slow):
+            event=Interaction()
+            await self.ui.PersonalView(10,selected=1).act(event,'claim')
+            self.assertTrue(event.response.acknowledged)
+            self.assertIsNotNone(event.result['view'])
+            self.assertEqual(calls,[1])
+            self.assertEqual(self.db.execute('SELECT count(*) FROM claims WHERE quest_id=1').fetchone()[0],1)
+
+    async def test_roster_reuses_name_lookup_until_expiry_and_prefers_live_cache(self):
+        guild=SimpleNamespace(id=1,get_member=lambda uid:None,fetch_member=AsyncMock(return_value=SimpleNamespace(display_name='Katie')))
+        import chore_board
+        with patch.object(chore_board,'monotonic',return_value=100):
+            await self.ui.responsibility_view(10,guild)
+            await self.ui.responsibility_view(10,guild,1)
+            guild.fetch_member.assert_awaited_once()
+        with patch.object(chore_board,'monotonic',return_value=401):
+            await self.ui.responsibility_view(10,guild)
+            self.assertEqual(guild.fetch_member.await_count,2)
+        guild.get_member=lambda uid:SimpleNamespace(display_name='New nickname')
+        view=await self.ui.responsibility_view(10,guild)
+        self.assertIn('New nickname',str(view.embed.to_dict()))
+        self.assertEqual(guild.fetch_member.await_count,2)
+
     async def test_roster_fetches_uncached_member_nickname(self):
         guild=SimpleNamespace(get_member=lambda uid:None,fetch_member=AsyncMock(return_value=SimpleNamespace(display_name='Katie nickname')))
         view=await self.ui.responsibility_view(10,guild)
@@ -825,6 +869,91 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('🟣',self.ui.timing.label('away:saturday'))
         view=self.ui.ResponsibilityView(10,Interaction().guild)
         self.assertIn(DAY_LEGEND,view.embed.description)
+
+    async def test_missed_policy_defaults_keep_and_weekday_skip_expires_at_midnight(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.create_chore('Tuesday cleanup','tuesday','5','')
+            qid=self.db.execute("SELECT id FROM quests WHERE name='Tuesday cleanup'").fetchone()[0]
+            self.assertEqual(self.ui.timing.policy(qid),'keep')
+            self.ui.signup(10,qid,self.ui.week_key())
+            self.assertIn('Saved',self.ui.timing.set_policy(qid,'skip'))
+        with self.clock('2026-10-20T23:59:59'):
+            self.app.reset_due_quests()
+            self.assertTrue(self.ui.ready(qid))
+        with self.clock('2026-10-21T00:00:00'):
+            self.app.reset_due_quests()
+            self.assertFalse(self.ui.ready(qid))
+            self.assertEqual(self.ui.weekly_owner(qid),'10')
+            self.assertEqual(self.db.execute('SELECT completed,last_completed FROM quests WHERE id=?',(qid,)).fetchone(),(0,None))
+        with self.clock('2026-10-27T00:00:00'):
+            self.app.reset_due_quests()
+            self.assertTrue(self.ui.ready(qid))
+
+    async def test_keep_overdue_and_switch_to_skip_preserves_points(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.create_chore('Tuesday bins','tuesday','5','')
+            qid=self.db.execute("SELECT id FROM quests WHERE name='Tuesday bins'").fetchone()[0]
+            self.db.execute('INSERT INTO claims VALUES (?,?)',(qid,'10'))
+            self.db.execute("INSERT INTO users(id,points) VALUES ('10',30)")
+            self.db.commit()
+        with self.clock('2026-10-22T10:00:00'):
+            self.app.reset_due_quests()
+            self.assertTrue(self.ui.ready(qid))
+            self.ui.timing.set_policy(qid,'skip')
+            self.assertFalse(self.ui.ready(qid))
+            self.assertIsNone(self.db.execute('SELECT user_id FROM claims WHERE quest_id=?',(qid,)).fetchone())
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone()[0],30)
+
+    async def test_daily_and_twice_daily_skip_only_release_expired_occurrence(self):
+        for frequency,before,after in [('daily','2026-10-20T23:59:00','2026-10-21T00:00:00'),('twice-daily','2026-10-20T11:59:00','2026-10-20T12:00:00')]:
+            with self.clock(before):
+                self.db.execute('UPDATE quests SET frequency=? WHERE id=1',(frequency,))
+                self.db.execute("INSERT OR REPLACE INTO claims VALUES (1,'10')")
+                self.db.commit()
+                self.ui.timing.set_policy(1,'skip')
+                self.app.reset_due_quests()
+                self.assertIsNotNone(self.db.execute('SELECT * FROM claims WHERE quest_id=1').fetchone())
+            with self.clock(after):
+                self.app.reset_due_quests()
+                self.assertIsNone(self.db.execute('SELECT * FROM claims WHERE quest_id=1').fetchone())
+                self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=1').fetchone()[0],0)
+
+    async def test_skip_weekly_monthly_boundaries_and_one_time_rejected(self):
+        for frequency,before,after in [('weekly','2026-10-25T17:59:00','2026-10-25T18:00:00'),('monthly','2026-10-31T23:59:00','2026-11-01T00:00:00')]:
+            with self.clock(before):
+                self.db.execute('UPDATE quests SET frequency=? WHERE id=1',(frequency,))
+                self.db.execute("INSERT OR REPLACE INTO claims VALUES (1,'10')")
+                self.db.commit()
+                self.ui.timing.set_policy(1,'skip')
+            with self.clock(after):
+                self.app.reset_due_quests()
+                self.assertIsNone(self.db.execute('SELECT * FROM claims WHERE quest_id=1').fetchone())
+        self.db.execute("UPDATE quests SET frequency='one-time' WHERE id=1")
+        self.db.commit()
+        self.assertIn('no deadline',self.ui.timing.set_policy(1,'skip'))
+
+    async def test_alternating_skip_persists_over_dst_and_downtime(self):
+        with self.clock('2026-10-24T10:00:00'):
+            self.ui.create_chore('Yard debris','away:saturday','5','')
+            qid=self.db.execute("SELECT id FROM quests WHERE name='Yard debris'").fetchone()[0]
+            self.ui.timing.set_policy(qid,'skip')
+        with self.clock('2026-11-08T10:00:00'):
+            self.app.reset_due_quests()
+            self.assertFalse(self.ui.ready(qid))
+            self.assertTrue(self.ui.timing.state(qid)[0].startswith('2026-11-21T00:00:00-05:00'))
+            from chore_timing import ChoreTiming
+            loaded=ChoreTiming(vars(self.app),self.db)
+            self.assertEqual(loaded.policy(qid),'skip')
+
+    async def test_missed_policy_ui_stale_and_ownership_checks(self):
+        event=Interaction()
+        view=self.ui.MissedChoreView(10,1,self.ui.snapshot(1))
+        self.assertFalse(await view.interaction_check(Interaction(20)))
+        self.assertTrue(await view.interaction_check(event))
+        self.ui.timing.set_policy(1,'skip')
+        await view.children[0].callback(event)
+        self.assertIn('changed',event.response.payload['content'])
+        self.assertEqual(self.ui.timing.policy(1),'skip')
 
     async def test_help_button_is_persistent_private_and_changes_no_data(self):
         before = list(self.db.iterdump())

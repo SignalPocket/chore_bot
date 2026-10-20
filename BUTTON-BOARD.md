@@ -121,3 +121,11 @@ Anyone with household access can open Reassign, choose a chore, scope (this occu
 The household overview now groups compact chore lines under each person or Needs someone, with 12 chores per page and a short assigned/unclaimed count. Schedule labels are shortened (Wed, Tue / Fri, AM + PM). Single claims, ongoing assignments, and done status are marked only when relevant; long repeating explanations are removed.
 
 Day markers consistently run Monday red, Tuesday orange, Wednesday yellow, Thursday green, Friday blue, Saturday purple, Sunday pink. Both the day name and color are shown. They appear in weekday pickers, schedule labels, and the weekly overview; the overview and weekly sign-ups include a legend. Daily/weekly/monthly schedules keep their labels without implying a specific due weekday.
+
+Overview name lookups reuse fetched names for up to five minutes per server/account; current cached Discord member names take precedence. Unresolved names are retried. Initial lookups run with a limit of three in parallel. Page/week changes reuse names while chore data is refreshed each time.
+
+Fast Claim/Done/Release actions update the private list in one response. If work is still pending after one second, Sprig acknowledges it and finishes the same operation without retrying it. Action duration is logged without chore names or account details for diagnosis.
+
+## Missed chores
+
+Edit chore → choose chore → Missed chores → Keep overdue / Skip if missed. Existing chores default to Keep overdue. Scheduled weekdays/alternating days expire at midnight after their due day. Daily/twice-daily slots expire at the next midnight/noon boundary, weekly on Sunday 6 p.m., monthly on the first. Skip advances missed scheduled chores and releases expired single claims without completion credit or points. Weekly reservations, assignments, names, and history remain. One-time chores have no deadline and cannot use Skip until given a repeating schedule. Changing to Skip may immediately drop an already-overdue occurrence; switching back to Keep does not resurrect previously skipped work. New chores start on Keep and can be changed through Edit.

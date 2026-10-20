@@ -22,6 +22,7 @@ class ChoreTiming:
         self.ns, self.db = namespace, db
         self.original_reset = namespace['calculate_reset_after']
         self.db.execute('CREATE TABLE IF NOT EXISTS chore_timing (quest_id INTEGER PRIMARY KEY, ready_from TEXT NOT NULL)')
+        self.db.execute("CREATE TABLE IF NOT EXISTS missed_chore_policy (quest_id INTEGER PRIMARY KEY, policy TEXT NOT NULL CHECK(policy IN ('keep','skip')), deadline TEXT)")
         self.db.commit()
         namespace['VALID_FREQUENCIES'].update(('twice-daily', *SCHEDULED))
         namespace['FREQUENCY_ALIASES'].update({value: value for value in ('twice-daily', *SCHEDULED)})
@@ -78,6 +79,51 @@ class ChoreTiming:
             self.db.execute('INSERT OR REPLACE INTO chore_timing VALUES (?,?)',(quest_id,ready.isoformat()))
         else:
             self.db.execute('DELETE FROM chore_timing WHERE quest_id=?',(quest_id,))
+        if self.policy(quest_id)=='skip':
+            self.db.execute('UPDATE missed_chore_policy SET deadline=? WHERE quest_id=?',(self.deadline(quest_id,frequency),quest_id))
+
+    def policy(self, quest_id):
+        row=self.db.execute('SELECT policy FROM missed_chore_policy WHERE quest_id=?',(quest_id,)).fetchone()
+        return row[0] if row else 'keep'
+
+    def policy_state(self, quest_id):
+        return self.db.execute('SELECT policy,deadline FROM missed_chore_policy WHERE quest_id=?',(quest_id,)).fetchone()
+
+    def deadline(self, quest_id, frequency):
+        if frequency in SCHEDULED:
+            state=self.state(quest_id)
+            ready=datetime.fromisoformat(state[0]) if state else self.next_due(self.now(),frequency)
+            return (ready+timedelta(days=1)).isoformat()
+        return self.calculate_reset(self.now(),frequency)
+
+    def set_policy(self, quest_id, policy):
+        row=self.db.execute('SELECT frequency FROM quests WHERE id=?',(quest_id,)).fetchone()
+        if not row or policy not in ('keep','skip'):
+            return 'Choose a valid missed-chore setting.'
+        if row[0]=='one-time' and policy=='skip':
+            return 'One-time chores have no deadline to skip. Keep overdue, or choose a repeating schedule first.'
+        with self.db:
+            self.db.execute('INSERT OR REPLACE INTO missed_chore_policy VALUES(?,?,?)',(quest_id,policy,self.deadline(quest_id,row[0]) if policy=='skip' else None))
+        self.skip_missed()
+        return 'Saved: '+('Skip if missed. Missed occurrences earn no points.' if policy=='skip' else 'Keep overdue. It remains due until completed.')
+
+    def skip_missed(self):
+        now=self.now()
+        rows=self.db.execute("SELECT q.id,q.frequency,q.completed,p.deadline FROM quests q JOIN missed_chore_policy p ON p.quest_id=q.id WHERE p.policy='skip'").fetchall()
+        with self.db:
+            for qid,frequency,completed,deadline in rows:
+                if frequency=='one-time':
+                    continue
+                if not deadline:
+                    self.db.execute('UPDATE missed_chore_policy SET deadline=? WHERE quest_id=?',(self.deadline(qid,frequency),qid))
+                    continue
+                if now < datetime.fromisoformat(deadline):
+                    continue
+                if not completed:
+                    self.db.execute('DELETE FROM claims WHERE quest_id=?',(qid,))
+                if frequency in SCHEDULED:
+                    self.db.execute('INSERT OR REPLACE INTO chore_timing VALUES(?,?)',(qid,self.next_due(now,frequency).isoformat()))
+                self.db.execute('UPDATE missed_chore_policy SET deadline=? WHERE quest_id=?',(self.deadline(qid,frequency),qid))
 
     def state(self, quest_id):
         return self.db.execute('SELECT ready_from FROM chore_timing WHERE quest_id=?',(quest_id,)).fetchone()
@@ -98,16 +144,24 @@ class ChoreTiming:
         reset=self.calculate_reset(when,frequency)
         if frequency in SCHEDULED:
             self.db.execute('INSERT OR REPLACE INTO chore_timing VALUES (?,?)',(quest_id,reset))
+        if self.policy(quest_id)=='skip':
+            self.db.execute('UPDATE missed_chore_policy SET deadline=? WHERE quest_id=?',(self.deadline(quest_id,frequency),quest_id))
         return reset
 
-    def label(self, frequency):
+    def schedule_label(self, frequency):
         if frequency == 'twice-daily':
             return 'Twice daily · morning (before noon) / afternoon-evening (after noon)'
         if frequency in WEEKDAYS:
-            return f'Every {day_badge(frequency,True)} · stays due until done'
+            return f'Every {day_badge(frequency,True)}'
         if frequency in PAIRED_DAYS:
-            return 'Every ' + ' and '.join(day_badge(d,True) for d in frequency[5:].split(',')) + ' · stays due until done'
+            return 'Every ' + ' and '.join(day_badge(d,True) for d in frequency[5:].split(',')) + ''
         if frequency in ALTERNATING_DAYS:
             phase, day = frequency.split(':')
-            return f'Every other {day_badge(day,True)} · Kas/Z {phase} weeks · stays due until done'
+            return f'Every other {day_badge(day,True)} · Kas/Z {phase} weeks'
         return frequency.capitalize()
+
+    def label(self, frequency, quest_id=None):
+        text=self.schedule_label(frequency)
+        if quest_id is not None:
+            text+=' · '+('Skip if missed' if self.policy(quest_id)=='skip' else 'Keep overdue')
+        return text

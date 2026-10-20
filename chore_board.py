@@ -1,5 +1,6 @@
 """Button interface for Sprig; existing commands remain the source of mutations."""
 import asyncio
+from time import monotonic
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
@@ -8,6 +9,7 @@ from discord.ext import commands
 from chore_timing import ChoreTiming, WEEKDAYS, WEEKLY_FREQUENCIES, DAY_COLORS, DAY_LEGEND, day_badge
 
 PAGE_SIZE = 20
+ACTION_ACK_SECONDS = 1.0
 
 
 def install(namespace):
@@ -56,6 +58,7 @@ def install(namespace):
     original_reset = api.reset_due_quests
 
     def reset_with_availability():
+        timing.skip_missed()
         result = original_reset()
         # A claim made during a home week must not strand a chore in an away week.
         away = [r[0] for r in db.execute("SELECT user_id FROM alternating_members").fetchall() if not available(r[0])]
@@ -123,7 +126,7 @@ def install(namespace):
         row = db.execute("""SELECT q.completed, q.last_completed, q.assigned_to, c.user_id
             FROM quests q LEFT JOIN claims c ON c.quest_id = q.id WHERE q.id = ?""", (quest_id,)).fetchone()
         details=db.execute('SELECT name,frequency,points,notes,category,difficulty FROM quests WHERE id=?',(quest_id,)).fetchone()
-        return (row, week_key(), weekly_owner(quest_id), is_archived(quest_id), details, timing.state(quest_id))
+        return (row, week_key(), weekly_owner(quest_id), is_archived(quest_id), details, timing.state(quest_id), timing.policy_state(quest_id))
 
     def allowed(interaction):
         saved = location()
@@ -175,14 +178,14 @@ def install(namespace):
             if self.selected:
                 r = self.selected
                 responsibility = " · Yours through Sunday at 6 p.m." if weekly_owner(r[0]) == str(owner) else ""
-                self.embed.add_field(name=r[1][:256], value=f"{timing.label(r[2])} · {r[3]} points{responsibility}\n{(r[7] or '')[:650]}", inline=False)
+                self.embed.add_field(name=r[1][:256], value=f"{timing.label(r[2],r[0])} · {r[3]} points{responsibility}\n{(r[7] or '')[:650]}", inline=False)
             elif not chunk:
                 self.embed.add_field(name="All clear", value="No open chores right now." if mode == "open" else "Nothing assigned or claimed. Tap Open chores to sign up.")
             else:
                 self.embed.add_field(name="Available here", value="\n".join(f"• {discord.utils.escape_markdown(r[1])[:44]}" for r in chunk)[:1024], inline=False)
             self.embed.set_footer(text=f"Page {self.page + 1} of {max((len(self.entries) - 1) // PAGE_SIZE + 1, 1)} · Private view · Reopen from the main board after 10 minutes or a bot restart.")
             if chunk:
-                select = discord.ui.Select(placeholder="Choose a chore…", options=[discord.SelectOption(label=r[1][:100], value=str(r[0]), description=f"{timing.label(r[2])} · {r[3]} points · #{r[0]}"[:100], default=bool(self.selected and r[0] == self.selected[0])) for r in chunk])
+                select = discord.ui.Select(placeholder="Choose a chore…", options=[discord.SelectOption(label=r[1][:100], value=str(r[0]), description=f"{timing.label(r[2],r[0])} · {r[3]} points · #{r[0]}"[:100], default=bool(self.selected and r[0] == self.selected[0])) for r in chunk])
                 async def choose(interaction):
                     await self.show(interaction, selected=int(select.values[0]))
                 select.callback = choose
@@ -218,19 +221,34 @@ def install(namespace):
             await interaction.response.edit_message(embed=view.embed, view=view)
 
         async def act(self, interaction, action):
-            await interaction.response.defer()
-            async with lock:
-                api.reset_due_quests()
-                if not available(self.owner):
-                    notice = "You're away this week. Open Weekly sign-ups to plan your next home week."
-                elif snapshot(self.selected[0]) != self.expected:
-                    notice = "This chore changed since you opened it. The list has been refreshed."
-                else:
-                    context = Context(interaction)
-                    await bot.get_command(action).callback(context, self.selected[0])
-                    notice = "\n".join(context.messages)
-                view = PersonalView(self.owner, "mine" if action == "claim" else self.mode, notice=notice)
-            await interaction.edit_original_response(embed=view.embed, view=view, allowed_mentions=discord.AllowedMentions.none())
+            started=monotonic()
+            async def change():
+                async with lock:
+                    api.reset_due_quests()
+                    if not available(self.owner):
+                        notice = "You're away this week. Open Weekly sign-ups to plan your next home week."
+                    elif snapshot(self.selected[0]) != self.expected:
+                        notice = "This chore changed since you opened it. The list has been refreshed."
+                    else:
+                        context = Context(interaction)
+                        await bot.get_command(action).callback(context, self.selected[0])
+                        notice = "\n".join(context.messages)
+                    view = PersonalView(self.owner, "mine" if action == "claim" else self.mode, notice=notice)
+                return view
+            # Fast local mutations need one Discord response, not defer + edit.
+            task=asyncio.create_task(change())
+            finished,_=await asyncio.wait({task},timeout=ACTION_ACK_SECONDS)
+            deferred=not finished
+            if deferred:
+                await interaction.response.defer()
+            view=await task
+            payload=dict(embed=view.embed,view=view,allowed_mentions=discord.AllowedMentions.none())
+            if deferred:
+                await interaction.edit_original_response(**payload)
+            else:
+                await interaction.response.edit_message(**payload)
+            import logging
+            logging.getLogger(__name__).info('Chore action %s completed in %.3fs (deferred=%s)',action,monotonic()-started,deferred)
 
     def responsibility_rows(offset=0):
         api.reset_due_quests()
@@ -252,11 +270,25 @@ def install(namespace):
             result.append((str(owner) if owner else None,qid,name,frequency,kind,status))
         return result
 
+    member_names={}
+    name_lookups=asyncio.Semaphore(3)
+
     async def responsibility_view(owner,guild,offset=0,page=0):
-        names={}
         context=SimpleNamespace(guild=guild)
-        for uid in {r[0] for r in responsibility_rows(offset) if r[0]}:
-            names[uid]=await namespace['get_member_name'](context,uid)
+        async def resolve(uid):
+            key=(getattr(guild,'id',None),uid)
+            member=guild.get_member(int(uid))
+            if member:
+                return uid,member.display_name
+            cached=member_names.get(key)
+            if cached and monotonic()-cached[0]<300:
+                return uid,cached[1]
+            async with name_lookups:
+                name=await namespace['get_member_name'](context,uid)
+            if name and not name.startswith('Unknown user ('):
+                member_names[key]=(monotonic(),name)
+            return uid,name
+        names=dict(await asyncio.gather(*(resolve(uid) for uid in {r[0] for r in responsibility_rows(offset) if r[0]})))
         return ResponsibilityView(owner,guild,offset,page,names)
 
     class ResponsibilityView(SafeView):
@@ -347,7 +379,7 @@ def install(namespace):
             if self.selected:
                 r = self.selected
                 state = "You're signed up" if weekly_owner(r[0], offset) == str(owner) else "Open for the week"
-                self.embed.add_field(name=r[1][:256], value=f"{timing.label(r[2])} · {state}\n{(r[7] or '')[:700]}", inline=False)
+                self.embed.add_field(name=r[1][:256], value=f"{timing.label(r[2],r[0])} · {state}\n{(r[7] or '')[:700]}", inline=False)
             elif not chunk:
                 self.embed.add_field(name="No chores available", value="Preassigned and one-time chores aren't part of weekly sign-ups.")
             if chunk:
@@ -791,6 +823,28 @@ def install(namespace):
             result=update_chore(self.quest_id,self.name.value,self.frequency,self.points.value,self.notes.value,self.expected)
             await interaction.response.send_message(result,ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
 
+    class MissedChoreView(SafeView):
+        def __init__(self,owner,qid,expected):
+            super().__init__(timeout=600)
+            self.owner=owner
+            for label,policy in [('Keep overdue','keep'),('Skip if missed','skip')]:
+                button=discord.ui.Button(label=label,style=discord.ButtonStyle.secondary)
+                async def choose(interaction,policy=policy):
+                    async with lock:
+                        if snapshot(qid)!=expected or is_archived(qid):
+                            result='This chore changed. Reopen Edit chore before saving.'
+                        else:
+                            result=timing.set_policy(qid,policy)
+                    await interaction.response.edit_message(content=result,view=None)
+                button.callback=choose
+                self.add_item(button)
+
+        async def interaction_check(self,interaction):
+            if not can_add(interaction,self.owner):
+                await interaction.response.send_message('Open your own missed-chore settings.',ephemeral=True)
+                return False
+            return True
+
     class EditChoreView(SafeView):
         def __init__(self,owner,page=0,selected=None):
             super().__init__(timeout=600)
@@ -809,13 +863,16 @@ def install(namespace):
                 self.add_item(select)
             if chosen:
                 expected=snapshot(chosen[0])
-                self.embed.add_field(name=chosen[1][:256],value=timing.label(chosen[2]),inline=False)
+                self.embed.add_field(name=chosen[1][:256],value=timing.label(chosen[2],chosen[0]),inline=False)
                 async def details(interaction):
                     await interaction.response.send_modal(EditChoreModal(owner,chosen[0],chosen[2],expected))
                 async def schedule(interaction):
                     await interaction.response.send_message('Choose the replacement schedule, then review and submit the prefilled form.',view=AddChoreMenu(owner,chosen[0],expected),ephemeral=True)
                 self.button('Edit details',details)
                 self.button('Change schedule',schedule)
+                async def missed(interaction):
+                    await interaction.response.send_message('Keep overdue leaves unfinished work on the list. Skip if missed drops a missed occurrence without points and releases its single claim; weekly sign-ups and history stay saved. Weekday chores expire at the end of their due day. Daily/twice-daily chores expire at their next slot, weekly at Sunday 6 p.m., monthly at the next month. One-time chores have no deadline. Switching to Skip can immediately drop an already-overdue occurrence. Choose a setting to save.',view=MissedChoreView(owner,chosen[0],expected),ephemeral=True)
+                self.button('Missed chores',missed)
             if self.page:
                 self.button('Previous',lambda i:self.show(i,page=self.page-1))
             if (self.page+1)*PAGE_SIZE<len(entries):
@@ -853,7 +910,8 @@ def install(namespace):
             ('Take a whole week', 'Weekly sign-ups → This week or Next week → choose a chore → Sign up for week. Daily chores stay yours after Done and return when due. Use Release week to give up the reservation.'),
             ('Kas and Z’s weeks', 'Weeks switch Sunday at 6 p.m. Eastern. Once their accounts are saved in Household setup, Kas and Z can sign up only for their home weeks. Ask a household administrator if the accounts or week look wrong.'),
             ('Add, edit, or remove', 'Everyone can use Add chore, Edit chore, and Remove chore. Removal asks for confirmation and hides the chore; Removed chores → Restore brings it back. Earned points and history stay saved.'),
-            ('When chores return', 'Daily: midnight. Twice daily: midnight and noon. Weekly: Sunday at 6 p.m. Monthly: first day of the month. Twice-weekly chores return on the two chosen weekdays. Every-other-week chores follow the selected Kas/Z home or away weeks. Scheduled chores stay due until done. One-time chores do not repeat. Times are Eastern; notes do not send reminders.'),
+            ('If a chore is missed', 'Edit chore → choose it → Missed chores → Keep overdue or Skip if missed. Existing chores default to Keep overdue. Skip releases a missed single claim, never awards points, and keeps weekly reservations and history. One-time chores have no deadline.'),
+            ('When chores return', 'Daily: midnight. Twice daily: midnight and noon. Weekly: Sunday at 6 p.m. Monthly: first day of the month. Twice-weekly chores return on the two chosen weekdays. Every-other-week chores follow the selected Kas/Z home or away weeks. Scheduled chores follow their Keep overdue / Skip if missed setting. One-time chores do not repeat. Times are Eastern; notes do not send reminders.'),
             ('Open fresh controls or get more help', 'Use /chores for a fully private panel once enabled, or !chores for fresh buttons with a public starter message. Button replies are private. Reopen after 10 minutes or a restart. Type !help for the older command guide. Household setup is for administrators.')
         ]:
             embed.add_field(name=title, value=text, inline=False)
@@ -1041,4 +1099,4 @@ def install(namespace):
             bot.tree.add_command(bot.tree.get_command('chores'),guild=discord.Object(id=int(saved[0])),override=True)
 
     bot.setup_hook = setup_hook
-    return SimpleNamespace(ReassignView=ReassignView, reassign=reassign, reassign_snapshot=reassign_snapshot, responsibility_view=responsibility_view, responsibility_rows=responsibility_rows, ResponsibilityView=ResponsibilityView, Launcher=Launcher, PersonalView=PersonalView, WeeklyView=WeeklyView, HouseholdSetup=HouseholdSetup, AddChoreModal=AddChoreModal, AddChoreMenu=AddChoreMenu, RemoveChoreView=RemoveChoreView, EditChoreView=EditChoreView, EditChoreModal=EditChoreModal, RepeatMenu=RepeatMenu, WeekdayMenu=WeekdayMenu, update_chore=update_chore, ready=timing.ready, completion_reset=timing.completion_reset, timing=timing, is_archived=is_archived, create_chore=create_chore, snapshot=snapshot, rows=rows, week_key=week_key, available=available, weekly_owner=weekly_owner, signup=signup)
+    return SimpleNamespace(MissedChoreView=MissedChoreView, ReassignView=ReassignView, reassign=reassign, reassign_snapshot=reassign_snapshot, responsibility_view=responsibility_view, responsibility_rows=responsibility_rows, ResponsibilityView=ResponsibilityView, Launcher=Launcher, PersonalView=PersonalView, WeeklyView=WeeklyView, HouseholdSetup=HouseholdSetup, AddChoreModal=AddChoreModal, AddChoreMenu=AddChoreMenu, RemoveChoreView=RemoveChoreView, EditChoreView=EditChoreView, EditChoreModal=EditChoreModal, RepeatMenu=RepeatMenu, WeekdayMenu=WeekdayMenu, update_chore=update_chore, ready=timing.ready, completion_reset=timing.completion_reset, timing=timing, is_archived=is_archived, create_chore=create_chore, snapshot=snapshot, rows=rows, week_key=week_key, available=available, weekly_owner=weekly_owner, signup=signup)
