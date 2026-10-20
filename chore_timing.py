@@ -4,8 +4,8 @@ from itertools import combinations
 
 WEEKDAYS = ('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday')
 DAY_COLORS = dict(zip(WEEKDAYS, ('🔴','🟠','🟡','🟢','🔵','🟣','🩷')))
-PERIOD_COLORS={'weekly':'⭐','monthly':'🌟'}
-DAY_LEGEND = ' · '.join(f'{DAY_COLORS[day]} {day[:3].capitalize()}' for day in WEEKDAYS)+'\n⭐ Weekly · 🌟 Monthly'
+PERIOD_COLORS={'weekly':'🤍','monthly':'🟫'}
+DAY_LEGEND = ' · '.join(f'{DAY_COLORS[day]} {day[:3].capitalize()}' for day in WEEKDAYS)+'\n🤍 Weekly · 🟫 Monthly'
 
 
 def day_badge(day, full=False):
@@ -170,7 +170,7 @@ class ChoreTiming:
             phase,day=frequency.split(':')
             return f'Every other {day_badge(day)} ({phase})'
         today=day_badge(WEEKDAYS[self.now().weekday()])
-        return {'daily':f'{today} · Daily','twice-daily':f'{today} · AM + PM','weekly':'⭐ Weekly','monthly':'🌟 Monthly','one-time':'One time'}.get(frequency,frequency)
+        return {'daily':f'{today} · Daily','twice-daily':f'{today} · AM + PM','weekly':'🤍 Weekly','monthly':'🟫 Monthly','one-time':'One time'}.get(frequency,frequency)
 
     def emoji(self, frequency):
         if frequency in PERIOD_COLORS:

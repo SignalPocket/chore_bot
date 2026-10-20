@@ -158,4 +158,4 @@ Select a chore in My chores, Open chores, Weekly sign-ups, or Edit chore → Cho
 
 The current list is not repeated as a button: My chores offers Open chores, and Open chores offers My chores. Selected chores and later pages show Back to list. Dashboard and Refresh stay available. Navigation logs separately time local rendering and the Discord response without account/chore details. Stale completion clicks retain the refresh warning instead of displaying a new points award.
 
-Flexible schedules have separate period stars: ⭐ Weekly and 🌟 Monthly. They appear in lists, chore dropdowns, schedule options, and the legend. They indicate the repeat period, not an invented due weekday; This week / Next week still controls the viewed dates.
+Flexible schedules have separate period shapes: 🤍 Weekly and 🟫 Monthly. They appear in lists, chore dropdowns, schedule options, and the legend. They indicate the repeat period, not an invented due weekday; This week / Next week still controls the viewed dates.
