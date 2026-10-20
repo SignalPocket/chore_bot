@@ -2,6 +2,18 @@
 
 The current household interface is documented in **USER-GUIDE.md**. It replaces the accumulated historical development notes that described contradictory stages of the interface.
 
+## Automatic daily database backups
+
+The server runs `/home/discordbot/sprig-db-backup.py` with `/usr/bin/python3`, independently of the Discord bot and its virtual environment. It uses SQLite’s online backup API, so committed WAL changes are included while Sprig is running, and verifies integrity before publishing a snapshot. The destination is `/home/discordbot/sprig-backups/daily/YYYY-MM-DD/sprig.db`, with a SHA-256/count/integrity manifest beside it. Snapshots are kept; no automatic deletion is configured.
+
+The discordbot crontab checks at minute 15 of each hour and at reboot. The script gates execution to 03:15 or later in America/New_York and makes only one snapshot per Eastern date, handling DST and catch-up after downtime. An exclusive lock prevents overlaps. Existing daily files are never overwritten. If a completed database lacks a manifest after an interrupted run, a verified manifest can be recovered without copying again. Existing hash mismatches fail visibly and preserve files. Output goes to `/home/discordbot/sprig-backups/daily/backup.log`.
+
+Configured and tested on October 20, 2026. Seven Linux integration tests passed, including WAL copying, missing/corrupt sources, repeated execution, lock contention, and Eastern/DST scheduling. Today’s real snapshot was independently restored to a temporary database and passed integrity/count checks. The next scheduled overnight execution remains a future run, not a verified completed run.
+
+Repository sources are `backup_database.py` and `test_backup_database.py`. This standalone helper is separate from the seven bot runtime modules. The installed server copy is outside the checkout, so routine bot pulls do not change it. Changes to the backup helper require a deliberate tested install of that file. Run its Linux tests with `python3 test_backup_database.py -q`. Run a current-day backup/check with `/usr/bin/python3 /home/discordbot/sprig-db-backup.py`; an existing valid snapshot is left untouched. Inspect `crontab -l` to confirm schedule entries.
+
+Restore is a separate deliberate maintenance action: stop Sprig, preserve the current database, verify the selected snapshot/manifest, then restore and test before starting. Never copy over a running production database.
+
 ## Runtime files
 
 Deploy all seven modules together:
