@@ -1142,6 +1142,50 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(all(len(f.value)<=1024 for f in view.embed.fields))
             self.assertEqual(before,list(self.db.iterdump()))
 
+    async def test_choose_day_is_in_my_and_edit_weekly_chore(self):
+        with self.clock('2026-10-20T10:00:00'):
+            mine=self.ui.PersonalView(10,'mine',selected=2)
+            edit=self.ui.EditChoreView(20,selected=2)
+            for view in [mine,edit]:
+                event=Interaction(view.owner)
+                await next(c for c in view.children if getattr(c,'label',None)=='Choose day').callback(event)
+                self.assertTrue(event.response.payload[1]['ephemeral'])
+                self.assertIn('Choose a recurring day',event.response.payload[1]['embed'].title)
+
+    async def test_choose_day_confirm_preserves_points_signups_and_other_details(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.signup(10,1,self.ui.week_key())
+            self.db.execute("UPDATE quests SET frequency='weekly' WHERE id=1")
+            self.db.execute("INSERT INTO users(id,points) VALUES('10',50)")
+            self.db.commit()
+            expected=self.ui.snapshot(1)
+            view=self.ui.ChooseDayView(20,1,expected)
+            event=Interaction(20)
+            view.children[0]._values=['friday']
+            await view.children[0].callback(event)
+            confirm=event.response.payload['view']
+            self.assertIn('🔵 Friday',str(confirm.embed.to_dict()))
+            self.assertEqual(self.db.execute('SELECT frequency FROM quests WHERE id=1').fetchone()[0],'weekly')
+            await next(c for c in confirm.children if getattr(c,'label',None)=='Save day').callback(event)
+            self.assertEqual(self.db.execute('SELECT frequency FROM quests WHERE id=1').fetchone()[0],'friday')
+            self.assertEqual(self.ui.weekly_owner(1),'10')
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone()[0],50)
+            self.assertEqual(self.db.execute('SELECT name,points FROM quests WHERE id=1').fetchone(),('Fill dishwasher',5))
+
+    async def test_choose_day_rejects_stale_forms_and_cancel_is_noop(self):
+        with self.clock('2026-10-20T10:00:00'):
+            view=self.ui.ChooseDayView(10,2,self.ui.snapshot(2),'monday')
+            self.assertFalse(await view.interaction_check(Interaction(20)))
+            before=self.ui.snapshot(2)
+            event=Interaction()
+            await next(c for c in view.children if getattr(c,'label',None)=='Cancel').callback(event)
+            self.assertEqual(before,self.ui.snapshot(2))
+            self.db.execute("UPDATE quests SET notes='changed' WHERE id=2")
+            self.db.commit()
+            await next(c for c in view.children if getattr(c,'label',None)=='Save day').callback(event)
+            self.assertIn('changed',event.response.payload['content'])
+            self.assertEqual(self.db.execute('SELECT frequency FROM quests WHERE id=2').fetchone()[0],'weekly')
+
     async def test_help_button_is_persistent_private_and_changes_no_data(self):
         before = list(self.db.iterdump())
         view = self.ui.Launcher()

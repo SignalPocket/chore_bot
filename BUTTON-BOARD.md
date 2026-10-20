@@ -139,3 +139,7 @@ Select a chore to use Done, Drop, Reassign, or Trade. Drop confirms whether it r
 ## Different ways to view the week
 
 The household overview includes By person, By chore (alphabetical with owner), and By day (colored weekday/date headings). This week / Next week, Refresh, and paging preserve the selected view. Daily chores are grouped as Every day; flexible weekly/monthly/one-time work gets separate headings instead of an invented due day. Two-day chores appear under both chosen weekdays; headline totals count unique chores. Overdue work from an earlier week is grouped separately. All views are private and do not change assignments.
+
+## Choose a weekly chore’s day
+
+My chores → select weekly chore → Choose day → colored weekday → Save day. Edit chore offers the same button to anyone in the household, so the child or parent can set it. This sets the recurring weekday for all future weeks, not a one-week override. Names, notes, points, completion history, and weekly reservations remain. The preview shows the selected day and next scheduled date; stale forms and changed weeks are rejected. Cancel makes no change.

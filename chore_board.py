@@ -224,6 +224,12 @@ def install(namespace):
                     self.add_button('Drop',drop)
                     self.add_button('Reassign',give)
                     self.add_button('Trade',trade,row=2)
+                    if self.selected[2] in ('weekly',*WEEKDAYS):
+                        async def choose_day(interaction):
+                            view=ChooseDayView(self.owner,self.selected[0],self.expected)
+                            await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True)
+                        self.add_button('Choose day',choose_day,row=2)
+
             if self.page:
                 self.add_button("Previous", lambda i: self.show(i, page=self.page - 1), row=2)
             if (self.page + 1) * PAGE_SIZE < len(self.entries):
@@ -1101,6 +1107,47 @@ def install(namespace):
                 return False
             return True
 
+    class ChooseDayView(SafeView):
+        def __init__(self,owner,qid,expected,day=None):
+            super().__init__(timeout=600)
+            self.owner=owner
+            row=db.execute('SELECT name,frequency FROM quests WHERE id=?',(qid,)).fetchone()
+            self.embed=discord.Embed(title='Choose a recurring day',description=f'**{discord.utils.escape_markdown(row[0])}**\nChoose which weekday this chore repeats on. This changes its regular schedule for everyone, including future weeks. Weekly sign-ups, history, and earned points stay saved.')
+            picker=discord.ui.Select(placeholder='Which day works?',options=[discord.SelectOption(label=value.capitalize(),value=value,emoji=DAY_COLORS[value],default=value==day) for value in WEEKDAYS])
+            async def choose(interaction):
+                view=ChooseDayView(owner,qid,expected,picker.values[0])
+                await interaction.response.edit_message(embed=view.embed,view=view)
+            picker.callback=choose
+            self.add_item(picker)
+            if day:
+                due=timing.next_weekday(timing.now(),WEEKDAYS.index(day))
+                self.embed.add_field(name='New schedule',value=f'Every {day_badge(day,True)} · next scheduled date {due:%b %d}\nCompleted work stays completed until its next repeat. Tap Save day to confirm.',inline=False)
+                button=discord.ui.Button(label='Save day',style=discord.ButtonStyle.primary,row=1)
+                async def save(interaction):
+                    async with lock:
+                        api.reset_due_quests()
+                        current=db.execute('SELECT name,frequency,points,notes FROM quests WHERE id=?',(qid,)).fetchone()
+                        if not current or current[1] not in ('weekly',*WEEKDAYS):
+                            result='This is no longer a weekly chore. Reopen its schedule settings.'
+                        else:
+                            result=update_chore(qid,current[0],day,str(current[2]),current[3] or '',expected)
+                            if result.startswith('Saved'):
+                                result=f'Saved: every {day_badge(day,True)}. History, earned points, and weekly sign-ups are unchanged.'
+                    await interaction.response.edit_message(content=result,embed=None,view=None)
+                button.callback=save
+                self.add_item(button)
+            cancel=discord.ui.Button(label='Cancel',row=1)
+            async def cancel_day(interaction):
+                await interaction.response.edit_message(content='Canceled. The schedule is unchanged.',embed=None,view=None)
+            cancel.callback=cancel_day
+            self.add_item(cancel)
+
+        async def interaction_check(self,interaction):
+            if not can_add(interaction,self.owner):
+                await interaction.response.send_message('Open your own Choose day view from My chores or Edit chore.',ephemeral=True)
+                return False
+            return True
+
     class EditChoreView(SafeView):
         def __init__(self,owner,page=0,selected=None):
             super().__init__(timeout=600)
@@ -1129,6 +1176,14 @@ def install(namespace):
                 async def missed(interaction):
                     await interaction.response.send_message('Keep overdue leaves unfinished work on the list. Skip if missed drops a missed occurrence without points and releases its single claim; weekly sign-ups and history stay saved. Weekday chores expire at the end of their due day. Daily/twice-daily chores expire at their next slot, weekly at Sunday 6 p.m., monthly at the next month. One-time chores have no deadline. Switching to Skip can immediately drop an already-overdue occurrence. Choose a setting to save.',view=MissedChoreView(owner,chosen[0],expected),ephemeral=True)
                 self.button('Missed chores',missed)
+                if chosen[2] in ('weekly',*WEEKDAYS):
+                    day_button=discord.ui.Button(label='Choose day',row=2)
+                    async def day_choice(interaction):
+                        view=ChooseDayView(owner,chosen[0],expected)
+                        await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True)
+                    day_button.callback=day_choice
+                    self.add_item(day_button)
+
             if self.page:
                 self.button('Previous',lambda i:self.show(i,page=self.page-1))
             if (self.page+1)*PAGE_SIZE<len(entries):
@@ -1167,6 +1222,7 @@ def install(namespace):
             ('Take a whole week', 'Weekly sign-ups → This week or Next week → choose a chore → Sign up for week. Daily chores stay yours after Done and return when due. Use Release week to give up the reservation.'),
             ('Kas and Z’s weeks', 'Weeks switch Sunday at 6 p.m. Eastern. Once their accounts are saved in Household setup, Kas and Z can sign up only for their home weeks. Ask a household administrator if the accounts or week look wrong.'),
             ('Add, edit, or remove', 'Everyone can use Add chore, Edit chore, and Remove chore. Removal asks for confirmation and hides the chore; Removed chores → Restore brings it back. Earned points and history stay saved.'),
+            ('Choose your weekly chore’s day', 'My chores → select a weekly chore → Choose day → pick a colored weekday → Save day. You can also use Edit chore, so another household member can set it. This changes the repeating day for future weeks too, keeping weekly sign-ups, history, and points.'),
             ('If a chore is missed', 'Edit chore → choose it → Missed chores → Keep overdue or Skip if missed. Existing chores default to Keep overdue. Skip releases a missed single claim, never awards points, and keeps weekly reservations and history. One-time chores have no deadline.'),
             ('Day colors', DAY_LEGEND),
             ('When chores return', 'Daily: midnight. Twice daily: midnight and noon. Weekly: Sunday at 6 p.m. Monthly: first day of the month. Twice-weekly chores return on the two chosen weekdays. Every-other-week chores follow the selected Kas/Z home or away weeks. Scheduled chores follow their Keep overdue / Skip if missed setting. One-time chores do not repeat. Times are Eastern; notes do not send reminders.'),
@@ -1357,4 +1413,4 @@ def install(namespace):
             bot.tree.add_command(bot.tree.get_command('chores'),guild=discord.Object(id=int(saved[0])),override=True)
 
     bot.setup_hook = setup_hook
-    return SimpleNamespace(owned_scope=owned_scope, drop_chore=drop_chore, trade_snapshot=trade_snapshot, propose_trade=propose_trade, respond_trade=respond_trade, TradeOfferView=TradeOfferView, TradeInboxView=TradeInboxView, DropChoreView=DropChoreView, MissedChoreView=MissedChoreView, ReassignView=ReassignView, reassign=reassign, reassign_snapshot=reassign_snapshot, responsibility_view=responsibility_view, responsibility_rows=responsibility_rows, ResponsibilityView=ResponsibilityView, Launcher=Launcher, PersonalView=PersonalView, WeeklyView=WeeklyView, HouseholdSetup=HouseholdSetup, AddChoreModal=AddChoreModal, AddChoreMenu=AddChoreMenu, RemoveChoreView=RemoveChoreView, EditChoreView=EditChoreView, EditChoreModal=EditChoreModal, RepeatMenu=RepeatMenu, WeekdayMenu=WeekdayMenu, update_chore=update_chore, ready=timing.ready, completion_reset=timing.completion_reset, timing=timing, is_archived=is_archived, create_chore=create_chore, snapshot=snapshot, rows=rows, week_key=week_key, available=available, weekly_owner=weekly_owner, signup=signup)
+    return SimpleNamespace(ChooseDayView=ChooseDayView, owned_scope=owned_scope, drop_chore=drop_chore, trade_snapshot=trade_snapshot, propose_trade=propose_trade, respond_trade=respond_trade, TradeOfferView=TradeOfferView, TradeInboxView=TradeInboxView, DropChoreView=DropChoreView, MissedChoreView=MissedChoreView, ReassignView=ReassignView, reassign=reassign, reassign_snapshot=reassign_snapshot, responsibility_view=responsibility_view, responsibility_rows=responsibility_rows, ResponsibilityView=ResponsibilityView, Launcher=Launcher, PersonalView=PersonalView, WeeklyView=WeeklyView, HouseholdSetup=HouseholdSetup, AddChoreModal=AddChoreModal, AddChoreMenu=AddChoreMenu, RemoveChoreView=RemoveChoreView, EditChoreView=EditChoreView, EditChoreModal=EditChoreModal, RepeatMenu=RepeatMenu, WeekdayMenu=WeekdayMenu, update_chore=update_chore, ready=timing.ready, completion_reset=timing.completion_reset, timing=timing, is_archived=is_archived, create_chore=create_chore, snapshot=snapshot, rows=rows, week_key=week_key, available=available, weekly_owner=weekly_owner, signup=signup)
