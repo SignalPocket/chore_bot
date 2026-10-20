@@ -159,3 +159,9 @@ Select a chore in My chores, Open chores, Weekly sign-ups, or Edit chore → Cho
 The current list is not repeated as a button: My chores offers Open chores, and Open chores offers My chores. Selected chores and later pages show Back to list. Dashboard and Refresh stay available. Navigation logs separately time local rendering and the Discord response without account/chore details. Stale completion clicks retain the refresh warning instead of displaying a new points award.
 
 Flexible schedules have separate period shapes: 🤍 Weekly and 🟫 Monthly. They appear in lists, chore dropdowns, schedule options, and the legend. They indicate the repeat period, not an invented due weekday; This week / Next week still controls the viewed dates.
+
+
+## Owner review inbox and notifications
+New chore feedback is privately sent by ChoreSprite to ginaria (Discord account 301104023405199361). Dashboard → Review inbox collects open reviews across all chores, including removed chores; only ginaria can open this inbox. Select a chore, read the review, and Mark reviewed; history stays saved. Everyone can still submit and read individual chore reviews. Suggestions never change points or timing automatically.
+
+Feedback is saved before attempting a DM. Delivery is bounded to ten seconds; blocked/failed/uncertain DMs remain in the inbox and are not automatically retried, preventing duplicate notifications after ambiguous delivery. Older feedback is in the inbox but is not sent as a backlog. After deployment, reopen /chores; use !refreshchoreboard once to add Review inbox to the existing saved dashboard.

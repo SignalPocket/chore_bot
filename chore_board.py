@@ -13,6 +13,7 @@ from chore_timing import ChoreTiming, WEEKDAYS, WEEKLY_FREQUENCIES, DAY_COLORS, 
 
 PAGE_SIZE = 20
 ACTION_ACK_SECONDS = 1.0
+REVIEW_OWNER_ID = 301104023405199361
 
 
 def install(namespace):
@@ -46,6 +47,8 @@ def install(namespace):
         quest_id INTEGER NOT NULL, author_id TEXT NOT NULL, author_name TEXT NOT NULL,
         comment TEXT NOT NULL, timing TEXT NOT NULL, suggested_points INTEGER,
         created_at TEXT NOT NULL, context TEXT NOT NULL, reviewed INTEGER NOT NULL DEFAULT 0)""")
+    db.commit()
+    db.execute("CREATE TABLE IF NOT EXISTS feedback_notifications (feedback_id INTEGER PRIMARY KEY, status TEXT NOT NULL)")
     db.commit()
     attendance=HouseholdAvailability(db,api.QUEST_TIMEZONE)
 
@@ -1335,6 +1338,77 @@ def install(namespace):
     def feedback_votes(qid):
         return db.execute('SELECT author_id,author_name,suggested_points FROM chore_feedback WHERE id IN (SELECT MAX(id) FROM chore_feedback WHERE quest_id=? AND suggested_points IS NOT NULL GROUP BY author_id) ORDER BY author_name COLLATE NOCASE,author_id',(qid,)).fetchall()
 
+    async def notify_feedback(key):
+        record=db.execute('SELECT id,author_name,comment,timing,suggested_points,context FROM chore_feedback WHERE submission_key=?',(key,)).fetchone()
+        if not record:
+            return
+        with db:
+            inserted=db.execute("INSERT OR IGNORE INTO feedback_notifications VALUES (?, 'sending')",(record[0],)).rowcount
+        if not inserted:
+            return
+        context=json.loads(record[5])
+        embed=discord.Embed(title='New chore review',description=discord.utils.escape_markdown(context[0])[:1000],color=0x6B9B77)
+        embed.add_field(name='From',value=discord.utils.escape_markdown(record[1])[:200],inline=False)
+        if record[2]:
+            escaped=discord.utils.escape_markdown(record[2])
+            for at in range(0,len(escaped),900):
+                embed.add_field(name='Feedback',value=escaped[at:at+900],inline=False)
+        if record[3]:
+            embed.add_field(name='Timing idea',value=discord.utils.escape_markdown(record[3])[:1000],inline=False)
+        if record[4] is not None:
+            embed.add_field(name='Suggested points',value=str(record[4]),inline=False)
+        embed.set_footer(text='Open /chores in the household server → Review inbox. Suggestions do not change chores automatically.')
+        async def deliver():
+            recipient=bot.get_user(REVIEW_OWNER_ID) or await bot.fetch_user(REVIEW_OWNER_ID)
+            await recipient.send(embed=embed,allowed_mentions=discord.AllowedMentions.none())
+        try:
+            await asyncio.wait_for(deliver(),timeout=10)
+            status='sent'
+        except Exception:
+            # Never retry an ambiguous delivery automatically. The saved inbox is authoritative.
+            status='failed_or_uncertain'
+        with db:
+            db.execute('UPDATE feedback_notifications SET status=? WHERE feedback_id=?',(status,record[0]))
+
+    class ReviewInbox(SafeView):
+        def __init__(self,owner,page=0):
+            super().__init__(timeout=600)
+            self.owner=owner
+            records=db.execute('SELECT f.quest_id,q.name,COUNT(*),MAX(f.id) FROM chore_feedback f JOIN quests q ON q.id=f.quest_id WHERE f.reviewed=0 GROUP BY f.quest_id ORDER BY MAX(f.id) DESC').fetchall() if owner==REVIEW_OWNER_ID else []
+            page=min(max(page,0),max((len(records)-1)//5,0))
+            chunk=records[page*5:(page+1)*5]
+            self.embed=discord.Embed(title='Owner review inbox',description='Open feedback across all chores, including removed chores. Mark reviewed inside a chore to clear it from this inbox; history stays saved. New feedback is also sent privately to ginaria.',color=0x6B9B77)
+            for qid,name,count,last in chunk:
+                self.embed.add_field(name=discord.utils.escape_markdown(name)[:200],value=f'{count} open review(s)',inline=False)
+            if not chunk:
+                self.embed.add_field(name='All caught up',value='No open chore feedback.',inline=False)
+            self.embed.set_footer(text=f'Page {page+1} of {max((len(records)-1)//5+1,1)}')
+            if chunk:
+                picker=discord.ui.Select(placeholder='Choose a chore to review…',options=[discord.SelectOption(label=name[:100],value=str(qid),description=f'{count} open review(s)') for qid,name,count,last in chunk])
+                async def choose(interaction):
+                    view=FeedbackView(owner,int(picker.values[0]))
+                    await interaction.response.edit_message(embed=view.embed,view=view)
+                picker.callback=choose
+                self.add_item(picker)
+            async def redraw(interaction,target):
+                view=ReviewInbox(owner,target)
+                await interaction.response.edit_message(embed=view.embed,view=view)
+            for label,target in [('Previous',page-1),('Next',page+1),('Refresh',page)]:
+                if label=='Previous' and page==0 or label=='Next' and (page+1)*5>=len(records):
+                    continue
+                button=discord.ui.Button(label=label,row=3)
+                async def navigate(interaction,target=target):
+                    await redraw(interaction,target)
+                button.callback=navigate
+                self.add_item(button)
+            self.add_dashboard()
+
+        async def interaction_check(self,interaction):
+            if interaction.user.id!=REVIEW_OWNER_ID or self.owner!=REVIEW_OWNER_ID or not allowed(interaction):
+                await interaction.response.send_message('The review inbox is for ginaria, the bot owner.',ephemeral=True)
+                return False
+            return True
+
     class FeedbackModal(discord.ui.Modal):
         def __init__(self,owner,qid,points=''):
             super().__init__(title='Review this chore',timeout=600)
@@ -1356,6 +1430,8 @@ def install(namespace):
             if result.startswith('Feedback saved') or result.startswith('That feedback'):
                 view=FeedbackView(self.owner,self.qid)
                 await interaction.response.send_message(result,embed=view.embed,view=view,ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+                if result.startswith('Feedback saved'):
+                    await notify_feedback(self.submission_key)
             else:
                 await interaction.response.send_message(result,ephemeral=True)
 
@@ -1430,6 +1506,11 @@ def install(namespace):
                 button('Previous',lambda i:redraw(i,page=page-1,selected=None),row=3)
             if (page+1)*3<len(records):
                 button('Next',lambda i:redraw(i,page=page+1,selected=None),row=3)
+            if owner==REVIEW_OWNER_ID:
+                async def inbox(interaction):
+                    view=ReviewInbox(owner)
+                    await interaction.response.edit_message(embed=view.embed,view=view)
+                button('Review inbox',inbox,row=4)
             self.add_dashboard()
 
         async def interaction_check(self,interaction):
@@ -1618,7 +1699,7 @@ def install(namespace):
             ('Add or edit','Choose a schedule and fill in the form. New chores start at 5 points; explicit zero is allowed.'),
             ('Keep or skip','Edit chore → Missed chores. Keep overdue leaves work due. Skip if missed drops an expired occurrence without points and releases only its single claim. Weekly sign-ups stay saved. One-time work has no deadline.'),
             ('Remove or restore','Remove hides a chore after confirmation. Removed chores → Restore brings it back with history and points retained.')]),
-        'feedback':('Review effort & points',[('Give feedback','Choose a chore → Chore review. Add a comment, a better day/time, or an effort score. Common scores are 0, 1, 2, 3, 5, 8, 13, 21, but other whole numbers are allowed.'),('Review together','See each person’s latest point suggestion. Suggestions never change actual points automatically; use Edit chore if the household agrees. Mark reviewed keeps the feedback in All feedback.')]),
+        'feedback':('Review effort & points',[('Give feedback','Choose a chore → Chore review. Add a comment, a better day/time, or an effort score. Common scores are 0, 1, 2, 3, 5, 8, 13, 21, but other whole numbers are allowed.'),('Owner inbox','New feedback is sent privately to ginaria. Ginaria can use Dashboard → Review inbox to see open feedback across all chores, even if DMs are blocked.'),('Review together','See each person’s latest point suggestion. Suggestions never change actual points automatically; use Edit chore if the household agrees. Mark reviewed keeps the feedback in All feedback.')]),
         'timing':('Schedules & day colors',[
             ('Reset times','Daily: midnight. Twice daily: midnight and noon. Weekly: Sunday 6 p.m. Monthly: first day of the month. All times are Eastern.'),
             ('Fixed days','Weekday and every-other-week chores follow the chosen colored day and Keep / Skip setting. Notes do not send reminders. Away/home recurring chore dates follow the base rotation, independently of person exceptions.'),
@@ -1656,7 +1737,7 @@ def install(namespace):
             # Keep both the persistent dashboard and fresh panels in the same order.
             layout=[('My chores',0),('Open chores',0),('Weekly sign-ups',0),
                     ('Who’s doing what?',1),('Who’s home?',1),('Reassign',1),('Help',1),
-                    ('Add chore',2),('Edit chore',2),('Remove chore',2),('Household setup',2)]
+                    ('Add chore',2),('Edit chore',2),('Remove chore',2),('Household setup',2),('Review inbox',3)]
             buttons={item.label:item for item in self.children}
             self.clear_items()
             for label,row in layout:
@@ -1689,6 +1770,14 @@ def install(namespace):
         @discord.ui.button(label="Who’s home?",custom_id="sprig:attendance:v1",row=3)
         async def attendance_button(self,interaction,button):
             view=AttendanceView(interaction.user.id)
+            await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True)
+
+        @discord.ui.button(label='Review inbox',custom_id='sprig:review-inbox:v1',row=3)
+        async def review_inbox_button(self,interaction,button):
+            if interaction.user.id!=REVIEW_OWNER_ID:
+                await interaction.response.send_message('The review inbox is for ginaria, the bot owner. Choose a chore → Chore review to give feedback.',ephemeral=True)
+                return
+            view=ReviewInbox(interaction.user.id)
             await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True)
 
         @discord.ui.button(label="Help", custom_id="sprig:help:v1", row=1)
@@ -1838,4 +1927,4 @@ def install(namespace):
             bot.tree.add_command(bot.tree.get_command('chores'),guild=discord.Object(id=int(saved[0])),override=True)
 
     bot.setup_hook = setup_hook
-    return SimpleNamespace(FeedbackView=FeedbackView, FeedbackModal=FeedbackModal, save_feedback=save_feedback, feedback_votes=feedback_votes, feedback_context=feedback_context, HelpView=HelpView, ReturnView=ReturnView, attendance=attendance, week_status=week_status, can_take_week=can_take_week, coverage_warning=coverage_warning, AttendanceView=AttendanceView, AttendanceModal=AttendanceModal, ChooseDayView=ChooseDayView, owned_scope=owned_scope, drop_chore=drop_chore, trade_snapshot=trade_snapshot, propose_trade=propose_trade, respond_trade=respond_trade, TradeOfferView=TradeOfferView, TradeInboxView=TradeInboxView, DropChoreView=DropChoreView, MissedChoreView=MissedChoreView, ReassignView=ReassignView, reassign=reassign, reassign_snapshot=reassign_snapshot, responsibility_view=responsibility_view, responsibility_rows=responsibility_rows, ResponsibilityView=ResponsibilityView, Launcher=Launcher, PersonalView=PersonalView, WeeklyView=WeeklyView, HouseholdSetup=HouseholdSetup, AddChoreModal=AddChoreModal, AddChoreMenu=AddChoreMenu, RemoveChoreView=RemoveChoreView, EditChoreView=EditChoreView, EditChoreModal=EditChoreModal, RepeatMenu=RepeatMenu, WeekdayMenu=WeekdayMenu, update_chore=update_chore, ready=timing.ready, completion_reset=timing.completion_reset, timing=timing, is_archived=is_archived, create_chore=create_chore, snapshot=snapshot, rows=rows, week_key=week_key, available=available, weekly_owner=weekly_owner, signup=signup)
+    return SimpleNamespace(ReviewInbox=ReviewInbox, notify_feedback=notify_feedback, FeedbackView=FeedbackView, FeedbackModal=FeedbackModal, save_feedback=save_feedback, feedback_votes=feedback_votes, feedback_context=feedback_context, HelpView=HelpView, ReturnView=ReturnView, attendance=attendance, week_status=week_status, can_take_week=can_take_week, coverage_warning=coverage_warning, AttendanceView=AttendanceView, AttendanceModal=AttendanceModal, ChooseDayView=ChooseDayView, owned_scope=owned_scope, drop_chore=drop_chore, trade_snapshot=trade_snapshot, propose_trade=propose_trade, respond_trade=respond_trade, TradeOfferView=TradeOfferView, TradeInboxView=TradeInboxView, DropChoreView=DropChoreView, MissedChoreView=MissedChoreView, ReassignView=ReassignView, reassign=reassign, reassign_snapshot=reassign_snapshot, responsibility_view=responsibility_view, responsibility_rows=responsibility_rows, ResponsibilityView=ResponsibilityView, Launcher=Launcher, PersonalView=PersonalView, WeeklyView=WeeklyView, HouseholdSetup=HouseholdSetup, AddChoreModal=AddChoreModal, AddChoreMenu=AddChoreMenu, RemoveChoreView=RemoveChoreView, EditChoreView=EditChoreView, EditChoreModal=EditChoreModal, RepeatMenu=RepeatMenu, WeekdayMenu=WeekdayMenu, update_chore=update_chore, ready=timing.ready, completion_reset=timing.completion_reset, timing=timing, is_archived=is_archived, create_chore=create_chore, snapshot=snapshot, rows=rows, week_key=week_key, available=available, weekly_owner=weekly_owner, signup=signup)

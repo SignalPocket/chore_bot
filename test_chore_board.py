@@ -59,12 +59,16 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         spec.loader.exec_module(self.app)
         self.db = self.app.db
         self.ui = self.app.chore_ui
+        self.dm = SimpleNamespace(send=AsyncMock())
+        self.dm_patch = patch.object(self.app.bot, "get_user", return_value=self.dm)
+        self.dm_patch.start()
         self.db.execute("INSERT INTO chore_board VALUES (1, '1', '2', '3')")
         self.db.execute("INSERT INTO quests (name, frequency, points) VALUES ('Fill dishwasher', 'daily', 5)")
         self.db.execute("INSERT INTO quests (name, frequency, points, assigned_to) VALUES ('My bathroom', 'weekly', 10, '10')")
         self.db.commit()
 
     async def asyncTearDown(self):
+        self.dm_patch.stop()
         await self.app.bot.close()
         self.db.close()
         self.temp.cleanup()
@@ -751,13 +755,13 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(set(ids)),27)
 
     async def test_dashboard_layout_is_consistent_for_saved_and_fresh_panels(self):
-        expected=[('My chores',0),('Open chores',0),('Weekly sign-ups',0),('Who’s doing what?',1),('Who’s home?',1),('Reassign',1),('Help',1),('Add chore',2),('Edit chore',2),('Remove chore',2),('Household setup',2)]
+        expected=[('My chores',0),('Open chores',0),('Weekly sign-ups',0),('Who’s doing what?',1),('Who’s home?',1),('Reassign',1),('Help',1),('Add chore',2),('Edit chore',2),('Remove chore',2),('Household setup',2),('Review inbox',3)]
         for timeout in [None,600]:
             view=self.ui.Launcher(timeout=timeout)
             self.assertEqual([(c.label,c.row) for c in view.children],expected)
             self.assertEqual([c.label for c in view.children if c.style==discord.ButtonStyle.primary],['My chores'])
             self.assertTrue(all(c.style==discord.ButtonStyle.secondary for c in view.children if c.label!='My chores'))
-            self.assertEqual(len({c.custom_id for c in view.children}),11)
+            self.assertEqual(len({c.custom_id for c in view.children}),12)
 
     async def test_reassign_occurrence_retains_points_history_and_blocks_stale(self):
         with self.clock('2026-10-20T10:00:00'):
@@ -1557,6 +1561,57 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         options=menu.children[0].options
         self.assertEqual(str(next(o for o in options if o.value=='weekly').emoji),'🤍')
         self.assertEqual(str(next(o for o in options if o.value=='monthly').emoji),'🟫')
+
+    async def test_feedback_dm_targets_owner_once_and_contains_full_review(self):
+        context=self.ui.feedback_context(1)
+        self.ui.save_feedback(1,10,'Kas','Needs instructions','Friday','8','dm-once',context)
+        await self.ui.notify_feedback('dm-once')
+        await self.ui.notify_feedback('dm-once')
+        self.app.bot.get_user.assert_called_once_with(301104023405199361)
+        self.dm.send.assert_awaited_once()
+        embed=self.dm.send.call_args.kwargs['embed']
+        text=str(embed.to_dict())
+        for value in ['Kas','Needs instructions','Friday','8','Fill dishwasher']:
+            self.assertIn(value,text)
+        self.assertEqual(self.db.execute('SELECT status FROM feedback_notifications').fetchone(),('sent',))
+
+    async def test_blocked_dm_preserves_inbox_without_retrying(self):
+        self.ui.save_feedback(1,10,'Kas','Idea','','','dm-blocked',self.ui.feedback_context(1))
+        self.dm.send.side_effect=RuntimeError('blocked')
+        await self.ui.notify_feedback('dm-blocked')
+        await self.ui.notify_feedback('dm-blocked')
+        self.dm.send.assert_awaited_once()
+        self.assertEqual(self.db.execute('SELECT status FROM feedback_notifications').fetchone(),('failed_or_uncertain',))
+        view=self.ui.ReviewInbox(301104023405199361)
+        self.assertIn('Fill dishwasher',str(view.embed.to_dict()))
+        self.assertEqual(self.db.execute('SELECT reviewed FROM chore_feedback').fetchone(),(0,))
+
+    async def test_owner_inbox_permissions_pagination_and_reviewed_history(self):
+        for i in range(8):
+            self.db.execute("INSERT INTO quests(name) VALUES (?)",(f'Review task {i}',))
+            qid=self.db.execute('SELECT MAX(id) FROM quests').fetchone()[0]
+            self.ui.save_feedback(qid,10,'Kas','Idea','','','inbox-'+str(i),self.ui.feedback_context(qid))
+        view=self.ui.ReviewInbox(301104023405199361)
+        self.assertEqual(len(view.embed.fields),5)
+        self.assertIn('Next',[getattr(c,'label',None) for c in view.children])
+        self.assertFalse(await view.interaction_check(Interaction(10)))
+        self.assertTrue(await view.interaction_check(Interaction(301104023405199361)))
+        self.assertFalse(self.ui.ReviewInbox(10).children[0].__class__ is discord.ui.Select)
+        with self.db:
+            self.db.execute('UPDATE chore_feedback SET reviewed=1')
+        self.assertIn('All caught up',str(self.ui.ReviewInbox(301104023405199361).embed.to_dict()))
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM chore_feedback').fetchone()[0],8)
+
+    async def test_review_inbox_launcher_is_private_and_rejects_other_people(self):
+        view=self.ui.Launcher()
+        button=next(c for c in view.children if c.label=='Review inbox')
+        other=Interaction(10)
+        await button.callback(other)
+        self.assertIn('for ginaria',other.response.payload[0][0])
+        event=Interaction(301104023405199361)
+        await button.callback(event)
+        self.assertTrue(event.response.payload[1]['ephemeral'])
+        self.assertIsInstance(event.response.payload[1]['view'],self.ui.ReviewInbox)
 
     async def test_help_button_is_persistent_private_and_changes_no_data(self):
         before = list(self.db.iterdump())
