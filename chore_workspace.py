@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from time import monotonic
 import discord
-from chore_timing import WEEKDAYS, WEEKLY_FREQUENCIES, DAY_LEGEND, day_badge
+from chore_timing import WEEKDAYS, WEEKLY_FREQUENCIES, SCHEDULED, DAILY_SHIFTS, DAY_LEGEND, day_badge
 
 OWNER = 301104023405199361
 
@@ -14,7 +14,8 @@ def install(ns, ui, lock):
     db.executescript('''CREATE TABLE IF NOT EXISTS occurrence_moves(quest_id INTEGER PRIMARY KEY,day TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS notification_preferences(user_id TEXT PRIMARY KEY,trade_dm INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS trade_notifications(trade_id INTEGER PRIMARY KEY,status TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS chore_shift_splits(original_id INTEGER PRIMARY KEY,pm_id INTEGER UNIQUE NOT NULL);''')
+    CREATE TABLE IF NOT EXISTS chore_shift_splits(original_id INTEGER PRIMARY KEY,pm_id INTEGER UNIQUE NOT NULL);
+    CREATE TABLE IF NOT EXISTS attention_windows(quest_id INTEGER PRIMARY KEY,cycle TEXT NOT NULL,deadline TEXT NOT NULL);''')
     db.commit()
     original_ready = timing.ready
     def ready(qid):
@@ -188,7 +189,7 @@ def install(ns, ui, lock):
             self.button('Help', lambda i: present(i, Guide(owner)), row=1)
             self.button(f'Trades ({incoming} incoming)', lambda i: present(i, adapt(ui.TradeInboxView(owner), owner)), row=2)
             self.button('Calendar',lambda i:present(i,ui.planning.Calendar(owner,i.guild)),row=3)
-            self.button('Needs help',lambda i:present(i,ui.planning.NeedsHelp(owner,i.guild)),row=3)
+            self.button('Needs attention',lambda i:present(i,Attention(owner,i.guild)),row=0)
             self.button('Reminders',lambda i:present(i,ui.planning.Reminders(owner)),row=3)
             self.button('Notifications', lambda i: present(i, Notifications(owner)), row=2)
             self.button('Points & standings',lambda i:present(i,Points(owner,i.guild)),row=2)
@@ -202,6 +203,73 @@ def install(ns, ui, lock):
                     self.button('Household setup', lambda i: present(i, adapt(ui.HouseholdSetup(owner), owner)), row=3)
             total = db.execute('SELECT points,streak FROM users WHERE id=?', (str(owner),)).fetchone()
             self.embed.set_footer(text=(f'{total[0]} points · {total[1]} day streak · ' if total else '') + 'Refresh / Resume keeps your place after expiry or a restart.')
+
+    def attention_deadline(q):
+        """Use explicit dates first; persist the first known flexible period end."""
+        move=db.execute('SELECT day FROM occurrence_moves WHERE quest_id=?',(q[0],)).fetchone()
+        if move:
+            return datetime.fromisoformat(move[0]).replace(tzinfo=ns['QUEST_TIMEZONE'])+timedelta(days=1)
+        if q[2] in SCHEDULED | DAILY_SHIFTS:
+            state=timing.state(q[0])
+            if state:
+                start=datetime.fromisoformat(state[0])
+                return start+timedelta(hours=12) if q[2] in DAILY_SHIFTS else start+timedelta(days=1)
+        if q[2]=='one-time':return None
+        cycle=repr((q[2],q[6],q[7],timing.state(q[0]),timing.policy_state(q[0]) if timing.policy(q[0])=='skip' else None))
+        saved=db.execute('SELECT cycle,deadline FROM attention_windows WHERE quest_id=?',(q[0],)).fetchone()
+        if saved and saved[0]==cycle:return datetime.fromisoformat(saved[1])
+        deadline=timing.calculate_reset(timing.now(),q[2])
+        if deadline:
+            with db:db.execute('INSERT OR REPLACE INTO attention_windows VALUES(?,?,?)',(q[0],cycle,deadline))
+            return datetime.fromisoformat(deadline)
+        return None
+
+    def attention_rows():
+        ns['reset_due_quests']()
+        rows=[]
+        for qid, in db.execute('SELECT id FROM quests ORDER BY name COLLATE NOCASE,id').fetchall():
+            q=chore(qid)
+            if q[5] or ui.is_archived(qid):continue
+            due=ready(qid)
+            deadline=attention_deadline(q)
+            overdue=due and deadline is not None and timing.now()>=deadline
+            unclaimed=due and not ownership(qid)[0]
+            issue=ui.planning.help_record(qid)
+            blocked=bool(issue)
+            if overdue or unclaimed or blocked:
+                rows.append((q,overdue,unclaimed,issue,deadline))
+        rows.sort(key=lambda r:(not r[1],not bool(r[3]),r[0][1].casefold(),r[0][0]))
+        return rows
+
+    class Attention(View):
+        def __init__(self,owner,guild=None,page=0):
+            super().__init__(owner)
+            rows=attention_rows()
+            page=min(max(page,0),max((len(rows)-1)//5,0))
+            self.page,self.entries=page,rows
+            self.recovery_context={'screen':'attention','page':page}
+            self.name_ids=[ownership(r[0][0])[0] for r in rows[page*5:(page+1)*5]]
+            self.rebuild=lambda:Attention(owner,guild,page)
+            back=lambda:Attention(owner,guild,page)
+            self.embed=discord.Embed(title='Needs attention',description=f'{len(rows)} chore(s) · Overdue: {sum(r[1] for r in rows)} · Needs someone: {sum(r[2] for r in rows)} · Blocked: {sum(bool(r[3]) for r in rows)}\nChores appear once; labels can overlap. Due today does not mean overdue.',color=0x6B9B77)
+            chunk=rows[page*5:(page+1)*5]
+            for q,overdue,unclaimed,issue,deadline in chunk:
+                labels=(['Overdue'] if overdue else [])+(['Needs someone'] if unclaimed else [])+(['Blocked · '+issue[4]] if issue else [])
+                details=' · '.join(labels)+'\n'+timing.compact_label(q[2])+f' · {q[3]} points\n'+clean(person(ownership(q[0])[0],guild),100)
+                if overdue:details+='\nPeriod ended '+deadline.strftime('%a %b %d, %I:%M %p Eastern')
+                if issue:details+='\n'+clean(issue[5],500)
+                self.embed.add_field(name=clean(q[1],200),value=details,inline=False)
+            if chunk:
+                picker=discord.ui.Select(placeholder='Open a chore card…',row=0,options=[ui.chore_option(r[0][0],r[0][1],'Review responsibility, help status, or completion') for r in chunk])
+                async def choose(i):await present(i,Card(owner,int(picker.values[0]),back,i.guild))
+                picker.callback=choose;self.add_item(picker)
+            else:self.embed.add_field(name='Nothing needs attention',value='No overdue, due unclaimed, or actively blocked chores. Scheduled work remains in Household and Calendar.')
+            self.embed.set_footer(text=f'Page {page+1} of {max(1,(len(rows)+4)//5)} · Eastern time')
+            self.paging_labels=('Previous','Next')
+            if page:self.button('Previous',lambda i:present(i,Attention(owner,i.guild,page-1)),row=1)
+            if (page+1)*5<len(rows):self.button('Next',lambda i:present(i,Attention(owner,i.guild,page+1)),row=1)
+            self.button('Refresh',lambda i:present(i,Attention(owner,i.guild,page)),row=2)
+            self.nav()
 
     class Points(View):
         def __init__(self,owner,guild=None,page=0):
@@ -1048,7 +1116,7 @@ def install(ns, ui, lock):
             self.nav(back)
 
     TOPICS = {
-        'Start here':'My chores shows your points total, Due now, This week, Upcoming, and Completed. Points & standings on the dashboard shows scores without commands. Pick up chores lets you take work just once or for a week. Household shows everyone’s work; every chore opens the same card.',
+        'Start here':'Needs attention combines overdue, due unclaimed, and blocked chores with help notes. Each chore appears once with all applicable labels. My chores shows your points total, Due now, This week, Upcoming, and Completed. Points & standings on the dashboard shows scores without commands. Pick up chores lets you take work just once or for a week. Household shows everyone’s work; every chore opens the same card.',
         'Taking responsibility':'Just this time takes one due occurrence. Take this week / next week reserves repeating work until Sunday 6 p.m. An ongoing assignment continues across weeks. Drop and Reassign show scope before saving. Trades change nothing until accepted.',
         'Dates and colors':DAY_LEGEND+'\nAll times are Eastern. Daily resets at midnight, twice daily at noon and midnight, weekly Sunday 6 p.m., monthly on the first. Flexible weekly/monthly markers do not imply a weekday.',
         'Schedules and missed work':'Daily AM and Daily PM can have different weekly owners. A twice-daily chore card offers Separate AM and PM sign-ups. Change regular day changes future weeks. Move this occurrence changes one unfinished occurrence. Edit chore → Missed chores chooses Keep overdue or Skip if missed. Notes such as “afternoon” are instructions, not automatic reminders.',
@@ -1057,7 +1125,7 @@ def install(ns, ui, lock):
         'History and mistakes':'Done awards points once per occurrence. Completion history records work after this update. Undo your most recent recorded completion only while its state and points remain unchanged. Undo reverses its points and streak changes. Earlier totals remain intact.',
         'Managing chores':'Manage chores groups Add and Archive/Restore. Edit any chore from its card. Room is optional and can be used as a filter. Archiving hides work and keeps records; restoring retains its state.',
         'Planning and reminders':'Calendar previews scheduled chores by week or month; No fixed day keeps flexible work separate. Chore cards offer estimates and per-occurrence checklists. Finish steps before Done. Reminders are personal, off by default, with up to ten Eastern times and an off switch.',
-        'Help statuses and copies':'Stuck / need help on a chore lets its current responsible person explain the obstacle. Everyone sees active issues under Needs help and can confirm resolution without completing or dropping work. Status history keeps older notes. Duplicate chore copies settings into a fresh unassigned chore after reviewing a new name.',
+        'Help statuses and copies':'Stuck / need help on a chore lets its current responsible person explain the obstacle. Everyone sees active issues under Needs attention and can confirm resolution without completing or dropping work. Status history keeps older notes. Duplicate chore copies settings into a fresh unassigned chore after reviewing a new name.',
         'Points and resets':'Points & standings shows your total and streak. Only ginaria can reset one person or everyone, with confirmation and optional streak reset. History stays saved. Ginaria can undo a reset from Reset history / Undo while affected scores have no newer activity.',
         'Notifications and recovery':'Trades appear on the dashboard. Trade DMs are optional: turn them on in Notifications for your own account. Feedback DMs go to ginaria. Use Refresh / Resume after a restart or ten minutes to restore your page, filters, and date. Expired actions and confirmations are never replayed. /chores also offers Continue where I left off. Private controls edit shared household information.'}
 
@@ -1072,7 +1140,7 @@ def install(ns, ui, lock):
             self.add_item(picker)
             self.nav()
 
-    result = SimpleNamespace(Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
+    result = SimpleNamespace(Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
 
     from chore_recovery import install as install_recovery
     recovery = install_recovery(ns, ui, result)

@@ -14,7 +14,7 @@ Open **/chores** in the household Discord server. Sprig opens your private works
 | Trades | Incoming and outgoing proposals. The dashboard shows your incoming count. |
 | Points & standings | Your total and streak, plus household standings, shown privately with buttons. |
 | Calendar | Private week/month schedule preview, day details, and a separate No fixed day list. |
-| Needs help | Shared active obstacles: Stuck, Need supplies, or Need help, with notes and resolution. |
+| Needs attention | Overdue, due unclaimed, and blocked chores together, with counts, help notes, and links to chore cards. |
 | Reminders | Your own opt-in reminder times and off switch. |
 | Notifications | Opt in to private trade notifications for your own account. |
 | Help | Short task-oriented explanations, including the color legend. |
@@ -93,7 +93,7 @@ This is a schedule preview inside Discord, not an external calendar sync, histor
 
 Open the chore card → **Stuck / need help**. The person responsible for the current due, unfinished occurrence can choose **Stuck**, **Need supplies**, or **Need help**, then add a note. Notes are shared household information, even though controls are private. They do not drop responsibility, mark the chore Done, change points, or send an automatic DM. An away person can still explain why their due responsibility needs help.
 
-The current status appears on chore lists and the card. **Dashboard → Needs help** collects active issues so everyone can see what needs attention. The status follows the unfinished occurrence if it is reassigned or moved; the new responsible person can update it. Editing checklist steps or the time estimate does not remove the help note.
+The current status appears on chore lists and the card. **Dashboard → Needs attention** collects active issues so everyone can see what needs attention. The status follows the unfinished occurrence if it is reassigned or moved; the new responsible person can update it. Editing checklist steps or the time estimate does not remove the help note.
 
 Anyone using their own household controls can **Mark resolved**, with confirmation, after the obstacle is handled. This clears only the active status. Updated and resolved notes remain in **Status history**, including who reported or resolved them. Cancel leaves the status unchanged. A completed, archived, or advanced occurrence no longer appears as actively needing help. If a completion is safely undone, its previous occurrence’s unresolved status is visible again. Normal Done and checklist requirements still apply.
 
@@ -236,3 +236,11 @@ Your page, tab, search, filters, chore card and return path, and calendar date/v
 If another person changes chores while your screen is open, navigation still opens current information normally. An outdated action refreshes your location and explains that no action was taken. Expired confirmations return to the relevant card, scores, or other safe parent view so you can review a new confirmation. Unsaved form text is not recovered. If a saved location no longer exists, Sprig returns to the dashboard.
 
 After this feature is first deployed, reopen /chores once. Earlier messages were created without recovery information and cannot gain it retroactively. No private screens are posted publicly or automatically polled.
+
+## Find work needing attention
+
+Open **Dashboard → Needs attention**. This private household view shows each chore once, with every applicable label: **Overdue**, **Needs someone**, and **Blocked** (Stuck, Need supplies, or Need help). Counts can overlap. Help notes and current responsible people appear beside the schedule and points. Open a chore card to claim, reassign, complete, or review its help status; Back returns to your page. Previous and Next sit below the page number. Refresh / Resume restores the view after expiry or restart.
+
+Needs someone includes unfinished work due now without a current owner; next week's reservation does not cover this week. Overdue means its scheduled day or shift has ended, or a flexible weekly/monthly period has ended. Due today alone is not overdue. Moved occurrences use the end of the moved day. One-time chores have no overdue deadline. Completed, archived, skipped expired occurrences, and resolved help notes are excluded as appropriate.
+
+For flexible daily, twice-daily, weekly, and monthly work without a recorded occurrence date, the first attention check saves the end of the current period. That date persists while the occurrence remains unfinished. Sprig does not guess historical missed dates before tracking began. This tracking does not change the chore's schedule, missed-work policy, ownership, points, or history.

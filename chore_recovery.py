@@ -87,6 +87,8 @@ def install(ns, ui, w):
             return w.Manage(owner, guild)
         if kind == 'reminders':
             return ui.planning.Reminders(owner)
+        if kind == 'attention':
+            return w.Attention(owner, guild, context.get('page', 0))
         if kind == 'needs_help':
             return ui.planning.NeedsHelp(owner, guild, context.get('page', 0))
         return w.Dashboard(owner, guild)

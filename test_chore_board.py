@@ -90,6 +90,139 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.db.close()
         self.temp.cleanup()
 
+    async def test_attention_combines_reasons_once_and_preserves_household_data(self):
+        w=self.ui.workspace;p=self.ui.planning
+        with self.clock('2026-10-19T09:00:00'):
+            self.ui.create_chore('Monday blocked','monday','5','')
+            qid=self.db.execute("SELECT id FROM quests WHERE name='Monday blocked'").fetchone()[0]
+            self.db.execute('UPDATE quests SET assigned_to=? WHERE id=?',('10',qid));self.db.commit()
+            self.assertIn('saved',p.report_help(10,qid,'Need supplies','No cleaner',p.help_snapshot(qid)))
+        with self.clock('2026-10-20T09:00:00'):
+            self.db.execute('UPDATE quests SET assigned_to=NULL WHERE id=?',(qid,));self.db.commit()
+            before={t:self.db.execute('SELECT * FROM '+t).fetchall() for t in ('quests','users','claims','completion_log','chore_help')}
+            view=w.Attention(10,Interaction().guild)
+            rows=[r for r in view.entries if r[0][0]==qid]
+            self.assertEqual(len(rows),1);self.assertEqual(rows[0][1:3],(True,True));self.assertEqual(rows[0][3][4],'Need supplies')
+            field=next(f for f in view.embed.fields if f.name=='Monday blocked')
+            for text in ('Overdue','Needs someone','Blocked','No cleaner'):self.assertIn(text,field.value)
+            self.assertEqual(before,{t:self.db.execute('SELECT * FROM '+t).fetchall() for t in before})
+
+    async def test_attention_today_future_completed_archived_and_no_deadline(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T09:00:00'):
+            for name,freq in [('Today','tuesday'),('Future','wednesday'),('One time','one-time'),('Archived','daily')]:self.ui.create_chore(name,freq,'5','')
+            ids=dict(self.db.execute('SELECT name,id FROM quests'))
+            self.db.execute("UPDATE quests SET assigned_to='10' WHERE name='Today'")
+            self.db.execute("INSERT INTO archived_chores VALUES(?,'10','now')",(ids['Archived'],))
+            self.db.execute('UPDATE quests SET completed=1 WHERE id=2');self.db.commit()
+            rows={r[0][1]:r for r in w.Attention(10).entries}
+            self.assertNotIn('Today',rows);self.assertNotIn('Future',rows);self.assertNotIn('Archived',rows);self.assertNotIn('My bathroom',rows)
+            self.assertEqual(rows['One time'][1:3],(False,True));self.assertIsNone(rows['One time'][4])
+
+    async def test_attention_am_boundary_and_moved_occurrence_day_end(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T09:00:00'):
+            self.ui.create_chore('Morning shift','daily-am','5','')
+            qid=self.db.execute("SELECT id FROM quests WHERE name='Morning shift'").fetchone()[0]
+            self.db.execute("UPDATE quests SET assigned_to='10' WHERE id=?",(qid,));self.db.commit()
+            self.assertNotIn(qid,[r[0][0] for r in w.Attention(10).entries])
+        with self.clock('2026-10-20T12:00:00'):
+            self.assertTrue(next(r for r in w.Attention(10).entries if r[0][0]==qid)[1])
+            self.db.execute("INSERT INTO occurrence_moves VALUES(?,'2026-10-21')",(qid,));self.db.commit()
+            self.assertNotIn(qid,[r[0][0] for r in w.Attention(10).entries])
+        with self.clock('2026-10-21T23:59:59'):
+            self.assertNotIn(qid,[r[0][0] for r in w.Attention(10).entries])
+        with self.clock('2026-10-22T00:00:00'):
+            self.assertTrue(next(r for r in w.Attention(10).entries if r[0][0]==qid)[1])
+
+    async def test_attention_flexible_deadline_persists_and_checklist_edit_does_not_erase_overdue(self):
+        w=self.ui.workspace;p=self.ui.planning
+        with self.clock('2026-10-20T09:00:00'):
+            w.Attention(10)
+            self.assertNotIn(2,[r[0][0] for r in w.Attention(10).entries])
+        with self.clock('2026-10-25T17:59:59'):
+            self.assertNotIn(2,[r[0][0] for r in w.Attention(10).entries])
+        with self.clock('2026-10-25T18:00:00'):
+            self.assertTrue(next(r for r in w.Attention(10).entries if r[0][0]==2)[1])
+            p.save_plan(2,'10','Wipe sink',p.plan(2))
+            self.assertTrue(next(r for r in w.Attention(10).entries if r[0][0]==2)[1])
+            saved=self.db.execute('SELECT * FROM attention_windows WHERE quest_id=2').fetchone()
+            w.recovery.live.clear();w.Attention(10)
+            self.assertEqual(saved,self.db.execute('SELECT * FROM attention_windows WHERE quest_id=2').fetchone())
+
+    async def test_attention_skip_missed_resolved_help_and_next_week_signup(self):
+        w=self.ui.workspace;p=self.ui.planning
+        with self.clock('2026-10-19T09:00:00'):
+            self.ui.create_chore('Skip Monday','monday','5','')
+            qid=self.db.execute("SELECT id FROM quests WHERE name='Skip Monday'").fetchone()[0]
+            self.ui.timing.set_policy(qid,'skip')
+            self.ui.signup(10,1,self.ui.week_key(1))
+            self.assertTrue(next(r for r in w.Attention(10).entries if r[0][0]==1)[2])
+            self.assertIn('saved',p.report_help(10,2,'Need help','Heavy',p.help_snapshot(2)))
+            self.assertTrue(next(r for r in w.Attention(10).entries if r[0][0]==2)[3])
+            p.resolve_help(20,2,p.help_snapshot(2))
+            self.assertNotIn(2,[r[0][0] for r in w.Attention(10).entries])
+        with self.clock('2026-10-20T09:00:00'):
+            self.assertNotIn(qid,[r[0][0] for r in w.Attention(10).entries])
+
+    async def test_attention_dashboard_navigation_paging_card_back_and_recovery(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T09:00:00'):
+            for n in range(11):self.ui.create_chore(f'Attention {n:02d}','one-time','5','')
+            event=Interaction()
+            await next(c for c in w.Dashboard(10).children if c.label=='Needs attention').callback(event)
+            view=event.response.payload['view'];self.assertIsInstance(view,w.Attention)
+            self.assertIn('Page 1 of 3',view.embed.footer.text)
+            await next(c for c in view.children if getattr(c,'label',None)=='Next').callback(event)
+            view=event.response.payload['view'];self.assertEqual(view.page,1)
+            picker=next(c for c in view.children if isinstance(c,discord.ui.Select));picker._values=[picker.options[0].value]
+            await picker.callback(event);card=event.response.payload['view']
+            await next(c for c in card.children if getattr(c,'label',None)=='Back').callback(event)
+            self.assertEqual(event.response.payload['view'].page,1)
+            panel=w.render(w.Attention(10,page=1));token=panel.recovery_token;w.recovery.live.clear()
+            await w.recovery.route(event,token,'r')
+            self.assertIsInstance(event.response.payload['view'],w.Attention);self.assertEqual(event.response.payload['view'].page,1)
+            self.assertFalse(await view.interaction_check(Interaction(20)))
+            self.assert_screen_limits(w.Dashboard(301104023405199361));self.assert_screen_limits(view)
+            self.assertTrue(panel.has_components_v2())
+
+    async def test_attention_monthly_and_daily_boundaries_with_fall_dst(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-31T09:00:00'):
+            self.ui.create_chore('Monthly check','monthly','5','')
+            self.db.execute("UPDATE quests SET assigned_to='10'");self.db.commit()
+            self.assertEqual(w.Attention(10).entries,[])
+        with self.clock('2026-11-01T00:00:00'):
+            rows={r[0][1]:r for r in w.Attention(10).entries}
+            self.assertTrue(rows['Monthly check'][1]);self.assertTrue(rows['Fill dishwasher'][1])
+            self.assertEqual(rows['Monthly check'][4].hour,0)
+        with self.clock('2026-11-01T03:00:00'):
+            rows={r[0][1]:r for r in w.Attention(10).entries}
+            self.assertTrue(rows['Monthly check'][1]);self.assertTrue(rows['Fill dishwasher'][1])
+
+    async def test_attention_completed_occurrence_gets_new_flexible_window(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T09:00:00'):
+            self.db.execute("UPDATE quests SET assigned_to='10' WHERE id=1");self.db.commit()
+            w.Attention(10)
+        with self.clock('2026-10-21T09:00:00'):
+            self.assertTrue(next(r for r in w.Attention(10).entries if r[0][0]==1)[1])
+            await self.ui.PersonalView(10,'mine',selected=1).act(Interaction(),'done')
+            self.assertNotIn(1,[r[0][0] for r in w.Attention(10).entries])
+        with self.clock('2026-10-22T09:00:00'):
+            self.assertNotIn(1,[r[0][0] for r in w.Attention(10).entries])
+        with self.clock('2026-10-23T00:00:00'):
+            self.assertTrue(next(r for r in w.Attention(10).entries if r[0][0]==1)[1])
+
+    async def test_attention_empty_and_shorter_page_clamps(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T09:00:00'):
+            self.db.execute("UPDATE quests SET completed=1");self.db.commit()
+            view=w.Attention(10,page=99)
+            self.assertEqual(view.entries,[]);self.assertEqual(view.page,0)
+            self.assertIn('Nothing needs attention',[f.name for f in view.embed.fields])
+            self.assertIn('Page 1 of 1',view.embed.footer.text)
+
     async def test_points_reset_owner_only_button_and_forged_confirmation(self):
         w=self.ui.workspace;owner=301104023405199361
         self.assertNotIn('Reset points',[getattr(c,'label',None) for c in w.Points(10).children])
@@ -741,7 +874,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_support_help_and_duplicate_entries_and_discord_limits(self):
         p=self.ui.planning;w=self.ui.workspace
-        self.assertIn('Needs help',[getattr(c,'label',None) for c in w.Dashboard(10).children])
+        self.assertIn('Needs attention',[getattr(c,'label',None) for c in w.Dashboard(10).children])
         p.report_help(10,2,'Need help','x'*500,p.help_snapshot(2))
         card=w.Card(10,2);picker=next(c for c in card.children if isinstance(c,discord.ui.Select));self.assertIn('Duplicate chore',[o.label for o in picker.options])
         for view in (p.HelpStatus(10,2),p.HelpStatus(20,2),p.NeedsHelp(10),p.HelpHistory(10,2),card,w.Dashboard(301104023405199361)):
