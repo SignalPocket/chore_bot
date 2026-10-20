@@ -182,6 +182,9 @@ def install(ns, ui, lock):
             self.button('Manage chores', lambda i: present(i, Manage(owner, i.guild)), row=1)
             self.button('Help', lambda i: present(i, Guide(owner)), row=1)
             self.button(f'Trades ({incoming} incoming)', lambda i: present(i, adapt(ui.TradeInboxView(owner), owner)), row=2)
+            self.button('Calendar',lambda i:present(i,ui.planning.Calendar(owner,i.guild)),row=3)
+            self.button('Needs help',lambda i:present(i,ui.planning.NeedsHelp(owner,i.guild)),row=3)
+            self.button('Reminders',lambda i:present(i,ui.planning.Reminders(owner)),row=3)
             self.button('Notifications', lambda i: present(i, Notifications(owner)), row=2)
             self.button('Points & standings',lambda i:present(i,Points(owner,i.guild)),row=2)
             if incoming: self.embed.add_field(name='Waiting for you', value=f'{incoming} incoming trade request(s).', inline=False)
@@ -448,7 +451,7 @@ def install(ns, ui, lock):
                     last=db.execute('SELECT completed_at FROM completion_log WHERE quest_id=? AND user_id=? AND undone_at IS NULL ORDER BY id DESC LIMIT 1',(q[0],str(owner))).fetchone()
                     status='Last completed '+last[0][:16].replace('T',' ') if last else status
                 self.quick_rows.append((q[0],ui.snapshot(q[0]),tab not in ('next','upcoming','done') and offset==0 and uid==str(owner) and not q[5] and ready(q[0])))
-                details=f'{timing.compact_label(q[2])} · {q[3]} points'
+                details=f'{timing.compact_label(q[2])} · {q[3]} points'+ui.planning.summary(q[0])+ui.planning.help_summary(q[0])
                 if area=='mine':
                     if tab=='due':
                         slot='AM slot' if q[2]=='twice-daily' and timing.now().hour<12 else 'PM slot' if q[2]=='twice-daily' else ''
@@ -502,11 +505,13 @@ def install(ns, ui, lock):
                     if not content:break
                     if isinstance(source,Browse) and index<len(source.quick_rows):
                         qid,expected,can_done=source.quick_rows[index]
-                        button=discord.ui.Button(label='Done' if can_done else 'Details',style=discord.ButtonStyle.success if can_done else discord.ButtonStyle.secondary,disabled=can_done and not ui.available(source.owner))
-                        async def click(i,qid=qid,expected=expected,can_done=can_done):
+                        pending_steps=can_done and not ui.planning.complete(qid)
+                        button=discord.ui.Button(label='Checklist' if pending_steps else 'Done' if can_done else 'Details',style=discord.ButtonStyle.success if can_done else discord.ButtonStyle.secondary,disabled=can_done and not ui.available(source.owner))
+                        async def click(i,qid=qid,expected=expected,can_done=can_done,pending_steps=pending_steps):
                             if not await source.interaction_check(i):return
                             if not can_done:
                                 return await present(i,Card(source.owner,qid,lambda:Browse(source.owner,**source.state,guild=i.guild),i.guild,1 if source.state['tab']=='next' else 0))
+                            if pending_steps or not ui.planning.complete(qid):return await present(i,ui.planning.Checklist(source.owner,qid,i.guild))
                             async def complete():
                                 async with lock:
                                     ns['reset_due_quests']()
@@ -620,6 +625,8 @@ def install(ns, ui, lock):
             db.execute('UPDATE quests SET name=?,frequency=? WHERE id=?',(am_name,'daily-am',qid))
             difficulty=db.execute('SELECT difficulty FROM quests WHERE id=?',(qid,)).fetchone()[0]
             pm_id=db.execute('INSERT INTO quests(name,frequency,points,notes,category,difficulty) VALUES(?,?,?,?,?,?)',(pm_name,'daily-pm',q[3],q[8],q[9],difficulty)).lastrowid
+            db.execute('INSERT INTO chore_plans SELECT ?,minutes,steps,revision FROM chore_plans WHERE quest_id=?',(pm_id,qid))
+            db.execute('INSERT INTO chore_checklist_revisions SELECT ?,revision FROM chore_checklist_revisions WHERE quest_id=?',(pm_id,qid))
             for key,frequency in [(qid,'daily-am'),(pm_id,'daily-pm')]:
                 last=lasts[frequency]
                 completed=bool(last and last.date()==now.date())
@@ -653,6 +660,11 @@ def install(ns, ui, lock):
             self.embed.add_field(name='Responsibility', value=f'{clean(person(uid,guild),100)} · {duration}', inline=False)
             self.embed.add_field(name='When', value=f'{timing.label(q[2],qid)}\n{due_text(q)}', inline=False)
             self.embed.add_field(name='Points and room', value=f'{q[3]} points · {clean(q[9] or "Unspecified",100)}', inline=False)
+            self.embed.add_field(name='Estimate and checklist',value=(ui.planning.summary(qid).removeprefix(' · ') or 'No estimate or checklist yet'),inline=False)
+            help_status=ui.planning.help_record(qid)
+            if help_status and not q[5]:self.embed.add_field(name='⚠ '+help_status[4],value=clean(help_status[5],500),inline=False)
+            self.button('Stuck / need help',lambda i:present(i,ui.planning.HelpStatus(owner,qid,i.guild)),row=2)
+            if ui.planning.steps(qid):self.button('Checklist',lambda i:present(i,ui.planning.Checklist(owner,qid,i.guild)),row=2)
             if q[8]: self.embed.add_field(name='Instructions', value=clean(q[8], 1000), inline=False)
             card = lambda: Card(owner, qid, back, guild, offset)
             async def mutate(i, action):
@@ -705,7 +717,7 @@ def install(ns, ui, lock):
                         await present(event,card(),text)
                     await present(i,Confirm(owner,'Take ongoing responsibility?','This keeps future occurrences assigned to you across weeks, until you drop or reassign it.',save,card))
                 self.button('Every week · ongoing',ongoing,row=0)
-            options = [('Give feedback','feedback'), ('Edit chore','edit'), ('Reassign','reassign'), ('Completion history','history')]
+            options = [('Duplicate chore','duplicate'), ('Estimate / checklist','plan'), ('Give feedback','feedback'), ('Edit chore','edit'), ('Reassign','reassign'), ('Completion history','history')]
             if q[2]=='twice-daily':options.append(('Separate AM and PM sign-ups','split'))
             if not q[5]: options.append(('Move this occurrence','move'))
             if db.execute('SELECT 1 FROM occurrence_moves WHERE quest_id=?',(qid,)).fetchone(): options.append(('Cancel occurrence move','unmove'))
@@ -714,6 +726,8 @@ def install(ns, ui, lock):
             picker = discord.ui.Select(placeholder='More actions…', row=1, options=[discord.SelectOption(label=l, value=v) for l,v in options])
             async def more(i):
                 value = picker.values[0]
+                if value == 'duplicate':return await i.response.send_modal(ui.planning.DuplicateModal(owner,qid))
+                if value == 'plan':return await i.response.send_modal(ui.planning.PlanModal(owner,qid,card))
                 if value == 'history': return await present(i, History(owner, qid, card))
                 if value == 'split':
                     expected_split=ui.reassign_snapshot(qid)
@@ -1028,6 +1042,8 @@ def install(ns, ui, lock):
         'Feedback and points':'Give feedback on a chore card to suggest timing, instructions, or points. Ginaria receives feedback DMs and resolves reviews in the owner inbox. Everyone can discuss; only ginaria resolves. Suggestions never apply themselves. Edits affect future points, not points already earned.',
         'History and mistakes':'Done awards points once per occurrence. Completion history records work after this update. Undo your most recent recorded completion only while its state and points remain unchanged. Undo reverses its points and streak changes. Earlier totals remain intact.',
         'Managing chores':'Manage chores groups Add and Archive/Restore. Edit any chore from its card. Room is optional and can be used as a filter. Archiving hides work and keeps records; restoring retains its state.',
+        'Planning and reminders':'Calendar previews scheduled chores by week or month; No fixed day keeps flexible work separate. Chore cards offer estimates and per-occurrence checklists. Finish steps before Done. Reminders are personal, off by default, with up to three Eastern times and an off switch.',
+        'Help statuses and copies':'Stuck / need help on a chore lets its current responsible person explain the obstacle. Everyone sees active issues under Needs help and can confirm resolution without completing or dropping work. Status history keeps older notes. Duplicate chore copies settings into a fresh unassigned chore after reviewing a new name.',
         'Points and resets':'Points & standings shows your total and streak. Only ginaria can reset one person or everyone, with confirmation and optional streak reset. History stays saved. Ginaria can undo a reset from Reset history / Undo while affected scores have no newer activity.',
         'Notifications and recovery':'Trades appear on the dashboard. Trade DMs are optional: turn them on in Notifications for your own account. Feedback DMs go to ginaria. Reopen /chores after a restart or ten minutes. Private controls edit shared household information.'}
 
@@ -1041,4 +1057,4 @@ def install(ns, ui, lock):
             self.add_item(picker)
             self.nav()
 
-    return SimpleNamespace(undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
+    return SimpleNamespace(Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)

@@ -14,7 +14,7 @@ def install(ns, ui):
     db.commit()
 
     def state(qid,uid):
-        return dict(reset_epoch=db.execute('SELECT COALESCE(MAX(id),0) FROM points_reset_log WHERE user_id=?',(str(uid),)).fetchone()[0],week=ui.week_key(),week_owner=ui.weekly_owner(qid),next_owner=ui.weekly_owner(qid,1),move=db.execute('SELECT day FROM occurrence_moves WHERE quest_id=?',(qid,)).fetchone(),quest=db.execute('SELECT name,frequency,points,assigned_to,completed,last_completed,reset_after FROM quests WHERE id=?',(qid,)).fetchone(),
+        return dict(planning=ui.planning.history_state(qid) if hasattr(ui,'planning') else None,reset_epoch=db.execute('SELECT COALESCE(MAX(id),0) FROM points_reset_log WHERE user_id=?',(str(uid),)).fetchone()[0],week=ui.week_key(),week_owner=ui.weekly_owner(qid),next_owner=ui.weekly_owner(qid,1),move=db.execute('SELECT day FROM occurrence_moves WHERE quest_id=?',(qid,)).fetchone(),quest=db.execute('SELECT name,frequency,points,assigned_to,completed,last_completed,reset_after FROM quests WHERE id=?',(qid,)).fetchone(),
             user=db.execute('SELECT points,streak,last_completed FROM users WHERE id=?',(str(uid),)).fetchone(),
             claim=db.execute('SELECT user_id FROM claims WHERE quest_id=?',(qid,)).fetchone(),
             timing=db.execute('SELECT ready_from FROM chore_timing WHERE quest_id=?',(qid,)).fetchone(),
@@ -41,6 +41,7 @@ def install(ns, ui):
         qid=event[0]
         before,after=json.loads(event[2]),json.loads(event[3])
         after.setdefault('reset_epoch',0)
+        after.setdefault('planning',None)
         if json.loads(capture(qid,uid))!=after or ui.is_archived(qid):
             return 'This chore, occurrence, or points total changed. It cannot safely be undone from this screen.'
         with db:

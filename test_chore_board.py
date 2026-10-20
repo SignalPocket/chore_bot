@@ -325,6 +325,407 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(w.render(view).to_components())
 
 
+    async def test_planning_estimate_validation_and_stale_edit(self):
+        p=self.ui.planning
+        self.assertIn('saved',p.save_plan(1,'15','Load cups\nLoad plates',p.plan(1)))
+        saved=p.plan(1)
+        for minutes,text in [('-1','A'),('1.5','A'),('1441','A'),('10','A\na'),('10','x'*81),('10','\n'.join(str(i) for i in range(13)))]:
+            self.assertNotIn('saved',p.save_plan(1,minutes,text,saved))
+            self.assertEqual(p.plan(1),saved)
+        self.assertIn('changed',p.save_plan(1,'20','A',(None,'[]',0)))
+        self.assertIn('saved',p.save_plan(1,'','',saved))
+        self.assertEqual(p.plan(1)[:2],(None,'[]'))
+
+    async def test_planning_checklist_required_done_and_undo_restores_progress(self):
+        p=self.ui.planning
+        with self.clock('2026-10-20T10:00:00'):
+            p.save_plan(2,'20','Sink\nFloor',p.plan(2))
+            await self.ui.PersonalView(10,'mine',selected=2).act(Interaction(),'done')
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=2').fetchone(),(0,))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+            view=p.Checklist(10,2);picker=next(c for c in view.children if isinstance(c,discord.ui.Select));picker._values=['0','1']
+            await picker.callback(Interaction())
+            self.assertTrue(p.complete(2))
+            await self.ui.PersonalView(10,'mine',selected=2).act(Interaction(),'done')
+            event=self.db.execute('SELECT MAX(id) FROM completion_log').fetchone()[0]
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(10,))
+            self.assertIn('restored',self.ui.undo_completion(10,event))
+            self.assertEqual(p.checked(2),{0,1})
+
+    async def test_planning_checklist_uncheck_reassign_stale_and_next_occurrence(self):
+        p=self.ui.planning
+        with self.clock('2026-10-20T10:00:00'):
+            p.save_plan(2,5,'One\nTwo',p.plan(2))
+            view=p.Checklist(10,2);picker=next(c for c in view.children if isinstance(c,discord.ui.Select));picker._values=['0']
+            await picker.callback(Interaction())
+            await picker.callback(Interaction())
+            self.assertEqual(p.checked(2),{0})
+            self.assertFalse(any(isinstance(c,discord.ui.Select) for c in p.Checklist(20,2).children))
+            self.db.execute("UPDATE quests SET assigned_to='20' WHERE id=2");self.db.commit()
+            view=p.Checklist(20,2);select=next(c for c in view.children if isinstance(c,discord.ui.Select));select._values=[]
+            await select.callback(Interaction(10));self.assertEqual(p.checked(2),{0})
+            await select.callback(Interaction(20));self.assertEqual(p.checked(2),set())
+            select._values=['0'];await p.Checklist(20,2).interaction_check(Interaction(20))
+        with self.clock('2026-10-26T10:00:00'):self.assertEqual(p.checked(2),set())
+
+    async def test_planning_checklist_edits_reset_steps_not_estimate_progress(self):
+        p=self.ui.planning
+        p.save_plan(2,5,'One',p.plan(2))
+        view=p.Checklist(10,2);picker=next(c for c in view.children if isinstance(c,discord.ui.Select));picker._values=['0'];await picker.callback(Interaction())
+        p.save_plan(2,10,'One',p.plan(2));self.assertEqual(p.checked(2),{0})
+        p.save_plan(2,10,'Different',p.plan(2));self.assertEqual(p.checked(2),set())
+        old=p.PlanModal(10,2,lambda:self.ui.workspace.Card(10,2))
+        self.assertFalse(await self.ui.workspace.View(10).interaction_check(Interaction(20)))
+
+    async def test_planning_inline_checklist_button_and_estimate(self):
+        p=self.ui.planning;w=self.ui.workspace
+        p.save_plan(2,15,'Sink',p.plan(2))
+        browse=w.Browse(10,'mine')
+        self.assertIn('~15 min',str(browse.embed.to_dict()))
+        wire=w.render(browse)
+        section=next(item for item in wire.children if isinstance(item,discord.ui.Section))
+        self.assertEqual(section.accessory.label,'Checklist')
+        i=Interaction();await section.accessory.callback(i)
+        self.assertIsInstance(i.response.payload['view'],p.Checklist)
+
+    async def test_planning_split_copies_estimates_and_checklist(self):
+        p=self.ui.planning;w=self.ui.workspace
+        self.db.execute("UPDATE quests SET frequency='twice-daily' WHERE id=1");self.db.commit()
+        p.save_plan(1,7,'Put dishes away',p.plan(1))
+        w.split_daily_shifts(1,self.ui.reassign_snapshot(1))
+        pm=self.db.execute('SELECT pm_id FROM chore_shift_splits WHERE original_id=1').fetchone()[0]
+        self.assertEqual(p.plan(pm),p.plan(1))
+
+    async def test_planning_reminders_default_off_and_personal_permissions(self):
+        p=self.ui.planning
+        with self.clock('2026-10-20T09:00:00'):
+            await p.send_due_reminders();self.dm.send.assert_not_awaited()
+            view=p.Reminders(10);toggle=next(c for c in view.children if getattr(c,'label',None)=='Turn on')
+            await toggle.callback(Interaction(20));self.assertEqual(p.settings(10)[0],0)
+            await toggle.callback(Interaction(10));self.assertEqual(p.settings(10)[0],1)
+            self.assertEqual(p.settings(20)[0],0)
+            await p.send_due_reminders();self.dm.send.assert_awaited_once()
+            self.assertIn('My bathroom',self.dm.send.call_args.args[0])
+            self.assertEqual(p.settings(20)[0],0)
+
+    async def test_planning_reminder_time_validation_and_toggle_off(self):
+        p=self.ui.planning;expected=p.settings(10)
+        for value in ('','9:00','25:00','09:60','09:00,10:00,11:00,12:00'):
+            self.assertIn('Use one',p.save_reminders(10,True,value,expected))
+        self.assertIn('on',p.save_reminders(10,True,'17:00,09:00',expected))
+        self.assertIn('changed',p.save_reminders(10,False,'09:00',expected))
+        view=p.Reminders(10);toggle=next(c for c in view.children if getattr(c,'label',None)=='Turn off');await toggle.callback(Interaction())
+        with self.clock('2026-10-20T09:00:00'):await p.send_due_reminders()
+        self.dm.send.assert_not_awaited()
+
+    async def test_planning_reminders_deduplicate_concurrent_and_restart(self):
+        p=self.ui.planning;p.save_reminders(10,True,'09:00',p.settings(10))
+        with self.clock('2026-10-20T09:01:00'):
+            await asyncio.gather(p.send_due_reminders(),p.send_due_reminders())
+            await p.send_due_reminders()
+        self.dm.send.assert_awaited_once()
+        self.assertEqual(self.db.execute('SELECT status FROM reminder_deliveries').fetchall(),[('sent',)])
+
+    async def test_planning_reminders_skip_away_unowned_archived_and_downtime(self):
+        p=self.ui.planning;p.save_reminders(10,True,'09:00',p.settings(10))
+        with self.clock('2026-10-20T09:16:00'):await p.send_due_reminders()
+        self.dm.send.assert_not_awaited()
+        self.ui.attendance.add('10','2026-10-20','2026-10-20','away')
+        with self.clock('2026-10-20T09:00:00'):await p.send_due_reminders()
+        self.dm.send.assert_not_awaited()
+        self.db.execute('UPDATE availability_exceptions SET active=0');self.db.execute("INSERT INTO archived_chores VALUES(2,'10','now')");self.db.commit()
+        with self.clock('2026-10-20T09:00:00'):await p.send_due_reminders()
+        self.dm.send.assert_not_awaited()
+
+    async def test_planning_reminder_failed_send_not_retried(self):
+        p=self.ui.planning;p.save_reminders(10,True,'09:00',p.settings(10));self.dm.send.side_effect=TimeoutError()
+        with self.clock('2026-10-20T09:00:00'):
+            await p.send_due_reminders();await p.send_due_reminders()
+        self.dm.send.assert_awaited_once()
+        self.assertEqual(self.db.execute('SELECT status FROM reminder_deliveries').fetchone(),('failed_uncertain',))
+
+    async def test_planning_reminder_optout_during_name_fetch_cancels(self):
+        p=self.ui.planning;p.save_reminders(10,True,'09:00',p.settings(10))
+        async def fetch(uid):
+            p.save_reminders(10,False,'09:00',p.settings(10));return self.dm
+        with patch.object(self.app.bot,'get_user',return_value=None),patch.object(self.app.bot,'fetch_user',side_effect=fetch):
+            with self.clock('2026-10-20T09:00:00'):await p.send_due_reminders()
+        self.dm.send.assert_not_awaited()
+        self.assertEqual(self.db.execute('SELECT status FROM reminder_deliveries').fetchone(),('canceled',))
+
+    async def test_planning_calendar_week_month_day_private_and_no_mutation(self):
+        p=self.ui.planning;w=self.ui.workspace
+        before=self.db.execute('SELECT * FROM quests').fetchall()
+        day=datetime(2026,10,20).date()
+        for view in (p.Calendar(10,day=day),p.Calendar(10,day=day,mode='month'),p.Day(10,day),p.Day(10,day,flexible=True)):
+            self.assert_screen_limits(view);self.assertTrue(w.render(view).to_components())
+            self.assertFalse(await view.interaction_check(Interaction(20)))
+        self.assertEqual(self.db.execute('SELECT * FROM quests').fetchall(),before)
+        month=p.Calendar(10,day=day,mode='month')
+        self.assertIn('Mo Tu We Th Fr Sa Su',str(month.embed.to_dict()))
+        self.assertEqual(sum(len(c.options) for c in month.children if isinstance(c,discord.ui.Select)),31)
+
+    async def test_planning_calendar_flexible_and_fixed_day_separation(self):
+        p=self.ui.planning;day=datetime(2026,10,20).date()
+        self.assertNotIn(2,[q[0] for q,uid in p.project(day)])
+        self.assertIn(2,[q[0] for q,uid in p.project(day,flexible=True)])
+        self.db.execute("UPDATE quests SET frequency='tuesday' WHERE id=2");self.db.commit()
+        self.assertIn(2,[q[0] for q,uid in p.project(day)])
+        self.assertNotIn(2,[q[0] for q,uid in p.project(day+timedelta(days=1))])
+
+    async def test_planning_calendar_reservations_ongoing_claims_and_handoff(self):
+        p=self.ui.planning
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.executemany('INSERT INTO week_signups VALUES(?,?,?)',[(1,'2026-10-18','10'),(1,'2026-10-25','20')]);self.db.commit()
+            self.assertEqual(p.owner_on(self.db.execute('SELECT * FROM quests WHERE id=1').fetchone(),datetime(2026,10,25).date()),'10')
+            self.assertEqual(p.project(datetime(2026,10,26).date(),20)[0][1],'20')
+            self.assertFalse(p.project(datetime(2026,10,26).date(),10))
+            self.db.execute("UPDATE quests SET assigned_to='30' WHERE id=1");self.db.commit()
+            self.assertEqual(p.project(datetime(2026,10,26).date(),30)[0][1],'30')
+
+    async def test_planning_calendar_moved_occurrence_and_future_details_are_read_only(self):
+        p=self.ui.planning
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("INSERT INTO occurrence_moves VALUES(2,'2026-10-23')");self.db.commit()
+            day=datetime(2026,10,23).date()
+            self.assertIn(2,[q[0] for q,uid in p.project(day)])
+            self.assertNotIn(2,[q[0] for q,uid in p.project(day,flexible=True)])
+            view=p.Day(10,day,True);picker=next(c for c in view.children if isinstance(c,discord.ui.Select));picker._values=['2'];i=Interaction();await picker.callback(i)
+            result=i.response.payload['view']
+            self.assertNotIn('Done',[getattr(c,'label',None) for c in result.children])
+            self.assertIn('Open current chore',[getattr(c,'label',None) for c in result.children])
+
+    async def test_planning_dashboard_entries_and_large_checklist_limits(self):
+        p=self.ui.planning;w=self.ui.workspace
+        labels=[getattr(c,'label',None) for c in w.Dashboard(10).children]
+        self.assertIn('Calendar',labels);self.assertIn('Reminders',labels)
+        p.save_plan(2,1440,'\n'.join(f'{i}: '+'x'*70 for i in range(12)),p.plan(2))
+        for view in (p.Checklist(10,2),p.Reminders(10),w.Card(10,2),w.Dashboard(301104023405199361)):
+            self.assert_screen_limits(view);wire=w.render(view);self.assertTrue(wire.to_components())
+
+
+    async def test_planning_overdue_checklist_carries_but_skipped_cycle_starts_fresh(self):
+        p=self.ui.planning
+        self.db.execute("UPDATE quests SET frequency='daily',assigned_to='10' WHERE id=1");self.db.commit()
+        with self.clock('2026-10-20T10:00:00'):
+            p.save_plan(1,5,'One',p.plan(1));view=p.Checklist(10,1)
+            picker=next(c for c in view.children if isinstance(c,discord.ui.Select));picker._values=['0'];await picker.callback(Interaction())
+        with self.clock('2026-10-21T10:00:00'):
+            self.assertEqual(p.checked(1),{0})
+            self.ui.timing.set_policy(1,'skip')
+            view=p.Checklist(10,1);picker=next(c for c in view.children if isinstance(c,discord.ui.Select));picker._values=['0'];await picker.callback(Interaction())
+            self.assertEqual(p.checked(1),{0})
+        with self.clock('2026-10-22T10:00:00'):
+            self.app.reset_due_quests();self.assertEqual(p.checked(1),set())
+
+    async def test_planning_old_checklist_wording_does_not_restore_old_checks(self):
+        p=self.ui.planning
+        p.save_plan(2,5,'One',p.plan(2));view=p.Checklist(10,2)
+        picker=next(c for c in view.children if isinstance(c,discord.ui.Select));picker._values=['0'];await picker.callback(Interaction())
+        p.save_plan(2,5,'Two',p.plan(2));p.save_plan(2,5,'One',p.plan(2))
+        self.assertEqual(p.checked(2),set())
+
+    async def test_planning_checklist_save_rolls_back_on_database_failure(self):
+        p=self.ui.planning;p.save_plan(2,5,'One\nTwo',p.plan(2))
+        first=p.Checklist(10,2);picker=next(c for c in first.children if isinstance(c,discord.ui.Select));picker._values=['0'];await picker.callback(Interaction())
+        self.db.execute("CREATE TRIGGER fail_check BEFORE INSERT ON checklist_checks WHEN NEW.item=1 BEGIN SELECT RAISE(ABORT,'fail'); END");self.db.commit()
+        view=p.Checklist(10,2);picker=next(c for c in view.children if isinstance(c,discord.ui.Select));picker._values=['0','1']
+        with self.assertRaises(Exception):await picker.callback(Interaction())
+        self.assertEqual(p.checked(2),{0})
+
+    async def test_planning_reminder_dst_missing_hour_skipped_repeated_hour_once(self):
+        p=self.ui.planning;p.save_reminders(10,True,'02:30',p.settings(10))
+        with self.clock('2026-03-08T03:30:00'):await p.send_due_reminders()
+        self.dm.send.assert_not_awaited()
+        p.save_reminders(10,True,'01:00',p.settings(10))
+        for fold in (0,1):
+            when=datetime(2026,11,1,1,1,tzinfo=self.app.QUEST_TIMEZONE,fold=fold)
+            with patch.object(self.app,'now_local',return_value=when):await p.send_due_reminders()
+        self.dm.send.assert_awaited_once()
+
+    async def test_planning_checklist_new_completion_cycle_is_fresh(self):
+        p=self.ui.planning
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("UPDATE quests SET frequency='daily' WHERE id=2");self.db.commit()
+            p.save_plan(2,5,'One',p.plan(2));view=p.Checklist(10,2)
+            picker=next(c for c in view.children if isinstance(c,discord.ui.Select));picker._values=['0'];await picker.callback(Interaction())
+            await self.ui.PersonalView(10,'mine',selected=2).act(Interaction(),'done')
+        with self.clock('2026-10-21T10:00:00'):
+            self.app.reset_due_quests();self.assertEqual(p.checked(2),set())
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(10,))
+
+
+    async def test_planning_old_checklist_button_never_completes_and_done_awards_once(self):
+        p=self.ui.planning;w=self.ui.workspace
+        p.save_plan(2,5,'One',p.plan(2))
+        old=w.render(w.Browse(10,'mine'))
+        section=next(item for item in old.children if isinstance(item,discord.ui.Section))
+        view=p.Checklist(10,2);picker=next(c for c in view.children if isinstance(c,discord.ui.Select));picker._values=['0'];await picker.callback(Interaction())
+        i=Interaction();await section.accessory.callback(i)
+        self.assertIsInstance(i.response.payload['view'],p.Checklist)
+        self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=2').fetchone(),(0,))
+        view=p.Checklist(10,2);done=next(c for c in view.children if getattr(c,'label',None)=='Done')
+        await asyncio.gather(done.callback(Interaction()),done.callback(Interaction()))
+        self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(10,))
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(1,))
+
+    async def test_planning_metadata_modal_checks_person_and_stale_settings(self):
+        p=self.ui.planning;w=self.ui.workspace
+        modal=p.PlanModal(10,2,lambda:w.Card(10,2));modal.minutes._value='12';modal.items._value='One\nTwo'
+        await modal.on_submit(Interaction(20));self.assertEqual(p.plan(2),(None,'[]',0))
+        await modal.on_submit(Interaction());self.assertEqual(p.plan(2)[0],12)
+        modal.minutes._value='20';await modal.on_submit(Interaction());self.assertEqual(p.plan(2)[0],12)
+        bad=p.PlanModal(10,2,lambda:w.Card(10,2));i=Interaction();i.guild_id=999
+        bad.minutes._value='40';await bad.on_submit(i);self.assertEqual(p.plan(2)[0],12)
+
+    async def test_planning_reminder_modal_changes_times_without_opting_in(self):
+        p=self.ui.planning
+        modal=p.ReminderTimes(10);modal.times._value='10:00, 19:00'
+        await modal.on_submit(Interaction(20));self.assertEqual(p.settings(10)[2],0)
+        await modal.on_submit(Interaction())
+        self.assertEqual(p.settings(10)[:2],(0,'["10:00", "19:00"]'))
+        modal.times._value='11:00';await modal.on_submit(Interaction())
+        self.assertEqual(p.settings(10)[1],'["10:00", "19:00"]')
+
+
+    async def test_support_status_preserves_ownership_completion_points_and_history(self):
+        p=self.ui.planning
+        before=self.db.execute('SELECT * FROM quests').fetchall()
+        expected=p.help_snapshot(2)
+        self.assertIn('saved',p.report_help(10,2,'Need supplies','Out of cleaner',expected))
+        self.assertEqual(self.db.execute('SELECT * FROM quests').fetchall(),before)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM users').fetchone(),(0,))
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+        self.assertIn('Need supplies',p.help_summary(2))
+        self.assertIn('Need supplies',str(self.ui.workspace.Browse(10,'mine').embed.to_dict()))
+        self.dm.send.assert_not_awaited()
+
+    async def test_support_reports_permissions_validation_and_stale_updates(self):
+        p=self.ui.planning;expected=p.help_snapshot(2)
+        self.assertIn('Only the person',p.report_help(20,2,'Stuck','Cannot reach',expected))
+        for kind,note in [('Other','Text'),('Stuck',''),('Stuck','x'*501)]:
+            self.assertNotIn('saved',p.report_help(10,2,kind,note,expected))
+        p.report_help(10,2,'Stuck','Cannot reach',expected)
+        self.assertIn('changed',p.report_help(10,2,'Need help','Move furniture',expected))
+        self.assertEqual(p.help_record(2)[5],'Cannot reach')
+        p.report_help(10,2,'Need help','Move furniture',p.help_snapshot(2))
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM chore_help').fetchone(),(2,))
+        self.assertIsNotNone(self.db.execute('SELECT resolved_at FROM chore_help WHERE id=1').fetchone()[0])
+
+    async def test_support_status_survives_reassign_and_definition_edits(self):
+        p=self.ui.planning;p.report_help(10,2,'Need help','Heavy basket',p.help_snapshot(2))
+        record=p.help_record(2)
+        p.save_plan(2,10,'Lift basket',p.plan(2));self.assertEqual(p.help_record(2),record)
+        self.db.execute("UPDATE quests SET assigned_to='20' WHERE id=2");self.db.commit()
+        self.assertEqual(p.help_record(2),record)
+        self.assertIn('Only the person',p.report_help(10,2,'Stuck','Old owner',p.help_snapshot(2)))
+        self.assertIn('saved',p.report_help(20,2,'Need supplies','New owner needs gloves',p.help_snapshot(2)))
+        self.assertEqual(p.help_record(2)[3],'20')
+
+    async def test_support_completion_hides_status_undo_restores_it(self):
+        p=self.ui.planning
+        p.report_help(10,2,'Need help','Heavy',p.help_snapshot(2))
+        before=p.help_record(2)
+        await self.ui.PersonalView(10,'mine',selected=2).act(Interaction(),'done')
+        self.assertEqual(p.help_summary(2),'')
+        event=self.db.execute('SELECT MAX(id) FROM completion_log').fetchone()[0]
+        self.ui.undo_completion(10,event)
+        self.assertEqual(p.help_record(2),before)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM chore_help').fetchone(),(1,))
+
+    async def test_support_resolve_is_confirmed_shared_and_private_permissions_hold(self):
+        p=self.ui.planning;p.report_help(10,2,'Need supplies','Soap',p.help_snapshot(2))
+        view=p.HelpStatus(20,2);button=next(c for c in view.children if getattr(c,'label',None)=='Mark resolved')
+        self.assertNotIn('Stuck',[getattr(c,'label',None) for c in view.children])
+        wrong=Interaction(10);await button.callback(wrong);self.assertIsNotNone(p.help_record(2))
+        i=Interaction(20);await button.callback(i)
+        confirm=i.response.payload['view']
+        cancel=next(c for c in confirm.children if getattr(c,'label',None)=='Cancel');await cancel.callback(Interaction(20));self.assertIsNotNone(p.help_record(2))
+        save=next(c for c in confirm.children if getattr(c,'label',None)=='Confirm')
+        await asyncio.gather(save.callback(Interaction(20)),save.callback(Interaction(20)))
+        self.assertIsNone(p.help_record(2))
+        self.assertEqual(self.db.execute('SELECT resolved_by,resolution FROM chore_help').fetchone(),('20','Marked resolved'))
+        self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=2').fetchone(),(0,))
+        self.dm.send.assert_not_awaited()
+
+    async def test_support_note_modal_checks_context_and_preserves_notes_on_failure(self):
+        p=self.ui.planning
+        modal=p.HelpNote(10,2,'Stuck');modal.note._value='Need a hand'
+        wrong=Interaction();wrong.guild_id=999;await modal.on_submit(wrong);self.assertIsNone(p.help_record(2))
+        await modal.on_submit(Interaction(20));self.assertIsNone(p.help_record(2))
+        await modal.on_submit(Interaction());self.assertEqual(p.help_record(2)[5],'Need a hand')
+        self.db.execute("CREATE TRIGGER fail_help BEFORE INSERT ON chore_help BEGIN SELECT RAISE(ABORT,'fail'); END");self.db.commit()
+        with self.assertRaises(Exception):p.report_help(10,2,'Need help','Updated',p.help_snapshot(2))
+        self.assertEqual(p.help_record(2)[5],'Need a hand')
+
+    async def test_support_resolve_rejects_old_cycle_and_archived_issues_hide(self):
+        p=self.ui.planning;p.report_help(10,2,'Stuck','Note',p.help_snapshot(2));expected=p.help_snapshot(2)
+        self.db.execute("UPDATE quests SET last_completed='2026-10-20T10:00:00-04:00' WHERE id=2");self.db.commit()
+        self.assertIn('changed',p.resolve_help(20,2,expected));self.assertIsNone(p.help_record(2))
+        self.assertEqual(self.db.execute('SELECT resolved_at FROM chore_help').fetchone(),(None,))
+        p.report_help(10,2,'Need help','Current',p.help_snapshot(2))
+        self.db.execute("INSERT INTO archived_chores VALUES(2,'10','now')");self.db.commit()
+        self.assertEqual(p.help_summary(2),'')
+        self.assertIn('0 active',p.NeedsHelp(10).embed.description)
+
+    async def test_support_duplicate_copies_definition_not_history_or_responsibility(self):
+        p=self.ui.planning
+        await self.ui.PersonalView(10,'mine',selected=2).act(Interaction(),'done')
+        p.save_plan(2,12,'Sink\nFloor',p.plan(2))
+        self.db.execute("UPDATE quests SET notes='Use gloves',category='bathroom',difficulty='hard' WHERE id=2");self.db.commit()
+        self.ui.timing.set_policy(2,'skip')
+        history=self.db.execute('SELECT * FROM completion_log').fetchall();users=self.db.execute('SELECT * FROM users').fetchall()
+        qid,text=p.duplicate(2,'Guest bathroom',p.duplicate_snapshot(2),'copy-1',20)
+        self.assertIsNotNone(qid)
+        self.assertEqual(self.db.execute('SELECT name,frequency,points,notes,category,difficulty,assigned_to,completed,last_completed,reset_after FROM quests WHERE id=?',(qid,)).fetchone(),('Guest bathroom','weekly',10,'Use gloves','bathroom','hard',None,0,None,None))
+        self.assertEqual(p.plan(qid),p.plan(2));self.assertEqual(self.ui.timing.policy(qid),'skip')
+        for table in ('claims','week_signups','completion_log','chore_help','checklist_checks','occurrence_moves'):
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM '+table+' WHERE quest_id=?',(qid,)).fetchone(),(0,))
+        self.assertEqual(self.db.execute('SELECT * FROM completion_log').fetchall(),history)
+        self.assertEqual(self.db.execute('SELECT * FROM users').fetchall(),users)
+
+    async def test_support_duplicate_idempotent_names_archives_and_stale_source(self):
+        p=self.ui.planning;expected=p.duplicate_snapshot(2)
+        qid,_=p.duplicate(2,'Copy bathroom',expected,'copy-once',10)
+        self.assertEqual(p.duplicate(2,'Other name',expected,'copy-once',10)[0],qid)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM quests').fetchone(),(3,))
+        self.db.execute("INSERT INTO archived_chores VALUES(?,'10','now')",(qid,));self.db.commit()
+        for name in ('  COPY    bathroom  ','','x'*101):
+            self.assertIsNone(p.duplicate(2,name,expected,'new-'+name,10)[0])
+        p.save_plan(2,15,'Step',p.plan(2))
+        self.assertIn('changed',p.duplicate(2,'Another',expected,'stale',10)[1])
+
+    async def test_support_duplicate_transaction_rolls_back_all_tables(self):
+        p=self.ui.planning;p.save_plan(2,5,'One',p.plan(2));self.ui.timing.set_policy(2,'skip')
+        before={t:self.db.execute('SELECT * FROM '+t).fetchall() for t in ('quests','chore_plans','chore_checklist_revisions','chore_timing','missed_chore_policy','chore_copies')}
+        self.db.execute("CREATE TRIGGER fail_copy BEFORE INSERT ON chore_copies BEGIN SELECT RAISE(ABORT,'fail'); END");self.db.commit()
+        with self.assertRaises(Exception):p.duplicate(2,'Copy',p.duplicate_snapshot(2),'failure',10)
+        for table,rows in before.items():self.assertEqual(self.db.execute('SELECT * FROM '+table).fetchall(),rows)
+
+    async def test_support_duplicate_modal_review_cancel_permissions_and_repeat_confirm(self):
+        p=self.ui.planning
+        modal=p.DuplicateModal(20,2);modal.name._value='Guest bath'
+        wrong=Interaction(10);await modal.on_submit(wrong);self.assertEqual(self.db.execute('SELECT COUNT(*) FROM quests').fetchone(),(2,))
+        i=Interaction(20);await modal.on_submit(i)
+        review=i.response.payload['view'];self.assertEqual(review.embed.title,'Create this chore copy?')
+        self.assertIn('Guest bath',review.embed.description)
+        cancel=next(c for c in review.children if getattr(c,'label',None)=='Cancel');await cancel.callback(Interaction(20))
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM quests').fetchone(),(2,))
+        confirm=next(c for c in review.children if getattr(c,'label',None)=='Confirm');await confirm.callback(Interaction(10))
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM quests').fetchone(),(2,))
+        await asyncio.gather(confirm.callback(Interaction(20)),confirm.callback(Interaction(20)))
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM quests').fetchone(),(3,))
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM chore_copies').fetchone(),(1,))
+
+    async def test_support_help_and_duplicate_entries_and_discord_limits(self):
+        p=self.ui.planning;w=self.ui.workspace
+        self.assertIn('Needs help',[getattr(c,'label',None) for c in w.Dashboard(10).children])
+        p.report_help(10,2,'Need help','x'*500,p.help_snapshot(2))
+        card=w.Card(10,2);picker=next(c for c in card.children if isinstance(c,discord.ui.Select));self.assertIn('Duplicate chore',[o.label for o in picker.options])
+        for view in (p.HelpStatus(10,2),p.HelpStatus(20,2),p.NeedsHelp(10),p.HelpHistory(10,2),card,w.Dashboard(301104023405199361)):
+            self.assert_screen_limits(view);self.assertTrue(w.render(view).to_components())
+
+
     async def test_claim_done_and_repeat_click_awards_once(self):
         claim_view = self.ui.PersonalView(10, selected=1)
         event = Interaction()

@@ -4,13 +4,14 @@ The current household interface is documented in **USER-GUIDE.md**. It replaces 
 
 ## Runtime files
 
-Deploy all six modules together:
+Deploy all seven modules together:
 
 - sprig_bot.py. Discord bot, shared command mutations, and service entry point.
 - chore_board.py. Existing chore rules, specialized forms, permissions, and persistent panel registration.
 - chore_timing.py. Recurrence, day markers, missed-work policy, and readiness.
 - household_availability.py. Base rotation and dated attendance exceptions.
 - chore_history.py. Append-only completion ledger and atomic conservative Undo.
+- chore_planning.py. Personal opt-in reminders, estimates, occurrence checklists, and private calendar previews.
 - chore_workspace.py. Private dashboards, searchable lists, common chore cards, trip editor, and owner review queue.
 
 Dependencies remain discord.py 2.6 or newer below 3, python-dotenv, and tzdata. Configuration and the Discord token stay in the existing server environment; never put credentials into this guide or version control.
@@ -26,6 +27,20 @@ Validation: 186 tests pass, including independent owners/completions, boundary t
 Points & standings exposes Reset points only to ginaria (the configured OWNER account). One-account selection or Everyone leads to confirmation with affected account count, point total, and explicit streak policy. Keeping streaks is the default; clearing streaks also clears users.last_completed. Confirmation rechecks owner, household context, and the full affected score snapshot under the mutation lock. Reset audit rows and score updates commit together. No completion records or chore responsibilities are changed. History snapshots include a per-user reset epoch, so an earlier completion cannot be undone across a reset even if the numeric total later matches again. Older snapshots default to epoch zero for compatibility. Reset audit is retained in points_reset_log. Each confirmed reset also stores an atomic points_reset_batches record with affected users, before/after scores and streaks, per-user reset epochs, and completion watermarks. Owner-only reset history can undo one batch after confirmation if every affected account still matches. Restoration writes a new reset audit row, marks the batch undone, and records the owner action in the same transaction. Older completion snapshots remain blocked across reset recovery.
 
 Completion history offers ginaria confirmed correction of another person’s completion using the existing conservative latest-completion checks. The original person receives the reversal; owner_action_log records the actor and before/after state transactionally. The owner inbox offers Open and Resolved views; Reopen confirms, updates only a still-resolved review, and records the action without sending another DM. Every recovery mutation checks actual owner identity and household context before acquiring the lock. Database failures roll back the mutation and its audit together.
+
+## Planning, checklists, reminders, and calendar
+
+chore_planning.install runs after history and workspace setup. Its planning tables retain plan definitions, monotonic checklist revisions, per-occurrence checks, personal reminder settings, and delivery deduplication. Checklist cycle keys follow recurrence state, not the calendar date, so Keep overdue preserves unfinished work. Changed definitions start a new revision; estimate-only edits preserve checks. Every Done entry point uses the same backend checklist requirement before awarding points. History snapshots include planning state; an eligible Undo restores the old occurrence key and its saved progress.
+
+The existing one-minute reset loop dispatches reminders after readiness resets, and catches dispatch errors without stopping recurrence processing. Reminder delivery is off by default, requires personal opt-in, and filters current owner/readiness/availability. A durable user/date/time delivery claim precedes network I/O; opt-in and ownership are checked again before sending. Failed/uncertain attempts are not retried. DST nonexistent times are skipped and repeated times share one delivery key. No reminder backfill older than 15 minutes. Offline tests mock all Discord delivery.
+
+Calendar week/month/day views reuse recurrence matching and stored dated moves, with per-date weekly reservation projection and ongoing-assignment precedence. They are private schedule previews, not historical ownership reconstruction or external calendar sync. Flexible work is listed separately. Sunday uses pre-6-p.m. ownership. Future day selection cannot complete a future occurrence; current controls are opened explicitly.
+
+## Help statuses and duplication
+
+The planning module also maintains chore_help (append-only notes with resolution metadata) and chore_copies (stable submission keys for idempotent copying). Help status uses a recurrence-only key, independent of checklist revisions. Only the current responsible person can create/update a status on a due unfinished occurrence; any household member can confirm resolution through their own private controls. Status changes do not award points, complete work, release responsibility, or send DMs. Reassignment and occurrence moves preserve help; completion/Skip advances the active occurrence, while eligible completion Undo exposes its old unresolved note again. Earlier notes remain readable in Status history.
+
+Duplicate chore snapshots source settings and metadata, validates the new name against active and archived names, and confirms before an atomic insert. It copies recurrence, point value, instructions, room/difficulty, estimate, checklist definitions, and missed-work policy; all ownership, history, progress, status notes, and occurrence moves start fresh. A durable submission key maps retries to the original new ID, including after an uncertain response. Checklist/recurrence/copy-key insert failures roll back together.
 
 ## Components V2 layout
 
@@ -68,12 +83,12 @@ Old saved public panel buttons must be refreshed after deployment. The persisten
 ## Verify and deploy
 
 1. Run offline tests against a temporary database: `python test_chore_board.py -q`. They use a dummy token and mocked Discord delivery; do not start a second real bot.
-2. Compile all six modules with `python -m py_compile sprig_bot.py chore_board.py chore_timing.py household_availability.py chore_history.py chore_workspace.py`.
+2. Compile all seven modules with `python -m py_compile sprig_bot.py chore_board.py chore_timing.py household_availability.py chore_history.py chore_workspace.py chore_planning.py`.
 3. Obtain approval for the exact commit, SignalPocket identity, main branch push, and deployment. These steps are separate from local preparation.
 4. Stop the existing sprig service interactively and verify inactive.
 5. Back up the entire server checkout and database, record the previous commit, and verify the backup database integrity before updating.
 6. Fetch and fast-forward only to the exact approved commit. Preserve the existing database, environment, and untracked historical backup.
-7. Install the approved requirements in the existing virtual environment (`.venv/bin/python -m pip install -r requirements.txt`); Components V2 requires discord.py >=2.6,<3. Compile all six modules and rerun the complete offline suite on the server while the service remains stopped.
+7. Install the approved requirements in the existing virtual environment (`.venv/bin/python -m pip install -r requirements.txt`); Components V2 requires discord.py >=2.6,<3. Compile all seven modules and rerun the complete offline suite on the server while the service remains stopped.
 8. Start the existing sprig service interactively; verify active/running and normal startup logs.
 9. Reopen /chores. An administrator runs !refreshchoreboard once to edit the existing saved launcher rather than posting another one. No slash re-registration is needed for this upgrade.
 10. Check real Discord layout on desktop/mobile and with two household accounts: future work, one claim/Done/Undo, weekly reservation, trip preview/edit, owner inbox access, and notification opt-in. Live rendering and notification delivery are not proven by offline tests.

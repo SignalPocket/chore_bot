@@ -13,6 +13,9 @@ Open **/chores** in the household Discord server. Sprig opens your private works
 | Manage chores | Add chores and archive or restore them. Open a chore card to edit its details. |
 | Trades | Incoming and outgoing proposals. The dashboard shows your incoming count. |
 | Points & standings | Your total and streak, plus household standings, shown privately with buttons. |
+| Calendar | Private week/month schedule preview, day details, and a separate No fixed day list. |
+| Needs help | Shared active obstacles: Stuck, Need supplies, or Need help, with notes and resolution. |
+| Reminders | Your own opt-in reminder times and off switch. |
 | Notifications | Opt in to private trade notifications for your own account. |
 | Help | Short task-oriented explanations, including the color legend. |
 | Review inbox | Ginaria’s queue of household feedback. This button is visible only to ginaria. |
@@ -61,6 +64,46 @@ Your points total appears at the top of My chores and updates when you mark work
 Open **Dashboard → Points & standings → Reset points**. Only ginaria sees this button and can confirm a reset. Choose one person with a saved score or **Everyone**. Streaks are kept by default; choose **Reset streaks too** to clear the streak and its last-completion date as well. Review the selected person or account count, total points, and streak choice, then **Confirm reset**. Cancel leaves everything unchanged. If scores or the affected roster change before confirmation, start again with a fresh preview.
 
 The reset sets the selected totals to zero. Chore history, completed chores, assignments, and sign-ups are kept. Each affected account gets a reset audit record. Old completion Undo cannot restore points from before a reset. **Reset history / Undo** shows saved resets. Only ginaria can choose **Undo points reset**, review the confirmation, and restore the selected reset’s saved scores and streak state. All affected people are restored together or none. New completions, another reset, or changed scores block Undo so later work is not overwritten. Reset and recovery audit records remain saved; completion history is unchanged. Undoing a reset does not re-enable Undo on completions from before that reset. There is no arbitrary manual score-adjustment control.
+
+## Estimates and checklists
+
+Open a chore card → **More actions → Estimate / checklist**. Anyone in the household can edit these. Enter estimated minutes for one completion (1–1440), and up to 12 checklist steps, one per line, each up to 80 characters. Blank fields clear the estimate or checklist. Estimates are approximate and do not change points. A twice-daily chore has this estimate for each of its two completions.
+
+Lists show the estimate and checklist progress. An inline **Checklist** button replaces Done when steps remain. Only the person responsible for the current, due occurrence can check or uncheck its steps. Progress follows the occurrence when it is reassigned. Finish the steps, then press **Done**; checking boxes alone awards no points. A complete checklist offers Done directly. Other people can read its progress.
+
+The next occurrence starts unchecked. An unfinished Keep overdue occurrence retains progress; Skip if missed starts a fresh checklist when it advances. Changing checklist wording clears active progress, even when old wording is restored later. Changing only the estimate keeps progress. Completion Undo restores access to the prior occurrence’s saved progress when the usual safety checks allow it. AM/PM splitting copies the estimate and steps into both resulting chores.
+
+## Personal chore reminders
+
+Open **Dashboard → Reminders**. Reminders start **off** for everyone. Turn on authorizes private Discord DMs to your own account only. **Change times** accepts one to three 24-hour times separated by commas, such as `09:00, 17:00`. Defaults are 9 a.m. and 5 p.m. Eastern. Changing times keeps your current on/off choice; **Turn off** stops future reminders. Nobody can opt another person in through these controls.
+
+Each reminder lists your currently due, unfinished responsibilities, with estimates and progress. Unassigned work, archived chores, completed work, and upcoming work are excluded. No reminder is sent while you are away or have nothing due. Use the household-channel link in the DM, then /chores, to act on it.
+
+Delivery is checked each minute with a 15-minute grace window. Older missed reminders are discarded after downtime. A daylight-saving time that does not exist is skipped; a repeated clock time sends at most once. Discord may block DMs: the last delivery result appears in Reminders. Failed or uncertain delivery is not automatically retried, to avoid duplicates. Turning off cannot recall a message already being sent.
+
+## Calendar
+
+Open **Dashboard → Calendar**. Switch **Week / Month** or **My calendar / Household**, and use Previous, Today, and Next. Week view uses colored weekday headings with dates, counts, and known estimated minutes. Month view shows a Monday-first grid and two date pickers. Choose a day to open its paged chore list, including responsibility and away warnings.
+
+**No fixed day** keeps flexible weekly/monthly/one-time chores separate rather than inventing a date. Move an occurrence or choose a regular day to put it on a date. Its owners are shown for the selected date’s household week. Daily AM and PM appear as separate chores; a twice-daily chore’s known workload counts both completions.
+
+This is a schedule preview inside Discord, not an external calendar sync, historical activity report, or drag-and-drop rescheduler. Past dates do not reconstruct every earlier assignment. Sunday ownership is shown before the 6 p.m. handoff and can change that evening. Overdue chores remain in Due now. Selecting a future date does not create a claim or let someone complete future work; **Open current chore** explicitly returns to the actual current chore controls.
+
+## Stuck, supplies, and help
+
+Open the chore card → **Stuck / need help**. The person responsible for the current due, unfinished occurrence can choose **Stuck**, **Need supplies**, or **Need help**, then add a note. Notes are shared household information, even though controls are private. They do not drop responsibility, mark the chore Done, change points, or send an automatic DM. An away person can still explain why their due responsibility needs help.
+
+The current status appears on chore lists and the card. **Dashboard → Needs help** collects active issues so everyone can see what needs attention. The status follows the unfinished occurrence if it is reassigned or moved; the new responsible person can update it. Editing checklist steps or the time estimate does not remove the help note.
+
+Anyone using their own household controls can **Mark resolved**, with confirmation, after the obstacle is handled. This clears only the active status. Updated and resolved notes remain in **Status history**, including who reported or resolved them. Cancel leaves the status unchanged. A completed, archived, or advanced occurrence no longer appears as actively needing help. If a completion is safely undone, its previous occurrence’s unresolved status is visible again. Normal Done and checklist requirements still apply.
+
+## Duplicate a chore
+
+Open a chore card → **More actions → Duplicate chore**. Enter a distinct new name, review the confirmation, then save. Everyone can do this; it is not owner-only. Repeated clicks or a retry after an uncertain response reopen the same saved copy rather than creating another.
+
+The copy keeps the source’s instructions, regular schedule, points per completion, room, difficulty, time estimate, checklist steps, and Keep overdue / Skip if missed policy. It starts **unassigned, unfinished, and unchecked**, with fresh recurrence timing. Assignments, claims, weekly reservations, completion records, earned points, help notes, and one-off occurrence moves are not copied. For example, copying Kas’s laundry does not give the new chore to Kas automatically. Rename it and assign it deliberately.
+
+Duplicate names are rejected even if the existing chore is archived. If source settings change while the form is open, reopen Duplicate chore and review the current version. If a copy is no longer needed, archive it; the original remains unchanged.
 
 ## Take work and finish it
 
@@ -117,7 +160,7 @@ Weekdays are 🔴 Monday, 🟠 Tuesday, 🟡 Wednesday, 🟢 Thursday, 🔵 Frid
 
 **Edit chore → Missed chores** offers Keep overdue and Skip if missed. Selecting the choice saves it. Keep overdue leaves unfinished work due. Skip advances expired work without completion credit or points and releases only its single claim. Weekly reservations and ongoing assignments remain. Switching to Skip can immediately advance already-overdue work. One-time chores have no deadline to skip.
 
-Notes such as “afternoon” or “Wednesday night” are instructions. They do not create timed reminder messages. Missed occurrences do not build up a separate backlog of copies.
+Notes such as “afternoon” or “Wednesday night” are instructions. They do not create reminder messages by themselves; personal reminders use the times you explicitly choose. Missed occurrences do not build up a separate backlog of copies.
 
 ## Trips and traded days
 
@@ -175,6 +218,10 @@ This table describes available controls, not a promise that every action has uni
 | Feedback and point suggestions | Submit follow-up feedback; latest point vote per person is shown. Ginaria can reopen a resolved review with confirmation. | No edit/delete feedback button; reopening sends no duplicate DM. |
 | AM/PM split | Edit or archive either resulting chore. | No merge-back control; original history stays with the original chore ID. |
 | Points reset | Ginaria can undo through Reset history / Undo, with confirmation and an audit record. | Newer score activity for any affected person blocks the whole restoration; no arbitrary point adjustment. |
+| Help status | Responsible person updates the note; any household member can mark resolved with confirmation. | Earlier notes remain in Status history; resolving does not complete the chore. |
+| Duplicate chore | Review a new name and confirm; archive the copy if no longer needed. | No source assignments, history, checked steps, or earned points are transferred. |
+| Checklist progress | Check/uncheck steps for your current due responsibility. | New occurrences start fresh; changing step definitions restarts progress. |
+| Personal reminders | Change your times or turn off. | Already-sent DMs cannot be recalled; uncertain deliveries are not automatically retried. |
 | Trade notifications | Toggle on or off. | Already-sent DMs cannot be recalled. |
 
-Remaining improvements to consider: arbitrary owner score adjustments with an audit and reversal, correction after later work makes safe completion reversal impossible, editing feedback, and recovering a skipped occurrence. Automatic reminders and point redemption are also not implemented. None of these are implied by the current guide.
+Remaining improvements to consider: arbitrary owner score adjustments with an audit and reversal, correction after later work makes safe completion reversal impossible, editing feedback, and recovering a skipped occurrence. Point redemption is also not implemented; personal reminders are available as described above. None of these are implied by the current guide.

@@ -1957,4 +1957,6 @@ def install(namespace):
     from chore_workspace import install as install_workspace
     workspace=install_workspace(namespace,result,lock)
     result.workspace=workspace
+    from chore_planning import install as install_planning
+    result.planning=install_planning(namespace,result,workspace,lock)
     return result

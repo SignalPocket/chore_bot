@@ -373,6 +373,11 @@ async def quest_reset_loop():
     reset_count = reset_due_quests()
     if reset_count:
         print(f"Reset {reset_count} recurring quest(s).")
+    try:
+        await chore_ui.planning.send_due_reminders()
+    except Exception:
+        import logging
+        logging.getLogger('discord.sprig').exception('Reminder check failed')
 
 
 @quest_reset_loop.before_loop
@@ -662,6 +667,9 @@ async def done(ctx, quest_id: int):
         elif last_date == yesterday:
             streak = current_streak + 1
 
+    if not chore_ui.planning.complete(quest_id):
+        await ctx.send("Finish the checklist first: open this chore → Checklist, check the finished steps, then press Done.")
+        return
     completion_before = chore_ui.capture_completion(quest_id,user_id)
     with db:
         new_points = current_points + points_val
