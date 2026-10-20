@@ -16,9 +16,20 @@ sys.path.insert(0, str(HERE / "test-deps"))
 import discord
 
 
+def semantic_payload(kwargs):
+    # Keep existing rule/navigation assertions against the source view. V2 tests
+    # separately inspect wire_payload/wire_result and actual serialized components.
+    result=dict(kwargs)
+    view=result.get('view')
+    if isinstance(view,discord.ui.LayoutView) and hasattr(view,'source'):
+        result.update(view=view.source,embed=getattr(view.source,'embed',None),content=view.notice)
+    return result
+
+
 class Response:
     def __init__(self):
         self.payload = None
+        self.wire_payload = None
         self.acknowledged = False
 
     def is_done(self):
@@ -28,10 +39,12 @@ class Response:
         self.acknowledged = True
 
     async def send_message(self, *args, **kwargs):
-        self.payload = (args, kwargs)
+        self.wire_payload = (args, kwargs)
+        self.payload = (args, semantic_payload(kwargs))
 
     async def edit_message(self, **kwargs):
-        self.payload = kwargs
+        self.wire_payload = kwargs
+        self.payload = semantic_payload(kwargs)
 
     async def send_modal(self, modal):
         self.payload = modal
@@ -47,7 +60,8 @@ class Interaction:
         self.result = None
 
     async def edit_original_response(self, **kwargs):
-        self.result = kwargs
+        self.wire_result = kwargs
+        self.result = semantic_payload(kwargs)
 
 
 class BoardTests(unittest.IsolatedAsyncioTestCase):
@@ -1944,6 +1958,146 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.dm.send.assert_awaited_once()
             self.assertEqual(self.db.execute('SELECT trade_id,status FROM trade_notifications').fetchone(),(1,'sent'))
             self.assertIn('preference',event.response.payload['content'])
+
+    async def test_v2_sections_pair_each_due_chore_with_its_done_button(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("INSERT INTO claims VALUES(1,'10')");self.db.commit()
+            w=self.ui.workspace;panel=w.render(w.Browse(10,'mine'))
+            self.assertIsInstance(panel,discord.ui.LayoutView)
+            sections=[c for c in panel.children if isinstance(c,discord.ui.Section)]
+            self.assertEqual(len(sections),2)
+            self.assertTrue(all(c.accessory.label=='Done' for c in sections))
+            dishwasher=next(c for c in sections if 'Fill dishwasher' in c.children[0].content)
+            self.assertIn('5 points',dishwasher.children[0].content)
+            self.assertEqual(dishwasher.to_component_dict()['accessory']['type'],2)
+
+    async def test_v2_inline_done_credits_only_the_matching_chore_once(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("INSERT INTO claims VALUES(1,'10')");self.db.commit()
+            w=self.ui.workspace;panel=w.render(w.Browse(10,'mine'))
+            button=next(c.accessory for c in panel.children if isinstance(c,discord.ui.Section) and 'Fill dishwasher' in c.children[0].content)
+            await asyncio.gather(button.callback(Interaction()),button.callback(Interaction()))
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(5,))
+            self.assertEqual(self.db.execute('SELECT quest_id FROM completion_log').fetchall(),[(1,)])
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=2').fetchone(),(0,))
+
+    async def test_v2_inline_done_rejects_wrong_person_away_and_stale_ownership(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("INSERT INTO claims VALUES(1,'10')");self.db.commit()
+            w=self.ui.workspace;panel=w.render(w.Browse(10,'mine'))
+            button=next(c.accessory for c in panel.children if isinstance(c,discord.ui.Section) and 'Fill dishwasher' in c.children[0].content)
+            wrong=Interaction(20);await button.callback(wrong)
+            self.assertIn('your own',wrong.response.wire_payload[0][0])
+            self.assertTrue(wrong.response.wire_payload[1]['ephemeral'])
+            self.db.execute("UPDATE claims SET user_id='20' WHERE quest_id=1");self.db.commit()
+            await button.callback(Interaction())
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+            self.ui.attendance.add(10,'2026-10-20','2026-10-20','away')
+            away=w.render(w.Browse(10,'mine'))
+            self.assertTrue(all(c.accessory.disabled for c in away.children if isinstance(c,discord.ui.Section) and c.accessory.label=='Done'))
+
+    async def test_v2_early_and_next_week_rows_offer_details_not_done(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.create_chore('Friday laundry','friday','5','')
+            qid=self.db.execute("SELECT id FROM quests WHERE name='Friday laundry'").fetchone()[0]
+            self.db.execute("UPDATE quests SET assigned_to='10' WHERE id=?",(qid,));self.db.commit()
+            w=self.ui.workspace
+            for tab in ('upcoming','next'):
+                panel=w.render(w.Browse(10,'mine',tab=tab))
+                self.assertTrue(all(c.accessory.label=='Details' for c in panel.children if isinstance(c,discord.ui.Section)))
+
+    async def test_v2_stale_done_cannot_complete_the_next_twice_daily_slot(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("UPDATE quests SET frequency='twice-daily' WHERE id=1");self.db.commit()
+            self.ui.signup(10,1,self.ui.week_key())
+            w=self.ui.workspace;panel=w.render(w.Browse(10,'mine'))
+            button=next(c.accessory for c in panel.children if isinstance(c,discord.ui.Section) and 'Fill dishwasher' in c.children[0].content)
+            await button.callback(Interaction())
+        with self.clock('2026-10-20T13:00:00'):
+            event=Interaction();await button.callback(event)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(1,))
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=1').fetchone(),(0,))
+            self.assertIn('changed',event.response.payload['content'])
+
+    async def test_v2_navigation_clears_embeds_and_retains_layout_for_cards_and_back(self):
+        with self.clock('2026-10-20T10:00:00'):
+            w=self.ui.workspace;view=w.Browse(10,'household');panel=w.render(view)
+            details=next(c.accessory for c in panel.children if isinstance(c,discord.ui.Section))
+            event=Interaction();await details.callback(event)
+            wire=event.response.wire_payload
+            self.assertIsNone(wire['content']);self.assertEqual(wire['embeds'],[])
+            self.assertEqual(wire['attachments'],[])
+            self.assertNotIn('embed',wire)
+            self.assertIsInstance(wire['view'],w.LayoutPanel)
+            card=wire['view'].source
+            await next(c for c in card.children if getattr(c,'label',None)=='Back').callback(event)
+            self.assertIsInstance(event.response.wire_payload['view'].source,w.Browse)
+            await next(c for c in event.response.wire_payload['view'].source.children if getattr(c,'label',None)=='Dashboard').callback(event)
+            self.assertIsInstance(event.response.wire_payload['view'].source,w.Dashboard)
+
+    async def test_v2_editors_and_modal_results_stay_on_v2_private_workspace(self):
+        w=self.ui.workspace;view=w.adapt(self.ui.EditChoreView(10,selected=1),10,lambda:w.Card(10,1))
+        event=Interaction();await next(c for c in view.children if getattr(c,'label',None)=='Change schedule').callback(event)
+        self.assertIsInstance(event.response.wire_payload['view'],w.LayoutPanel)
+        editor=w.adapt(self.ui.EditChoreView(10,selected=1),10,lambda:w.Card(10,1))
+        event=Interaction();await next(c for c in editor.children if getattr(c,'label',None)=='Edit details').callback(event)
+        modal=event.response.payload
+        modal.name._value='Fill dishwasher';modal.notes._value='Updated';modal.points._value='5';modal.room._value='Kitchen'
+        await modal.on_submit(event)
+        self.assertIsInstance(event.response.wire_payload['view'],w.LayoutPanel)
+        self.assertEqual(event.response.wire_payload['embeds'],[])
+
+    async def test_v2_shared_launcher_sends_only_private_v2_controls(self):
+        event=Interaction();await self.ui.Launcher().open_list(event,'mine')
+        args,wire=event.response.wire_payload
+        self.assertTrue(wire['ephemeral'])
+        self.assertIsInstance(wire['view'],discord.ui.LayoutView)
+        self.assertNotIn('embed',wire);self.assertNotIn('content',wire)
+        self.assertTrue(await wire['view'].interaction_check(event))
+        self.assertFalse(await wire['view'].interaction_check(Interaction(20)))
+
+    async def test_v2_limits_paging_and_nested_controls_are_valid(self):
+        with self.clock('2026-10-20T10:00:00'):
+            for n in range(22):
+                self.ui.create_chore(f'Task {n:02} '+'x'*65,'daily','5','notes')
+                qid=self.db.execute('SELECT MAX(id) FROM quests').fetchone()[0]
+                self.db.execute("UPDATE quests SET assigned_to='10' WHERE id=?",(qid,))
+            self.db.commit();w=self.ui.workspace
+            def count(items):
+                total=0
+                for item in items:
+                    total+=1
+                    total+=count(item.get('components',[]))
+                    if item.get('accessory'):total+=count([item['accessory']])
+                return total
+            def texts(items):
+                out=[]
+                for item in items:
+                    if item['type']==10:out.append(item['content'])
+                    out+=texts(item.get('components',[]))
+                return out
+            for page in (0,1,4):
+                panel=w.render(w.Browse(10,'mine',page=page))
+                self.assertLessEqual(len([c for c in panel.children if isinstance(c,discord.ui.Section)]),5)
+                payload=panel.to_components()
+                self.assertLessEqual(count(payload),40)
+                self.assertLessEqual(sum(map(len,texts(payload))),4000)
+                for item in payload:
+                    if item['type']==1:
+                        self.assertLessEqual(sum(5 if c['type'] in (3,5,6,7,8) else 1 for c in item['components']),5)
+            for source in (w.Dashboard(10),w.Card(10,1),w.Manage(10),w.Trips(10),w.Inbox(301104023405199361),w.Guide(10),self.ui.HouseholdSetup(10),self.ui.FeedbackView(10,1)):
+                self.assertLessEqual(count(w.render(source).to_components()),40)
+
+
+    async def test_v2_serialized_private_message_has_v2_and_ephemeral_flags(self):
+        from discord.http import handle_message_parameters
+        panel=self.ui.workspace.render(self.ui.workspace.Browse(10,'mine'))
+        with handle_message_parameters(view=panel,content=None,embeds=[],attachments=[],flags=discord.MessageFlags(ephemeral=True),allowed_mentions=discord.AllowedMentions.none()) as params:
+            self.assertEqual(params.payload['flags'] & (1<<15),1<<15)
+            self.assertEqual(params.payload['flags'] & 64,64)
+            self.assertIsNone(params.payload['content'])
+            self.assertEqual(params.payload['embeds'],[])
+            self.assertEqual(params.payload['allowed_mentions']['parse'],[])
 
     async def test_help_button_is_persistent_private_and_changes_no_data(self):
         before = list(self.db.iterdump())

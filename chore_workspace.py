@@ -103,7 +103,7 @@ def install(ns, ui, lock):
             await task
             if hasattr(view,'rebuild'):view=view.rebuild()
         if hasattr(view, 'owner') and not isinstance(view, View): view = adapt(view, view.owner)
-        kwargs = dict(content=notice, embed=getattr(view, 'embed', None), view=view, allowed_mentions=discord.AllowedMentions.none())
+        kwargs = dict(content=None, embeds=[], attachments=[], view=render(view,notice), allowed_mentions=discord.AllowedMentions.none())
         if i.response.is_done(): await i.edit_original_response(**kwargs)
         else: await i.response.edit_message(**kwargs)
 
@@ -118,7 +118,10 @@ def install(ns, ui, lock):
             if kwargs.get('embed') is not None: view.embed = kwargs['embed']
             return await present(self.i, view, args[0] if args else kwargs.get('content'))
         async def edit_message(self, **kwargs):
-            if kwargs.get('view') is not None: kwargs['view'] = adapt(kwargs['view'], self.owner, self.back)
+            if kwargs.get('view') is not None:
+                view=adapt(kwargs['view'],self.owner,self.back)
+                if kwargs.get('embed') is not None:view.embed=kwargs['embed']
+                return await present(self.i,view,kwargs.get('content'))
             return await self.i.response.edit_message(**kwargs)
         async def send_modal(self, modal):
             original = modal.on_submit
@@ -132,7 +135,10 @@ def install(ns, ui, lock):
             self.response = ResponseProxy(i, owner, back)
         def __getattr__(self, key): return getattr(self.raw, key)
         async def edit_original_response(self, **kwargs):
-            if kwargs.get('view') is not None: kwargs['view'] = adapt(kwargs['view'], self.owner, self.back)
+            if kwargs.get('view') is not None:
+                view=adapt(kwargs['view'],self.owner,self.back)
+                if kwargs.get('embed') is not None:view.embed=kwargs['embed']
+                return await present(self.raw,view,kwargs.get('content'))
             return await self.raw.edit_original_response(**kwargs)
 
     def adapt(view, owner, back=None):
@@ -264,13 +270,13 @@ def install(ns, ui, lock):
                             rendered.append((f'{index+1} · {day_badge(day)} {date:%b %d}',q))
                     else: rendered.append(('8 · '+timing.compact_label(f),q))
                 rendered.sort(key=lambda r:(r[0],r[1][1].casefold()))
-            page = min(max(page, 0), max((len(rendered)-1)//8, 0))
+            page = min(max(page, 0), max((len(rendered)-1)//5, 0))
             self.state['page'] = page
             memory[(owner, area)] = dict(self.state)
             self.name_ids=[ownership(q[0],offset)[0] for q in selected]
             self.rebuild=lambda:Browse(owner,**self.state,guild=guild)
             back = lambda: Browse(owner, **self.state, guild=guild)
-            chunk = rendered[page*8:(page+1)*8]
+            chunk = rendered[page*5:(page+1)*5]
             title = {'mine': 'My chores', 'pickup': 'Pick up chores', 'household': 'Household'}[area]
             period = {'due': 'Due now', 'week': 'This week', 'next': 'Next week', 'upcoming': 'Upcoming', 'done': 'Completed', 'all':'All chores'}[tab]
             description = period + f' · {len(selected)} chore(s)' + (' · Search: ' + clean(query, 100) if query else '')
@@ -279,6 +285,7 @@ def install(ns, ui, lock):
                 description += f'\n{ui.week_start(offset):%b %d}, 6 p.m. → {ui.week_start(offset+1):%b %d}, 6 p.m. Eastern'
             if area == 'mine' and not ui.available(owner): description += '\nYou’re away today. Responsibilities remain saved; review coverage before completing work.'
             self.embed = discord.Embed(title=title, description=description, color=0x6B9B77)
+            self.quick_rows=[]
             for heading,q in chunk:
                 uid, scope = ownership(q[0], offset)
                 heading = (heading + ' · ' if area == 'household' else '') + q[1]
@@ -287,6 +294,7 @@ def install(ns, ui, lock):
                 if tab=='done':
                     last=db.execute('SELECT completed_at FROM completion_log WHERE quest_id=? AND user_id=? AND undone_at IS NULL ORDER BY id DESC LIMIT 1',(q[0],str(owner))).fetchone()
                     status='Last completed '+last[0][:16].replace('T',' ') if last else status
+                self.quick_rows.append((q[0],ui.snapshot(q[0]),tab not in ('next','upcoming','done') and offset==0 and uid==str(owner) and not q[5] and ready(q[0])))
                 self.embed.add_field(name=clean(heading, 200), value=(f'{timing.compact_label(q[2])} · {q[3]} points\n{clean(person(uid,guild),100)} · {status}' + ('\n⚠ ' + clean(warning, 180) if warning else ''))[:450], inline=False)
             if not chunk: self.embed.add_field(name='Nothing matches', value='Try another tab or clear your filters. Upcoming work and saved responsibilities remain in the other views.')
             if chunk:
@@ -306,10 +314,75 @@ def install(ns, ui, lock):
                 self.button('View: ' + group, lambda i: present(i, Groups(owner, self.state, i.guild)), row=2)
                 self.button('All' if unclaimed else 'Unclaimed only', lambda i: present(i, Browse(owner, **dict(self.state, unclaimed=not unclaimed, page=0), guild=i.guild)), row=2)
             if page: self.button('Previous', lambda i: present(i, Browse(owner, **dict(self.state, page=page-1), guild=i.guild)), row=3)
-            if (page+1)*8 < len(rendered): self.button('Next', lambda i: present(i, Browse(owner, **dict(self.state, page=page+1), guild=i.guild)), row=3)
+            if (page+1)*5 < len(rendered): self.button('Next', lambda i: present(i, Browse(owner, **dict(self.state, page=page+1), guild=i.guild)), row=3)
             self.button('Refresh', lambda i: present(i, Browse(owner, **self.state, guild=i.guild)), row=3)
             self.nav()
-            self.embed.set_footer(text=f'Page {page+1} of {max((len(rendered)-1)//8+1,1)} · Eastern time · Weeks change Sunday 6 p.m.')
+            self.embed.set_footer(text=f'Page {page+1} of {max((len(rendered)-1)//5+1,1)} · Eastern time · Weeks change Sunday 6 p.m.')
+
+    class LayoutPanel(discord.ui.LayoutView):
+        """V2-only wire layout; the source retains the existing navigation and rules."""
+        def __init__(self,source,notice=None):
+            super().__init__(timeout=600)
+            self.source,self.owner,self.notice=source,source.owner,notice
+            embed=getattr(source,'embed',None)
+            budget=3900
+            def text(value):
+                nonlocal budget
+                value=str(value or '')
+                if not value or budget<=0:return None
+                if len(value)>budget:value=value[:max(0,budget-1)]+'…'
+                budget-=len(value)
+                return discord.ui.TextDisplay(value)
+            header=text((('**'+str(notice)+'**\n\n') if notice else '')+(('# '+embed.title+'\n') if embed and embed.title else '')+(embed.description or '' if embed else ''))
+            if header:self.add_item(header)
+            if embed:
+                for index,field in enumerate(embed.fields):
+                    content=text('### '+field.name+'\n'+(field.value[:300] if isinstance(source,Browse) else field.value))
+                    if not content:break
+                    if isinstance(source,Browse) and index<len(source.quick_rows):
+                        qid,expected,can_done=source.quick_rows[index]
+                        button=discord.ui.Button(label='Done' if can_done else 'Details',style=discord.ButtonStyle.success if can_done else discord.ButtonStyle.secondary,disabled=can_done and not ui.available(source.owner))
+                        async def click(i,qid=qid,expected=expected,can_done=can_done):
+                            if not await source.interaction_check(i):return
+                            if not can_done:
+                                return await present(i,Card(source.owner,qid,lambda:Browse(source.owner,**source.state,guild=i.guild),i.guild,1 if source.state['tab']=='next' else 0))
+                            async def complete():
+                                async with lock:
+                                    ns['reset_due_quests']()
+                                    if ui.snapshot(qid)!=expected:return 'This occurrence changed. Review the refreshed list.'
+                                    context=ui.Context(i)
+                                    await bot.get_command('done').callback(context,qid)
+                                    return '\n'.join(context.messages)
+                            task=asyncio.create_task(complete())
+                            finished,_=await asyncio.wait({task},timeout=1.0)
+                            if not finished:await i.response.defer()
+                            result=await task
+                            await present(i,Browse(source.owner,**source.state,guild=i.guild),result[:800])
+                        button.callback=click
+                        self.add_item(discord.ui.Section(content,accessory=button))
+                    else:self.add_item(content)
+                footer=text('-# '+embed.footer.text) if embed.footer and embed.footer.text else None
+                if footer:self.add_item(footer)
+            rows={}
+            row_ids={child['custom_id']:index for index,row in enumerate(source.to_components()) for child in row.get('components',[]) if 'custom_id' in child}
+            for item in source.children:
+                row=row_ids.get(item.custom_id,item.row if item.row is not None else 0)
+                rows.setdefault(row,[]).append(item)
+            self.add_item(discord.ui.Separator())
+            for row,items in sorted(rows.items()):
+                self.add_item(discord.ui.ActionRow(*items))
+
+        async def interaction_check(self,i):
+            return await self.source.interaction_check(i)
+
+        async def on_error(self,i,error,item):
+            await self.source.on_error(i,error,item)
+
+    def render(view,notice=None):
+        return view if isinstance(view,LayoutPanel) else LayoutPanel(view,notice)
+
+    def payload(view):
+        return dict(view=render(view),allowed_mentions=discord.AllowedMentions.none())
 
     class Filters(View):
         def __init__(self, owner, state, guild):
@@ -728,4 +801,4 @@ def install(ns, ui, lock):
             self.add_item(picker)
             self.nav()
 
-    return SimpleNamespace(Dashboard=Dashboard,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
+    return SimpleNamespace(LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)

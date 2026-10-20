@@ -1777,12 +1777,12 @@ def install(namespace):
 
         async def open_list(self, interaction, mode):
             view = workspace.Browse(interaction.user.id,'mine' if mode=='mine' else 'pickup',guild=interaction.guild)
-            await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True)
+            await interaction.response.send_message(**workspace.payload(view),ephemeral=True)
 
         @discord.ui.button(label="Who’s doing what?", custom_id="sprig:responsibilities:v1", row=1)
         async def responsibility_button(self,interaction,button):
             view=workspace.Browse(interaction.user.id,'household',guild=interaction.guild)
-            await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True)
+            await interaction.response.send_message(**workspace.payload(view),ephemeral=True)
 
         @discord.ui.button(label="Reassign",custom_id="sprig:reassign:v1",row=1)
         async def reassign_button(self,interaction,button):

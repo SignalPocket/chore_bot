@@ -13,7 +13,13 @@ Deploy all six modules together:
 - chore_history.py. Append-only completion ledger and atomic conservative Undo.
 - chore_workspace.py. Private dashboards, searchable lists, common chore cards, trip editor, and owner review queue.
 
-Dependencies remain discord.py 2.4 or newer below 3, python-dotenv, and tzdata. Configuration and the Discord token stay in the existing server environment; never put credentials into this guide or version control.
+Dependencies remain discord.py 2.6 or newer below 3, python-dotenv, and tzdata. Configuration and the Discord token stay in the existing server environment; never put credentials into this guide or version control.
+
+## Components V2 layout
+
+Private lists use LayoutView, TextDisplay, and Section accessory buttons. Eligible current owned occurrences have inline Done buttons; other rows have Details. Five entries per page keep nested components below Discord limits. Completion captures the displayed occurrence snapshot and rechecks it after acquiring the mutation lock, preserving points/history and blocking repeated or stale clicks. Away, upcoming, next-week, and other people’s work cannot be completed through the row button.
+
+Once a message uses Components V2, every destination on it is also rendered as V2, including existing editors and modal results. Edits explicitly clear legacy content, embeds, and attachments. Existing per-user/server/channel checks remain in force. Shared launcher entries send V2 controls ephemerally; no public chores list is introduced. Initial /chores dashboard remains compatible and upgrades to V2 on navigation. No saved-panel refresh is required for this layout-only update.
 
 ## Entry points and navigation
 
@@ -55,7 +61,7 @@ Old saved public panel buttons must be refreshed after deployment. The persisten
 4. Stop the existing sprig service interactively and verify inactive.
 5. Back up the entire server checkout and database, record the previous commit, and verify the backup database integrity before updating.
 6. Fetch and fast-forward only to the exact approved commit. Preserve the existing database, environment, and untracked historical backup.
-7. Compile all six modules and rerun the complete offline suite on the server while the service remains stopped.
+7. Install the approved requirements in the existing virtual environment (`.venv/bin/python -m pip install -r requirements.txt`); Components V2 requires discord.py >=2.6,<3. Compile all six modules and rerun the complete offline suite on the server while the service remains stopped.
 8. Start the existing sprig service interactively; verify active/running and normal startup logs.
 9. Reopen /chores. An administrator runs !refreshchoreboard once to edit the existing saved launcher rather than posting another one. No slash re-registration is needed for this upgrade.
 10. Check real Discord layout on desktop/mobile and with two household accounts: future work, one claim/Done/Undo, weekly reservation, trip preview/edit, owner inbox access, and notification opt-in. Live rendering and notification delivery are not proven by offline tests.
