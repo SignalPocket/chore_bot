@@ -41,7 +41,7 @@ SERVER_CHECKS = {
     'today-first Calendar': 'test_calendar_navigation_dashboard_defaults_to_today_at_click_time',
     'private Discord serialization': 'test_v2_serialized_private_message_has_v2_and_ephemeral_flags',
     'Discord component limits': 'test_workspace_all_screens_and_large_data_respect_discord_limits',
-    'default ten-item page limits': 'test_list_length_default_ten_dense_pages_fit_and_do_not_hide_rows',
+    'five-item pages and visible navigation': 'test_list_length_default_five_pages_keep_visible_navigation',
     'personal display preference durability': 'test_list_length_save_is_personal_validated_and_durable',
     'read-only workload arithmetic': 'test_insights_fixed_flexible_twice_daily_and_unclaimed_budget_math',
     'recovery access boundaries': 'test_recovery_rejects_wrong_person_guild_and_lost_channel_access',

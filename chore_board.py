@@ -16,7 +16,22 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-UPDATE_NOTICE = 'Sprig has been updated. Open /chores for fresh controls.'
+APP_VERSION = '1.0'
+UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
+
+
+def update_notice(at=None):
+    """Timestamp the announcement in Eastern time, including its DST abbreviation."""
+    from zoneinfo import ZoneInfo
+    eastern = ZoneInfo('America/New_York')
+    at = datetime.now(eastern) if at is None else at
+    if at.tzinfo is None or at.utcoffset() is None:
+        raise ValueError('Announcement time must include a timezone')
+    local = at.astimezone(eastern)
+    stamp = (f'{local:%B} {local.day}, {local.year} at '
+             f'{local.hour % 12 or 12}:{local:%M} {local:%p %Z}')
+    return f'{UPDATE_NOTICE}\nAnnounced {stamp} (Eastern time).'
+
 
 
 def current_release(base_dir):
@@ -228,7 +243,7 @@ def install(namespace):
         if not claimed:
             return 'already_attempted'
         try:
-            message = await channel.send(UPDATE_NOTICE, allowed_mentions=discord.AllowedMentions.none())
+            message = await channel.send(update_notice(), allowed_mentions=discord.AllowedMentions.none())
         except Exception:
             with db:
                 db.execute("UPDATE update_announcements SET status='failed_uncertain' WHERE release_id=?", (release,))

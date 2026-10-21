@@ -181,6 +181,24 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         bodies=Counter(ast.dump(ast.Module(body=n.body,type_ignores=[]),include_attributes=False) for n in methods)
         self.assertTrue(all(count==1 for count in bodies.values()),'Identical test bodies should be consolidated')
 
+    async def test_update_notice_version_and_eastern_timestamp(self):
+        import chore_board
+        from datetime import timezone
+        self.assertEqual(chore_board.APP_VERSION,'1.0')
+        cases = (
+            (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
+            (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
+            (datetime(2026,11,1,5,30,tzinfo=timezone.utc),'November 1, 2026 at 1:30 AM EDT'),
+            (datetime(2026,11,1,6,30,tzinfo=timezone.utc),'November 1, 2026 at 1:30 AM EST'),
+        )
+        for at, stamp in cases:
+            with self.subTest(at=at):
+                self.assertEqual(chore_board.update_notice(at),
+                    'Sprig has been updated to version 1.0. Open /chores for fresh controls.'
+                    +'\nAnnounced '+stamp+' (Eastern time).')
+        with self.assertRaises(ValueError):
+            chore_board.update_notice(datetime(2026,10,21))
+
     async def test_update_notice_once_per_release_concurrent_and_no_mentions(self):
         import chore_board
         self.ui.set_announcement_mode(301104023405199361,True,self.ui.announcement_mode())
@@ -191,7 +209,9 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await self.ui.announce_update(),'already_attempted')
         channel.send.assert_awaited_once()
         args,kwargs=channel.send.call_args
-        self.assertEqual(args,('Sprig has been updated. Open /chores for fresh controls.',))
+        self.assertEqual(len(args),1)
+        self.assertTrue(args[0].startswith(chore_board.UPDATE_NOTICE+'\nAnnounced '))
+        self.assertIn('(Eastern time).',args[0])
         self.assertEqual(kwargs['allowed_mentions'].to_dict(),{'parse':[]})
         self.assertEqual(self.db.execute('SELECT status,message_id FROM update_announcements').fetchall(),[('sent','30')])
         self.assertEqual(before,{t:self.db.execute('SELECT * FROM '+t).fetchall() for t in before})
@@ -4482,7 +4502,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(event.response.payload['view'].recovery_context,source.recovery_context)
             source=self.ui.insights.Report(10,guild,28,0,'planned');panel=w.render(source)
             body=next(c for c in panel.children if isinstance(c,discord.ui.Container))
-            self.assertEqual(len(body.children),10)
+            self.assertEqual(len(body.children),5)
             self.assertLessEqual(sum(len(c.content) for c in panel.walk_children() if isinstance(c,discord.ui.TextDisplay)),4000)
             picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select))
             event=Interaction();event.data={'component_type':3,'values':['7']};await picker.callback(event)
@@ -4559,29 +4579,32 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.ui.planning.settings(10)[0],0)
             self.assertIn('private DMs',source.embed.description)
 
-    async def test_list_length_default_ten_dense_pages_fit_and_do_not_hide_rows(self):
+    async def test_list_length_default_five_pages_keep_visible_navigation(self):
         w=self.ui.workspace
         self.db.execute('DELETE FROM workspace_preferences');self.db.commit()
-        self.assertEqual(w.page_size(10),10)
+        self.assertEqual(w.page_size(10),5)
+        self.db.execute("INSERT INTO workspace_preferences VALUES('10',10)");self.db.commit()
+        self.assertEqual(w.page_size(10),5)
         with self.clock('2026-10-21T10:00:00'):
             for n in range(23):self.ui.create_chore(f'Length {n:02} '+'x'*85,'daily','5','','Kitchen')
             for area in ('pickup','household','mine'):
                 if area=='mine':self.db.execute("UPDATE quests SET assigned_to='10'");self.db.commit()
                 seen=[]
-                for page in range(3):
+                for page in range(5):
                     source=w.Browse(10,area,tab='all',page=page,group='chore')
                     panel=w.render(source)
                     sections=[c for c in panel.walk_children() if isinstance(c,discord.ui.Section)]
                     self.assertEqual(len(sections),len(source.quick_rows))
-                    self.assertEqual(len(sections),min(10,len(source.entries)-page*10))
+                    self.assertEqual(len(sections),min(5,len(source.entries)-page*5))
                     seen.extend(qid for qid,expected,done in source.quick_rows)
                     self.assertLessEqual(len(list(panel.walk_children())),40)
                     panel.to_components()
                     self.assertTrue(any('Page ' in c.content for c in panel.walk_children() if isinstance(c,discord.ui.TextDisplay)))
-                    if page<2:
-                        picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='View & tools…')
-                        self.assertLessEqual(len(picker.options),25)
-                        self.assertEqual(sum(getattr(c,'label',None)=='Refresh' for c in panel.walk_children()),1)
+                    labels=[getattr(c,'label',None) for c in panel.walk_children()]
+                    for label in ('Search','Filters','Dashboard','Previous','Next'):
+                        self.assertIn(label,labels)
+                    self.assertFalse(any(getattr(c,'placeholder',None)=='View & tools…' for c in panel.walk_children()))
+                    self.assertEqual(labels.count('Refresh'),1)
                 self.assertEqual(len(seen),len(set(seen)))
 
     async def test_list_length_save_is_personal_validated_and_durable(self):
@@ -4589,18 +4612,18 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         view=w.ListLength(10);panel=w.render(view)
         picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select))
         before=self.db.execute('SELECT * FROM quests').fetchall()
-        wrong=Interaction(20);wrong.data={'component_type':3,'values':['8']};await picker.callback(wrong)
-        self.assertEqual(w.page_size(10),5);self.assertEqual(w.page_size(20),10)
-        event=Interaction();event.data={'component_type':3,'values':['8']};await picker.callback(event)
-        self.assertEqual(w.page_size(10),8);self.assertEqual(w.page_size(20),10)
+        wrong=Interaction(20);wrong.data={'component_type':3,'values':['3']};await picker.callback(wrong)
+        self.assertEqual(w.page_size(10),5);self.assertEqual(w.page_size(20),5)
+        event=Interaction();event.data={'component_type':3,'values':['3']};await picker.callback(event)
+        self.assertEqual(w.page_size(10),3);self.assertEqual(w.page_size(20),5)
         import sqlite3
         with closing(sqlite3.connect(Path(self.temp.name)/'sprig.db')) as check:
-            self.assertEqual(check.execute("SELECT list_size FROM workspace_preferences WHERE user_id='10'").fetchone(),(8,))
-        for bad in ('0','11','bad'):
+            self.assertEqual(check.execute("SELECT list_size FROM workspace_preferences WHERE user_id='10'").fetchone(),(3,))
+        for bad in ('0','6','10','bad'):
             current=w.render(w.ListLength(10));select=next(c for c in current.walk_children() if isinstance(c,discord.ui.Select))
             event=Interaction();event.data={'component_type':3,'values':[bad]};await select.callback(event)
-            self.assertEqual(w.page_size(10),8)
-        for value in (1,10):
+            self.assertEqual(w.page_size(10),3)
+        for value in (1,5):
             current=w.render(w.ListLength(10));select=next(c for c in current.walk_children() if isinstance(c,discord.ui.Select))
             event=Interaction();event.data={'component_type':3,'values':[str(value)]};await select.callback(event)
             self.assertEqual(w.page_size(10),value)
@@ -4609,15 +4632,14 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         w.recovery.live.clear();event=Interaction();await refresh.callback(event)
         self.assertIsInstance(event.response.payload['view'],w.ListLength)
 
-    async def test_list_length_dense_tools_and_inline_actions_recover_safely(self):
+    async def test_list_length_visible_controls_and_inline_actions_recover_safely(self):
         w=self.ui.workspace
         self.db.execute('DELETE FROM workspace_preferences');self.db.commit()
         with self.clock('2026-10-21T10:00:00'):
             for n in range(12):self.ui.create_chore(f'Length due {n:02}','daily','5','')
             source=w.Browse(10,'pickup',tab='all');panel=w.render(source)
-            picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select))
-            option=next(o for o in picker.options if o.label=='Filters')
-            event=Interaction();event.data={'component_type':3,'values':[option.value]};await picker.callback(event)
+            filters=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Filters')
+            event=Interaction();await filters.callback(event)
             self.assertIn('Filter chores',event.response.payload['view'].embed.title)
             details=next(c.accessory for c in panel.walk_children() if isinstance(c,discord.ui.Section))
             event=Interaction();await details.callback(event)
@@ -4626,7 +4648,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.db.execute("UPDATE quests SET assigned_to='10'");self.db.commit()
             panel=w.render(w.Browse(10,'mine',tab='all'))
             picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select))
-            option=next(o for o in picker.options if o.label.startswith('Open:'))
+            option=picker.options[0]
             event=Interaction();event.data={'component_type':3,'values':[option.value]};await picker.callback(event)
             self.assertIsInstance(event.response.payload['view'],w.Card)
             done=next(c.accessory for c in panel.walk_children() if isinstance(c,discord.ui.Section) and c.accessory.label=='Done')
@@ -4644,20 +4666,19 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             for n in range(22):self.ui.create_chore(f'Length calendar {n:02}','daily','5','')
             day=p.Day(10,self.ui.timing.now().date(),page=1)
             panel=w.render(day)
-            self.assertEqual(len(day.embed.fields),10)
-            self.assertIn('Chores 11–20',day.embed.footer.text)
-            self.assertEqual(len([c for c in panel.walk_children() if isinstance(c,discord.ui.Section)]),10)
+            self.assertEqual(len(day.embed.fields),5)
+            self.assertIn('Chores 6–10',day.embed.footer.text)
+            self.assertEqual(len([c for c in panel.walk_children() if isinstance(c,discord.ui.Section)]),5)
             self.assertLessEqual(len(list(panel.walk_children())),40)
-            picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select))
-            option=next(o for o in picker.options if o.label=='Next day')
-            event=Interaction();event.data={'component_type':3,'values':[option.value]};await picker.callback(event)
+            next_day=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Next day')
+            event=Interaction();await next_day.callback(event)
             self.assertEqual(event.response.payload['view'].day,day.day+timedelta(days=1))
             browse=w.Browse(10,'household',tab='all',page=1)
             context=w.recovery.bookmark(browse);day_context=w.recovery.bookmark(day)
-            self.db.execute("INSERT INTO workspace_preferences VALUES('10',5)");self.db.commit()
+            self.db.execute("INSERT INTO workspace_preferences VALUES('10',2)");self.db.commit()
             restored=w.recovery.restore(10,context,Interaction().guild)
             self.assertEqual(restored.state['page'],2)
-            self.assertEqual(restored.quick_rows[0][0],browse.quick_rows[0][0])
+            self.assertIn(browse.quick_rows[0][0],[row[0] for row in restored.quick_rows])
             restored_day=w.recovery.restore(10,day_context,Interaction().guild)
             self.assertEqual(restored_day.page,2)
 

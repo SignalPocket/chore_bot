@@ -20,7 +20,7 @@ def install(ns, ui, lock):
     db.commit()
     def page_size(owner):
         row=db.execute('SELECT list_size FROM workspace_preferences WHERE user_id=?',(str(owner),)).fetchone()
-        return row[0] if row and isinstance(row[0],int) and 1<=row[0]<=10 else 10
+        return min(row[0],5) if row and isinstance(row[0],int) and 1<=row[0]<=10 else 5
 
     original_ready = timing.ready
     def ready(qid):
@@ -187,13 +187,13 @@ def install(ns, ui, lock):
         def __init__(self,owner):
             super().__init__(owner)
             self.recovery_context={'screen':'list_length'}
-            self.embed=discord.Embed(title='Your list length',description=f'**{page_size(owner)} items per page**\nChoose 1–10 items. This applies to your chore lists, calendar days, standings, and paged history. It changes only your display; chores and points stay as they are. Larger chore pages use View & tools for navigation.',color=0x6B9B77)
-            picker=discord.ui.Select(placeholder='Items per page',options=[discord.SelectOption(label=f'{n} items'+(' · default' if n==10 else ''),value=str(n),default=n==page_size(owner)) for n in range(1,11)])
+            self.embed=discord.Embed(title='Your list length',description=f'**{page_size(owner)} items per page**\nChoose 1–5 items. This applies to your chore lists, calendar days, standings, and paged history. It changes only your display; chores and points stay as they are. Navigation buttons stay visible below the list.',color=0x6B9B77)
+            picker=discord.ui.Select(placeholder='Items per page',options=[discord.SelectOption(label=f'{n} items'+(' · default' if n==5 else ''),value=str(n),default=n==page_size(owner)) for n in range(1,6)])
             async def save(i):
                 if not await self.interaction_check(i):return
                 try:value=int(picker.values[0])
-                except (ValueError,IndexError):return await i.response.send_message('Choose a list length from 1 to 10.',ephemeral=True)
-                if not 1<=value<=10:return await i.response.send_message('Choose a list length from 1 to 10.',ephemeral=True)
+                except (ValueError,IndexError):return await i.response.send_message('Choose a list length from 1 to 5.',ephemeral=True)
+                if not 1<=value<=5:return await i.response.send_message('Choose a list length from 1 to 5.',ephemeral=True)
                 async with lock:
                     with db:db.execute('INSERT OR REPLACE INTO workspace_preferences VALUES(?,?)',(str(owner),value))
                 await present(i,ListLength(owner),'List length saved for your account.')
@@ -654,7 +654,6 @@ def install(ns, ui, lock):
             calendar_week=context.get('screen')=='calendar' and context.get('mode')=='week'
             checklist=context.get('screen')=='checklist'
             browse_screen=isinstance(source,Browse)
-            dense_list=(browse_screen or calendar_day) and len(embed.fields)>5
             body=discord.ui.Container(accent_colour=0x6B9B77) if embed and embed.fields else None
             def add_body(item):
                 (body if body is not None else self).add_item(item)
@@ -758,33 +757,7 @@ def install(ns, ui, lock):
                         button.callback=unavailable
                     fixed.append(button)
                 self.add_item(discord.ui.ActionRow(*fixed))
-            if not dense_list and (body is not None or paging_labels):self.add_item(discord.ui.Separator())
-            if dense_list:
-                choices=[];callbacks={}
-                for items in rows.values():
-                    for item in items:
-                        if isinstance(item,discord.ui.Button):
-                            key='action:'+str(len(callbacks))
-                            choices.append(discord.SelectOption(label=item.label[:100],value=key))
-                            callbacks[key]=(item,None)
-                        elif isinstance(item,discord.ui.Select):
-                            for option in item.options:
-                                key='choice:'+str(len(callbacks))
-                                choices.append(discord.SelectOption(label=('Open: '+option.label)[:100],value=key))
-                                callbacks[key]=(item,option.value)
-                choices.append(discord.SelectOption(label='List length',value='list_length'))
-                picker=discord.ui.Select(placeholder='View & tools…',options=choices)
-                async def tools(i):
-                    if not await source.interaction_check(i):return
-                    if picker.values[0]=='list_length':return await present(i,ListLength(source.owner))
-                    item,value=callbacks[picker.values[0]]
-                    if value is not None:item._values=[value]
-                    await item.callback(i)
-                picker.callback=tools
-                self.add_item(discord.ui.ActionRow(picker))
-                refresh_row=discord.ui.ActionRow();self.add_item(refresh_row)
-                recovery.attach(self,source,resume_row=refresh_row)
-                return
+            if body is not None or paging_labels:self.add_item(discord.ui.Separator())
             utility_row=None
             if points_screen:
                 controls={getattr(item,'label',None):item for items in rows.values() for item in items}
@@ -1179,8 +1152,8 @@ def install(ns, ui, lock):
                         'lookup_failed':'Could not open the chores channel. No notice was sent.',
                         'wrong_channel':'The channel did not match the household. No notice was sent.'}
                     await present(event,Announcements(owner,event.guild),messages.get(status,'No notice was sent.'))
-                from chore_board import UPDATE_NOTICE
-                await present(i,Confirm(owner,'Announce this update?',f'Post as ChoreSprite in <#{saved[1]}>:\n\n'+UPDATE_NOTICE+'\n\nNo pings. An already attempted release will not post again.',save,lambda:Announcements(owner,i.guild)))
+                from chore_board import update_notice
+                await present(i,Confirm(owner,'Announce this update?',f'Post as ChoreSprite in <#{saved[1]}>:\n\n'+update_notice()+'\n\nThe date and time are filled in when posted. No pings. An already attempted release will not post again.',save,lambda:Announcements(owner,i.guild)))
             self.button('Announce this update',announce,row=0,primary=True)
             self.nav()
 
@@ -1587,7 +1560,7 @@ def install(ns, ui, lock):
 
     TOPICS['Workload & pace']='Earned averages use recorded completions through yesterday, excluding undone work. Resets of the points balance do not erase this work. Days before the first recorded completion are unavailable, not invented zeros; today is shown separately.\n\nThe plan covers the next 7, 28, or 90 full days. It uses current assignments and dated week signups; unknown owners stay Unclaimed. Daily/fixed-day chores count scheduled occurrences. Flexible weekly/monthly points are prorated across their period, without choosing a weekday. Moved work counts once before its normal schedule resumes. Undated one-time work is separate. This estimates responsibility, assuming recurring work gets finished on time; it is not guaranteed future earnings.\n\nDaily rates use calendar days; weekly means 7 days and monthly means 30 days. Per home-day uses the saved rotation and exceptions, with Sunday split at 6 p.m. Old attendance edits can change that historical comparison. Away coverage remains in the plan so it is visible. Points measure the household’s chosen effort values, not hours worked.'
 
-    TOPICS['Change list length']='Open **My settings → List length**, then choose **1–10 items per page**. The default is **10**. This changes only your display and is saved for your account.\n\nIt applies to chore lists, calendar days, standings, and paged completion/help history. Detailed reviews and reset records still open one at a time. On larger chore pages, **View & tools…** contains the time views, filters, and Dashboard. Inline Done or Details buttons stay beside the chores.'
+    TOPICS['Change list length']='Open **My settings → List length**, then choose **1–5 items per page**. The default is **5**. This changes only your display and is saved for your account.\n\nIt applies to chore lists, calendar days, standings, and paged completion/help history. Detailed reviews and reset records still open one at a time. Time views, Search, Filters, and Dashboard remain visible as buttons below the list. Inline Done or Details buttons stay beside the chores.'
 
     TOPICS['Schedules and missed chores'] += DAY_LEGEND+'\nWeekly and monthly symbols mean no fixed weekday until one is chosen.'
 

@@ -278,8 +278,7 @@ Calendar on the Dashboard opens today’s dated chores in Eastern time. Use Prev
 ## Update announcement
 
 If ginaria enables automatic announcements, a new installed Git commit posts
-once after startup in the configured household chores channel: **Sprig has been updated. Open /chores for
-fresh controls.** There are no mentions or mass pings. Open /chores again to get
+once after startup in the configured household chores channel: **Sprig has been updated to version 1.0. Open /chores for fresh controls.** A second line gives the announcement date and time in Eastern time, including EDT or EST. This release is version **1.0**; the timestamp records when the notice is posted, including when the owner announces manually later. Each installed Git commit remains a separate update for duplicate prevention. There are no mentions or mass pings. Open /chores again to get
 the updated controls; existing chores, assignments, points, and history remain.
 
 Restarts and Discord reconnects on the same release do not post again. A saved
@@ -403,7 +402,7 @@ The dashboard uses one compact framed menu with small group labels. Points and s
 
 ### Personal list length
 
-My settings → List length saves 1–10 items per page for your own account; the default is 10. It applies to chore lists, calendar days, standings, and completion/help-history lists. Detailed review and reset records still open one at a time. Larger chore pages keep inline Done/Details and fixed Previous/Next paging, with a View & tools menu for views, filters, card opening, and navigation, plus one safe Refresh button. This keeps ten rows within Discord’s component limit. Old saved chore/calendar views keep the same approximate item position when the size changes. Other people’s preferences, chores, points, and history are unchanged.
+My settings → List length saves 1–5 items per page for your own account; the default is 5. Previously saved longer lists display five items without changing household data. It applies to chore lists, calendar days, standings, and completion/help-history lists. Detailed review and reset records still open one at a time. Chore pages keep inline Done/Details and fixed Previous/Next paging. Time views, Search, Filters, and Dashboard stay visible below the list, with one safe Refresh button. The combined View & tools menu has been removed. Old saved chore/calendar views keep the same approximate item position when the size changes. Other people’s preferences, chores, points, and history are unchanged.
 
 
 ### Compact secondary screens
