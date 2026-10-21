@@ -80,7 +80,7 @@ def install(ns, ui, w, lock):
             back=back or (lambda:w.Card(owner,qid,guild=guild))
             self.recovery_context={'screen':'checklist','qid':qid,'parent':w.recovery.bookmark(back())}
             self.expected=(ui.snapshot(qid),plan(qid),cycle(qid),sorted(done))
-            self.embed=discord.Embed(title='Checklist · '+w.clean(q[1],100) if q else 'Chore unavailable',description='Check steps as you go. Points are awarded once, when you press Done on the chore. Progress is shared with whoever takes this occurrence.',color=0x6B9B77)
+            self.embed=discord.Embed(title='Checklist · '+w.clean(q[1],100) if q else 'Chore unavailable',description=f'**{len(done)}/{len(items)} steps complete** · Check steps below, then press Done. Points are awarded once; progress stays with this occurrence.',color=0x6B9B77)
             for idx,item in enumerate(items):self.embed.add_field(name=('☑ ' if idx in done else '☐ ')+w.clean(item,80),value='Checked' if idx in done else 'Not checked',inline=False)
             uid,_=w.ownership(qid)
             if q and not ui.is_archived(qid) and not q[5] and timing.ready(qid) and uid==str(owner) and ui.available(owner) and items:
@@ -146,7 +146,7 @@ def install(ns, ui, w, lock):
             super().__init__(owner)
             expected=settings(owner)
             self.recovery_context={'screen':'reminders'}
-            self.embed=discord.Embed(title='Your chore reminders',description='**'+('On' if expected[0] else 'Off')+'** · '+', '.join(json.loads(expected[1]))+' Eastern\nPrivate DMs for chores you own that are due and unfinished. No reminder when you are away or have nothing due. Turning this on authorizes Sprig to DM your own account.\nChoose up to 10 times per day. Change times or turn off whenever you like. Missed reminders are not replayed after downtime.',color=0x6B9B77)
+            self.embed=discord.Embed(title='Your chore reminders',description='**'+('On' if expected[0] else 'Off')+'** · '+', '.join(json.loads(expected[1]))+' Eastern\nUp to 10 daily times for your due, unfinished chores. No reminders while away or when nothing is due.\nTurn on allows private DMs to your account; change times or turn off anytime. Missed reminders are not replayed.',color=0x6B9B77)
             last=db.execute('SELECT slot,status FROM reminder_deliveries WHERE user_id=? ORDER BY slot DESC LIMIT 1',(str(owner),)).fetchone()
             if last:
                 labels={'sent':'Sent','canceled':'Not sent: chores, preferences, location, or reminder time changed.',
@@ -275,16 +275,18 @@ def install(ns, ui, w, lock):
     class Day(w.View):
         def __init__(self,owner,day,mine=False,guild=None,page=0,flexible=False,mode='week'):
             super().__init__(owner)
-            rows=project(day,owner if mine else None,flexible);page=min(max(page,0),max((len(rows)-1)//5,0));chunk=rows[page*5:(page+1)*5]
+            size=w.page_size(owner)
+            self.list_page_size=size
+            rows=project(day,owner if mine else None,flexible);page=min(max(page,0),max((len(rows)-1)//size,0));chunk=rows[page*size:(page+1)*size]
             self.day,self.page,self.mine,self.flexible,self.mode=day,page,mine,flexible,mode
-            self.recovery_context={'screen':'day','day':day.isoformat(),'page':page,'mine':mine,'flexible':flexible,'mode':mode}
+            self.recovery_context={'screen':'day','day':day.isoformat(),'page':page,'mine':mine,'flexible':flexible,'mode':mode,'list_size':size}
             self.paging_labels=('Previous page','Next page')
             self.embed=discord.Embed(title=('No fixed day · '+day.strftime('%b %d')) if flexible else day_badge(WEEKDAYS[day.weekday()])+' '+day.strftime('%b %d, %Y'),description='Schedule preview · Details opens a chore; choosing a date does not reserve or reschedule it.'+(' Weekly/monthly chores are flexible until given a day. Owners are shown for this date’s household week.' if flexible else ''),color=0x6B9B77)
             for q,uid in chunk:
                 when=datetime.combine(day,datetime.min.time(),tzinfo=ns['QUEST_TIMEZONE']).replace(hour=12)
                 away=uid and not ui.attendance.at(uid,when)
                 self.embed.add_field(name=w.clean(q[1],100),value=w.clean(w.person(uid,guild),100)+f' · {q[3]} points'+summary(q[0])+(' · ⚠ Away' if away else ''),inline=False)
-            self.embed.set_footer(text=f'Page {page+1} of {max((len(rows)-1)//5+1,1)} · '+(f'Chores {page*5+1}–{page*5+len(chunk)} of {len(rows)}' if rows else '0 chores')+' · Eastern time')
+            self.embed.set_footer(text=f'Page {page+1} of {max((len(rows)-1)//size+1,1)} · '+(f'Chores {page*size+1}–{page*size+len(chunk)} of {len(rows)}' if rows else '0 chores')+' · Eastern time')
             if chunk:
                 picker=discord.ui.Select(placeholder='Choose chore',row=0,options=[discord.SelectOption(label=q[1][:100],value=str(q[0])) for q,uid in chunk])
                 async def open_chore(i,qid):
@@ -298,7 +300,7 @@ def install(ns, ui, w, lock):
                 picker.callback=select;self.add_item(picker)
             else:self.embed.add_field(name='No chores here',value='Try Household, No fixed day, or Due now for overdue work.')
             if page:self.button('Previous page',lambda i:w.present(i,Day(owner,day,mine,i.guild,page-1,flexible,mode)),row=3)
-            if (page+1)*5<len(rows):self.button('Next page',lambda i:w.present(i,Day(owner,day,mine,i.guild,page+1,flexible,mode)),row=3)
+            if (page+1)*size<len(rows):self.button('Next page',lambda i:w.present(i,Day(owner,day,mine,i.guild,page+1,flexible,mode)),row=3)
             self.button('Previous day',lambda i:w.present(i,Day(owner,day-timedelta(days=1),mine,i.guild,0,flexible,mode)),row=1)
             self.button('Today',lambda i:w.present(i,Day(owner,timing.now().date(),mine,i.guild,0,flexible,mode)),row=1)
             self.button('Next day',lambda i:w.present(i,Day(owner,day+timedelta(days=1),mine,i.guild,0,flexible,mode)),row=1)
@@ -372,22 +374,26 @@ def install(ns, ui, w, lock):
     class HelpHistory(w.View):
         def __init__(self,owner,qid,guild=None,page=0):
             super().__init__(owner)
+            size=w.page_size(owner)
+            self.list_page_size=size
             self.paging_labels=('Previous','Next')
             rows=db.execute('SELECT kind,note,reporter,created_at,resolved_at,resolved_by,resolution FROM chore_help WHERE quest_id=? ORDER BY id DESC',(qid,)).fetchall()
-            page=min(max(page,0),max((len(rows)-1)//5,0))
+            page=min(max(page,0),max((len(rows)-1)//size,0))
             self.embed=discord.Embed(title='Chore help history',description='Earlier occurrences and resolved or updated notes remain saved.',color=0x6B9B77)
-            for kind,note,reporter,created,resolved,by,resolution in rows[page*5:(page+1)*5]:
+            for kind,note,reporter,created,resolved,by,resolution in rows[page*size:(page+1)*size]:
                 self.embed.add_field(name=kind+' · '+created[:16],value=w.clean(note,450)+'\n'+('Resolved by '+w.clean(w.person(by,guild),80)+' · '+str(resolution) if resolved else 'Saved for its occurrence')+'\nReported by '+w.clean(w.person(reporter,guild),80),inline=False)
             if not rows:self.embed.add_field(name='No notes yet',value='Help notes will appear here.')
             if page:self.button('Previous',lambda i:w.present(i,HelpHistory(owner,qid,i.guild,page-1)),row=3)
-            if (page+1)*5<len(rows):self.button('Next',lambda i:w.present(i,HelpHistory(owner,qid,i.guild,page+1)),row=3)
+            if (page+1)*size<len(rows):self.button('Next',lambda i:w.present(i,HelpHistory(owner,qid,i.guild,page+1)),row=3)
             self.nav(lambda:HelpStatus(owner,qid,guild))
     class NeedsHelp(w.View):
         def __init__(self,owner,guild=None,page=0):
             super().__init__(owner)
+            size=w.page_size(owner)
+            self.list_page_size=size
             self.paging_labels=('Previous','Next')
             rows=[(q,help_record(q[0])) for q in db.execute('SELECT id,name FROM quests WHERE completed=0 ORDER BY name').fetchall() if not ui.is_archived(q[0]) and help_record(q[0])]
-            page=min(max(page,0),max((len(rows)-1)//5,0));chunk=rows[page*5:(page+1)*5]
+            page=min(max(page,0),max((len(rows)-1)//size,0));chunk=rows[page*size:(page+1)*size]
             self.embed=discord.Embed(title='Chores needing help',description=f'{len(rows)} active issue(s). Everyone can read notes and mark resolved when the obstacle is handled.',color=0x6B9B77)
             for q,r in chunk:self.embed.add_field(name=w.clean(q[1],100)+' · '+r[4],value=w.clean(r[5],450),inline=False)
             if chunk:
@@ -396,7 +402,7 @@ def install(ns, ui, w, lock):
                 picker.callback=choose;self.add_item(picker)
             else:self.embed.add_field(name='No active issues',value='New status notes appear here; ordinary unfinished work remains in chores.')
             if page:self.button('Previous',lambda i:w.present(i,NeedsHelp(owner,i.guild,page-1)),row=3)
-            if (page+1)*5<len(rows):self.button('Next',lambda i:w.present(i,NeedsHelp(owner,i.guild,page+1)),row=3)
+            if (page+1)*size<len(rows):self.button('Next',lambda i:w.present(i,NeedsHelp(owner,i.guild,page+1)),row=3)
             self.recovery_context={'screen':'needs_help','page':page}
             self.button('Refresh',lambda i:w.present(i,NeedsHelp(owner,i.guild,page)),row=3);self.nav()
 

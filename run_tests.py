@@ -12,7 +12,7 @@ from unittest.mock import patch
 HERE = Path(__file__).resolve().parent
 RUNTIME = ('sprig_bot.py', 'chore_board.py', 'chore_timing.py',
            'household_availability.py', 'chore_history.py', 'chore_workspace.py',
-           'chore_planning.py', 'chore_recovery.py')
+           'chore_planning.py', 'chore_recovery.py', 'chore_insights.py')
 SOURCES = RUNTIME + ('requirements.txt', 'test_chore_board.py', 'run_tests.py')
 
 # Reuse regression tests, rather than maintaining a second set of assertions.
@@ -32,6 +32,7 @@ SERVER_CHECKS = {
     'AM/PM ownership and completion': 'test_daily_am_pm_have_independent_weekly_owners_and_completions',
     'DST and repeat schedules': 'test_weekday_and_twice_daily_resets_across_dst',
     'Sunday handoff and attendance': 'test_exception_sunday_handoff_dst_and_separate_people',
+    'adjustable defaults and dated overrides': 'test_usual_defaults_weekdays_opposite_rotation_dst_and_date_override_priority',
     'reminder opt-in and access': 'test_planning_reminders_default_off_and_personal_permissions',
     'reminder deduplication and restart': 'test_planning_reminders_deduplicate_concurrent_and_restart',
     'reminder ownership changes': 'test_audit10_reassignment_during_lookup_follows_recipient_optin',
@@ -40,6 +41,9 @@ SERVER_CHECKS = {
     'today-first Calendar': 'test_calendar_navigation_dashboard_defaults_to_today_at_click_time',
     'private Discord serialization': 'test_v2_serialized_private_message_has_v2_and_ephemeral_flags',
     'Discord component limits': 'test_workspace_all_screens_and_large_data_respect_discord_limits',
+    'default ten-item page limits': 'test_list_length_default_ten_dense_pages_fit_and_do_not_hide_rows',
+    'personal display preference durability': 'test_list_length_save_is_personal_validated_and_durable',
+    'read-only workload arithmetic': 'test_insights_fixed_flexible_twice_daily_and_unclaimed_budget_math',
     'recovery access boundaries': 'test_recovery_rejects_wrong_person_guild_and_lost_channel_access',
     'real Discord view dispatch': 'test_recovery_real_view_store_dispatch_handles_dynamic_and_static_once',
 }

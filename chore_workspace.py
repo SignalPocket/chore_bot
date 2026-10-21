@@ -13,10 +13,15 @@ def install(ns, ui, lock):
     bot, db, timing = ns['bot'], ns['db'], ui.timing
     db.executescript('''CREATE TABLE IF NOT EXISTS occurrence_moves(quest_id INTEGER PRIMARY KEY,day TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS notification_preferences(user_id TEXT PRIMARY KEY,trade_dm INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS workspace_preferences(user_id TEXT PRIMARY KEY,list_size INTEGER NOT NULL CHECK(list_size BETWEEN 1 AND 10));
     CREATE TABLE IF NOT EXISTS trade_notifications(trade_id INTEGER PRIMARY KEY,status TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS chore_shift_splits(original_id INTEGER PRIMARY KEY,pm_id INTEGER UNIQUE NOT NULL);
     CREATE TABLE IF NOT EXISTS attention_windows(quest_id INTEGER PRIMARY KEY,cycle TEXT NOT NULL,deadline TEXT NOT NULL);''')
     db.commit()
+    def page_size(owner):
+        row=db.execute('SELECT list_size FROM workspace_preferences WHERE user_id=?',(str(owner),)).fetchone()
+        return row[0] if row and isinstance(row[0],int) and 1<=row[0]<=10 else 10
+
     original_ready = timing.ready
     def ready(qid):
         move = db.execute('SELECT day FROM occurrence_moves WHERE quest_id=?', (qid,)).fetchone()
@@ -149,6 +154,14 @@ def install(ns, ui, lock):
         if isinstance(view, View) or getattr(view, 'workspace_adapted', False): return view
         view.workspace_adapted = True
         view.recovery_parent = back
+        if not getattr(view,'embed',None):
+            headings={
+                'AddChoreMenu':('Chore schedule','Choose how often the chore repeats, then fill in its details.'),
+                'WeekdayMenu':('Choose a weekday','Choose the regular day for this chore.'),
+                'RepeatMenu':('Repeat days','Choose the days and repeating pattern.'),
+                'HouseholdSetup':('Household setup','Select Kas and Zel’s accounts, then Save household. Weeks change Sunday at 6 p.m. Eastern.')}
+            heading=headings.get(type(view).__name__)
+            if heading:view.embed=discord.Embed(title=heading[0],description=heading[1],color=0x6B9B77)
         for item in list(view.children):
             if isinstance(item, discord.ui.Button) and item.label in ('Dashboard', 'My chores', 'Back'):
                 view.remove_item(item)
@@ -169,6 +182,23 @@ def install(ns, ui, lock):
             b.callback = home
             view.add_item(b)
         return view
+
+    class ListLength(View):
+        def __init__(self,owner):
+            super().__init__(owner)
+            self.recovery_context={'screen':'list_length'}
+            self.embed=discord.Embed(title='Your list length',description=f'**{page_size(owner)} items per page**\nChoose 1–10 items. This applies to your chore lists, calendar days, standings, and paged history. It changes only your display; chores and points stay as they are. Larger chore pages use View & tools for navigation.',color=0x6B9B77)
+            picker=discord.ui.Select(placeholder='Items per page',options=[discord.SelectOption(label=f'{n} items'+(' · default' if n==10 else ''),value=str(n),default=n==page_size(owner)) for n in range(1,11)])
+            async def save(i):
+                if not await self.interaction_check(i):return
+                try:value=int(picker.values[0])
+                except (ValueError,IndexError):return await i.response.send_message('Choose a list length from 1 to 10.',ephemeral=True)
+                if not 1<=value<=10:return await i.response.send_message('Choose a list length from 1 to 10.',ephemeral=True)
+                async with lock:
+                    with db:db.execute('INSERT OR REPLACE INTO workspace_preferences VALUES(?,?)',(str(owner),value))
+                await present(i,ListLength(owner),'List length saved for your account.')
+            picker.callback=save;self.add_item(picker)
+            self.nav()
 
     class Dashboard(View):
         def __init__(self, owner, guild=None, member=None):
@@ -192,6 +222,8 @@ def install(ns, ui, lock):
             self.button('Needs attention',lambda i:present(i,Attention(owner,i.guild)),row=0)
             self.button('Reminders',lambda i:present(i,ui.planning.Reminders(owner)),row=3)
             self.button('Notifications', lambda i: present(i, Notifications(owner)), row=2)
+            self.button('List length',lambda i:present(i,ListLength(owner)),row=1)
+            self.button('Workload & pace',lambda i:ui.insights.show(i,owner),row=1)
             self.button('Points & standings',lambda i:present(i,Points(owner,i.guild)),row=2)
             if incoming: self.embed.add_field(name='Waiting for you', value=f'{incoming} incoming trade request(s).', inline=False)
             if owner == OWNER:
@@ -245,15 +277,17 @@ def install(ns, ui, lock):
     class Attention(View):
         def __init__(self,owner,guild=None,page=0):
             super().__init__(owner)
+            size=page_size(owner)
+            self.list_page_size=size
             rows=attention_rows()
-            page=min(max(page,0),max((len(rows)-1)//5,0))
+            page=min(max(page,0),max((len(rows)-1)//size,0))
             self.page,self.entries=page,rows
             self.recovery_context={'screen':'attention','page':page}
-            self.name_ids=[ownership(r[0][0])[0] for r in rows[page*5:(page+1)*5]]
+            self.name_ids=[ownership(r[0][0])[0] for r in rows[page*size:(page+1)*size]]
             self.rebuild=lambda:Attention(owner,guild,page)
             back=lambda:Attention(owner,guild,page)
             self.embed=discord.Embed(title='Needs attention',description=f'{len(rows)} chore(s) · Overdue: {sum(r[1] for r in rows)} · Needs someone: {sum(r[2] for r in rows)} · Blocked: {sum(bool(r[3]) for r in rows)}\nChores appear once; labels can overlap. Due today does not mean overdue.',color=0x6B9B77)
-            chunk=rows[page*5:(page+1)*5]
+            chunk=rows[page*size:(page+1)*size]
             for q,overdue,unclaimed,issue,deadline in chunk:
                 labels=(['Overdue'] if overdue else [])+(['Needs someone'] if unclaimed else [])+(['Blocked · '+issue[4]] if issue else [])
                 details=' · '.join(labels)+'\n'+timing.compact_label(q[2])+f' · {q[3]} points\n'+clean(person(ownership(q[0])[0],guild),100)
@@ -265,20 +299,22 @@ def install(ns, ui, lock):
                 async def choose(i):await present(i,Card(owner,int(picker.values[0]),back,i.guild))
                 picker.callback=choose;self.add_item(picker)
             else:self.embed.add_field(name='Nothing needs attention',value='No overdue, due unclaimed, or actively blocked chores. Scheduled work remains in Household and Calendar.')
-            self.embed.set_footer(text=f'Page {page+1} of {max(1,(len(rows)+4)//5)} · Eastern time')
+            self.embed.set_footer(text=f'Page {page+1} of {max(1,(len(rows)+size-1)//size)} · Eastern time')
             self.paging_labels=('Previous','Next')
             if page:self.button('Previous',lambda i:present(i,Attention(owner,i.guild,page-1)),row=1)
-            if (page+1)*5<len(rows):self.button('Next',lambda i:present(i,Attention(owner,i.guild,page+1)),row=1)
+            if (page+1)*size<len(rows):self.button('Next',lambda i:present(i,Attention(owner,i.guild,page+1)),row=1)
             self.button('Refresh',lambda i:present(i,Attention(owner,i.guild,page)),row=2)
             self.nav()
 
     class Points(View):
         def __init__(self,owner,guild=None,page=0):
             super().__init__(owner)
+            size=page_size(owner)
+            self.list_page_size=size
             total=db.execute('SELECT points,streak FROM users WHERE id=?',(str(owner),)).fetchone() or (0,0)
             records=db.execute('SELECT id,points FROM users ORDER BY points DESC,id').fetchall()
-            page=min(max(page,0),max((len(records)-1)//5,0))
-            chunk=records[page*5:(page+1)*5]
+            page=min(max(page,0),max((len(records)-1)//size,0))
+            chunk=records[page*size:(page+1)*size]
             self.name_ids=[r[0] for r in chunk]
             self.rebuild=lambda:Points(owner,guild,page)
             self.recovery_context={'screen':'points','page':page}
@@ -287,14 +323,14 @@ def install(ns, ui, lock):
             for index,(uid,points) in enumerate(records):
                 if points!=previous:rank=index+1
                 previous=points
-                if page*5<=index<(page+1)*5:
+                if page*size<=index<(page+1)*size:
                     self.embed.add_field(name=f'{rank}. '+clean(person(uid,guild),100),value=f'{points} points',inline=False)
             if not records:self.embed.add_field(name='No scores yet',value='Finish a chore to start earning points.')
-            self.embed.set_footer(text=f'Page {page+1} of {max((len(records)-1)//5+1,1)} · {len(records)} household member(s)')
+            self.embed.set_footer(text=f'Page {page+1} of {max((len(records)-1)//size+1,1)} · {len(records)} household member(s)')
             if owner==OWNER:self.button('Reset points',lambda i:present(i,ResetPoints(owner,i.guild)),row=2)
             if owner==OWNER:self.button('Reset history / Undo',lambda i:present(i,ResetHistory(owner,i.guild)),row=2)
             if page:self.button('Previous',lambda i:present(i,Points(owner,i.guild,page-1)),row=3)
-            if (page+1)*5<len(records):self.button('Next',lambda i:present(i,Points(owner,i.guild,page+1)),row=3)
+            if (page+1)*size<len(records):self.button('Next',lambda i:present(i,Points(owner,i.guild,page+1)),row=3)
             self.button('Refresh',lambda i:present(i,Points(owner,i.guild,page)),row=3)
             self.nav()
 
@@ -435,6 +471,8 @@ def install(ns, ui, lock):
     class Browse(View):
         def __init__(self, owner, area='mine', tab=None, page=0, query='', person_id=None, room='', unclaimed=False, group='day', date_filter='', guild=None):
             super().__init__(owner)
+            size=page_size(owner)
+            self.list_page_size=size
             ns['reset_due_quests']()
             tab = tab or ('due' if area in ('mine', 'pickup') else 'week')
             self.state = dict(area=area, tab=tab, page=page, query=query, person_id=person_id, room=room, unclaimed=unclaimed, group=group, date_filter=date_filter)
@@ -500,14 +538,14 @@ def install(ns, ui, lock):
                             rendered.append((f'{index+1} · {day_badge(day)} {date:%b %d}',q))
                     else: rendered.append(('8 · '+timing.compact_label(f),q))
                 rendered.sort(key=lambda r:(r[0],r[1][1].casefold()))
-            page = min(max(page, 0), max((len(rendered)-1)//5, 0))
+            page = min(max(page, 0), max((len(rendered)-1)//size, 0))
             self.state['page'] = page
             memory[(owner, area)] = dict(self.state)
             self.name_ids=[ownership(q[0],offset)[0] for q in selected]
             self.rebuild=lambda:Browse(owner,**self.state,guild=guild)
-            self.recovery_context={'screen':'browse','state':dict(self.state)}
+            self.recovery_context={'screen':'browse','state':dict(self.state),'list_size':size}
             back = lambda: Browse(owner, **self.state, guild=guild)
-            chunk = rendered[page*5:(page+1)*5]
+            chunk = rendered[page*size:(page+1)*size]
             title = {'mine': 'My chores', 'pickup': 'Pick up chores', 'household': 'Household'}[area]
             period = {'due': 'Due now', 'week': 'This week', 'next': 'Next week', 'upcoming': 'Upcoming', 'done': 'Completed', 'all':'All chores'}[tab]
             description = period + f' · {len(selected)} chore(s)' + (' · Search: ' + clean(query, 100) if query else '')
@@ -559,10 +597,10 @@ def install(ns, ui, lock):
                 self.button('View: ' + group, lambda i: present(i, Groups(owner, self.state, i.guild)), row=2)
                 self.button('All' if unclaimed else 'Unclaimed only', lambda i: present(i, Browse(owner, **dict(self.state, unclaimed=not unclaimed, page=0), guild=i.guild)), row=2)
             if page: self.button('Previous', lambda i: present(i, Browse(owner, **dict(self.state, page=page-1), guild=i.guild)), row=3)
-            if (page+1)*5 < len(rendered): self.button('Next', lambda i: present(i, Browse(owner, **dict(self.state, page=page+1), guild=i.guild)), row=3)
+            if (page+1)*size < len(rendered): self.button('Next', lambda i: present(i, Browse(owner, **dict(self.state, page=page+1), guild=i.guild)), row=3)
             self.button('Refresh', lambda i: present(i, Browse(owner, **self.state, guild=i.guild)), row=3)
             self.nav()
-            self.embed.set_footer(text=f'Page {page+1} of {max((len(rendered)-1)//5+1,1)} · Eastern time · Weeks change Sunday 6 p.m.')
+            self.embed.set_footer(text=f'Page {page+1} of {max((len(rendered)-1)//size+1,1)} · Eastern time · Weeks change Sunday 6 p.m.')
 
     class LayoutPanel(discord.ui.LayoutView):
         """V2-only wire layout; the source retains the existing navigation and rules."""
@@ -582,41 +620,58 @@ def install(ns, ui, lock):
             if header and not isinstance(source,Dashboard):self.add_item(header)
             if isinstance(source,Dashboard):
                 buttons={item.label:item for item in source.children if isinstance(item,discord.ui.Button)}
-                if header:self.add_item(discord.ui.Section(header,accessory=buttons['Help']))
-                stats=text('-# '+embed.footer.text)
-                if stats:self.add_item(stats)
+                heading=text((('**'+str(notice)+'**\n\n') if notice else '')+'# '+embed.title+'\n'+embed.footer.text)
+                if heading:self.add_item(discord.ui.Section(heading,accessory=buttons['Help']))
                 for field in embed.fields:
                     item=text('**'+field.name+'** · '+field.value)
                     if item:self.add_item(item)
                 trade=next(label for label in buttons if label.startswith('Trades ('))
                 review=next((label for label in buttons if label.startswith('Review inbox (')),None)
-                planning=['Calendar','Household chores','Who’s home?',trade]
+                planning=['Calendar','Household chores','Who’s home?','Workload & pace',trade]
                 if source.owner!=OWNER:planning.append('Household setup')
                 groups=[('Do chores',['My chores','Pick up chores','Needs attention','Manage chores']),
                     ('Plan & coordinate',planning),
-                    ('My settings',['Reminders','Notifications','Points & standings','Continue where I left off']),
+                    ('My settings',['Reminders','Notifications','Points & standings','List length','Continue where I left off']),
                     ('Owner tools',[review,'Update announcements','Household setup'] if source.owner==OWNER else [])]
                 settings_row=None
+                menu=discord.ui.Container(accent_colour=0x6B9B77)
                 for title,labels in groups:
                     items=[buttons[label] for label in labels if label in buttons]
                     if not items:continue
-                    row=discord.ui.ActionRow(*items)
-                    self.add_item(discord.ui.Container(discord.ui.TextDisplay('### '+title),row,accent_colour=0x6B9B77))
-                    if title=='My settings':settings_row=row
+                    menu.add_item(discord.ui.TextDisplay('**'+title+'**'))
+                    width=4 if title=='My settings' else 5
+                    for start in range(0,len(items),width):
+                        row=discord.ui.ActionRow(*items[start:start+width])
+                        menu.add_item(row)
+                        if title=='My settings':settings_row=row
+                self.add_item(menu)
                 recovery.attach(self,source,resume_row=settings_row)
                 return
             points_screen=isinstance(source,Points)
             calendar_day=getattr(source,'recovery_context',{}).get('screen')=='day'
             calendar_details=getattr(source,'calendar_details',[])
+            context=getattr(source,'recovery_context',{})
+            calendar_week=context.get('screen')=='calendar' and context.get('mode')=='week'
+            checklist=context.get('screen')=='checklist'
             browse_screen=isinstance(source,Browse)
+            dense_list=(browse_screen or calendar_day) and len(embed.fields)>5
             body=discord.ui.Container(accent_colour=0x6B9B77) if embed and embed.fields else None
             def add_body(item):
                 (body if body is not None else self).add_item(item)
             if embed:
                 for index,field in enumerate(embed.fields):
                     # Lists stay compact; instructions and warnings keep their line breaks.
-                    value=field.value[:450].replace('\n',' · ') if browse_screen or calendar_day else field.value
-                    content=text('**'+field.name+'**'+(' · ' if points_screen else '\n')+value)
+                    summary_limit=max(24,(budget-250)//max(1,len(embed.fields)-index)-len(field.name)-12)
+                    list_summary=browse_screen or calendar_day or hasattr(source,'list_page_size')
+                    value=(field.value[:min(450,summary_limit)]+('…' if len(field.value)>min(450,summary_limit) else '')).replace('\n',' · ') if list_summary else field.value
+                    if checklist and field.value in ('Checked','Not checked'):
+                        content=text(field.name)
+                    else:
+                        inline=points_screen or calendar_week or (not browse_screen and not calendar_day and '\n' not in value and len(value)<=130 and field.name not in ('Instructions','Feedback'))
+                        if calendar_week or (isinstance(source,Card) and field.name in ('Responsibility','When','Points and room','Estimate and checklist')):
+                            value=value.replace('\n',' · ')
+                            inline=True
+                        content=text('**'+field.name+'**'+(' · ' if inline else '\n')+value)
                     if not content:break
                     if calendar_day and index<len(calendar_details):
                         qid,open_chore=calendar_details[index]
@@ -659,6 +714,7 @@ def install(ns, ui, lock):
             rows={}
             row_ids={child['custom_id']:index for index,row in enumerate(source.to_components()) for child in row.get('components',[]) if 'custom_id' in child}
             paging=[]
+            week_days=[]
             paging_labels=getattr(source,'paging_labels',None)
             if paging_labels is None and isinstance(source,(Browse,Attention,Points,ResetHistory,History,Inbox,Trips)):
                 paging_labels=('Previous','Next')
@@ -668,6 +724,8 @@ def install(ns, ui, lock):
                     if isinstance(item,discord.ui.Button) and item.label in ('Previous page','Next page'):
                         item.label='Previous' if item.label=='Previous page' else 'Next'
             for item in source.children:
+                if calendar_week and isinstance(item,discord.ui.Button) and item.row in (1,2):
+                    week_days.append(item);continue
                 if isinstance(item,discord.ui.Button) and item.label in ('Refresh','Refresh / Resume'):continue
                 if calendar_day and isinstance(item,discord.ui.Select) and item.placeholder=='Choose chore':continue
                 if isinstance(source,Browse) and source.state['area'] in ('pickup','household') and isinstance(item,discord.ui.Select) and item.placeholder=='Open a chore card…':
@@ -681,6 +739,13 @@ def install(ns, ui, lock):
                     continue
                 row=row_ids.get(item.custom_id,item.row if item.row is not None else 0)
                 rows.setdefault(row,[]).append(item)
+            if week_days:
+                day_picker=discord.ui.Select(placeholder='Open a day…',options=[discord.SelectOption(label=item.label,value=str(index)) for index,item in enumerate(week_days)])
+                async def open_day(i):
+                    if not await source.interaction_check(i):return
+                    await week_days[int(day_picker.values[0])].callback(i)
+                day_picker.callback=open_day
+                rows[1]=[day_picker]
             if paging_labels:
                 available={button.label:button for button in paging}
                 fixed=[]
@@ -693,7 +758,33 @@ def install(ns, ui, lock):
                         button.callback=unavailable
                     fixed.append(button)
                 self.add_item(discord.ui.ActionRow(*fixed))
-            self.add_item(discord.ui.Separator())
+            if not dense_list and (body is not None or paging_labels):self.add_item(discord.ui.Separator())
+            if dense_list:
+                choices=[];callbacks={}
+                for items in rows.values():
+                    for item in items:
+                        if isinstance(item,discord.ui.Button):
+                            key='action:'+str(len(callbacks))
+                            choices.append(discord.SelectOption(label=item.label[:100],value=key))
+                            callbacks[key]=(item,None)
+                        elif isinstance(item,discord.ui.Select):
+                            for option in item.options:
+                                key='choice:'+str(len(callbacks))
+                                choices.append(discord.SelectOption(label=('Open: '+option.label)[:100],value=key))
+                                callbacks[key]=(item,option.value)
+                choices.append(discord.SelectOption(label='List length',value='list_length'))
+                picker=discord.ui.Select(placeholder='View & tools…',options=choices)
+                async def tools(i):
+                    if not await source.interaction_check(i):return
+                    if picker.values[0]=='list_length':return await present(i,ListLength(source.owner))
+                    item,value=callbacks[picker.values[0]]
+                    if value is not None:item._values=[value]
+                    await item.callback(i)
+                picker.callback=tools
+                self.add_item(discord.ui.ActionRow(picker))
+                refresh_row=discord.ui.ActionRow();self.add_item(refresh_row)
+                recovery.attach(self,source,resume_row=refresh_row)
+                return
             utility_row=None
             if points_screen:
                 controls={getattr(item,'label',None):item for items in rows.values() for item in items}
@@ -722,22 +813,26 @@ def install(ns, ui, lock):
                 navigation={getattr(item,'label',None):item for items in rows.values() for item in items
                     if isinstance(item,discord.ui.Button) and item.label in ('Back','Dashboard')}
                 pending=[]
+                form=discord.ui.Container(accent_colour=0x6B9B77) if body is None and not paging_labels else None
+                def add_controls(row):
+                    (form if form is not None else self).add_item(row)
                 def flush():
                     if pending:
-                        self.add_item(discord.ui.ActionRow(*pending))
+                        add_controls(discord.ui.ActionRow(*pending))
                         pending.clear()
                 calendar_overview=getattr(source,'recovery_context',{}).get('screen')=='calendar'
                 for row,items in sorted(rows.items()):
                     remaining=[item for item in items if item not in navigation.values()]
                     if not remaining:continue
                     if any(not isinstance(item,discord.ui.Button) for item in remaining):
-                        flush();self.add_item(discord.ui.ActionRow(*remaining));continue
+                        flush();add_controls(discord.ui.ActionRow(*remaining));continue
                     if calendar_overview or len(pending)+len(remaining)>5:flush()
                     pending.extend(remaining)
                     if calendar_overview:flush()
                 flush()
                 utility_row=discord.ui.ActionRow(*(navigation[label] for label in ('Back','Dashboard') if label in navigation))
-                self.add_item(utility_row)
+                add_controls(utility_row)
+                if form is not None:self.add_item(form)
             recovery.attach(self,source,resume_row=utility_row)
 
         async def interaction_check(self,i):
@@ -1007,10 +1102,12 @@ def install(ns, ui, lock):
     class History(View):
         def __init__(self, owner, qid, back, page=0):
             super().__init__(owner)
+            size=page_size(owner)
+            self.list_page_size=size
             self.recovery_context={'screen':'history','qid':qid,'page':page,'parent':recovery.bookmark(back())}
             records = db.execute('SELECT id,user_id,chore_name,points,completed_at,undone_at FROM completion_log WHERE quest_id=? ORDER BY id DESC', (qid,)).fetchall()
-            page = min(max(page,0),max((len(records)-1)//5,0))
-            chunk = records[page*5:(page+1)*5]
+            page = min(max(page,0),max((len(records)-1)//size,0))
+            chunk = records[page*size:(page+1)*size]
             self.embed = discord.Embed(title='Completion history', description='History begins with this update. Earlier totals stay intact; older individual completions cannot be reconstructed. Undo is available for your most recent recorded completion while its occurrence and points remain unchanged. Ginaria can correct another person’s latest completion with the same safety checks.', color=0x6B9B77)
             for event,uid,name,points,when,undone in chunk:
                 self.embed.add_field(name=clean(name,100),value=f'{when[:16].replace("T"," ")} · <@{uid}> · {points} points'+(' · Undone' if undone else ''),inline=False)
@@ -1035,7 +1132,7 @@ def install(ns, ui, lock):
                 self.add_item(picker)
             if not chunk: self.embed.add_field(name='No recorded completions yet',value='Completions made after this update will appear here.')
             if page: self.button('Previous',lambda i:present(i,History(owner,qid,back,page-1)),row=3)
-            if (page+1)*5 < len(records): self.button('Next',lambda i:present(i,History(owner,qid,back,page+1)),row=3)
+            if (page+1)*size < len(records): self.button('Next',lambda i:present(i,History(owner,qid,back,page+1)),row=3)
             self.nav(back)
 
     class Manage(View):
@@ -1222,7 +1319,7 @@ def install(ns, ui, lock):
             self.name_ids=people
             self.rebuild=lambda:Trips(owner,guild,people,page)
             back = lambda: Trips(owner,guild,people,page)
-            self.embed = discord.Embed(title='Who’s home? · trips and traded days',description='Select everyone whose dates change. Add an exception, or edit a saved one directly. Full Eastern calendar days; Sunday handoff stays at 6 p.m.',color=0x6B9B77)
+            self.embed = discord.Embed(title='Who’s home? · trips and traded days',description='Choose anyone. Mark home/away for particular dates, or change their Usual schedule. Date overrides win; afterward the usual schedule resumes. Eastern time.',color=0x6B9B77)
             picker = discord.ui.UserSelect(placeholder='Choose one or more people',min_values=1,max_values=10,row=0)
             async def choose(i):
                 members = picker.values
@@ -1233,15 +1330,18 @@ def install(ns, ui, lock):
             self.add_item(picker)
             if people:
                 self.embed.add_field(name='Selected',value=', '.join(clean(person(uid,guild),100) for uid in people),inline=False)
+                self.embed.add_field(name='Usual schedule',value='\n'.join(clean(person(uid,guild),60)+' · '+ui.attendance.describe(uid) for uid in people),inline=False)
+                self.button('Usual schedule',lambda i:present(i,UsualSchedule(owner,people,i.guild)),row=1)
                 for label,state in [('Mark home','home'),('Mark away','away')]:
                     async def add(i,state=state): await i.response.send_modal(TripModal(owner,people,state,back))
                     self.button(label,add,row=1)
-                shortcuts = discord.ui.Select(placeholder='Quick dates…',row=2,options=[discord.SelectOption(label=l,value=v) for l,v in [('Away today','today'),('Away tomorrow','tomorrow'),('Away this weekend','weekend')]])
+                shortcuts = discord.ui.Select(placeholder='Quick dates…',row=2,options=[discord.SelectOption(label=l,value=v) for l,v in [('Home today','home:today'),('Away today','today'),('Home tomorrow','home:tomorrow'),('Away tomorrow','tomorrow'),('Home this weekend','home:weekend'),('Away this weekend','weekend')]])
                 async def quick(i):
                     day,value = timing.now().date(),shortcuts.values[0]
+                    state,value=value.split(':',1) if ':' in value else ('away',value)
                     first = day+timedelta(days=1 if value == 'tomorrow' else 0 if value=='weekend' and day.weekday()==6 else (5-day.weekday())%7 if value == 'weekend' else 0)
                     last = first+timedelta(days=1 if value == 'weekend' and first.weekday()==5 else 0)
-                    await i.response.send_modal(TripModal(owner,people,'away',back,first.isoformat(),last.isoformat()))
+                    await i.response.send_modal(TripModal(owner,people,state,back,first.isoformat(),last.isoformat()))
                 shortcuts.callback = quick
                 self.add_item(shortcuts)
                 records = db.execute('SELECT id,user_id,start_date,end_date,state,note,active FROM availability_exceptions WHERE active=1 AND user_id IN ('+','.join('?' for _ in people)+') ORDER BY start_date,id',people).fetchall()
@@ -1258,6 +1358,42 @@ def install(ns, ui, lock):
                 if page: self.button('Previous',lambda i:present(i,Trips(owner,i.guild,people,page-1)),row=4)
                 if (page+1)*10 < len(records): self.button('Next',lambda i:present(i,Trips(owner,i.guild,people,page+1)),row=4)
             self.nav()
+
+    class UsualSchedule(View):
+        def __init__(self,owner,people,guild=None,mode=None,days=None,expected=None):
+            super().__init__(owner)
+            self.people=list(people)
+            expected=ui.attendance.defaults_snapshot(people) if expected is None else expected
+            if days is None:
+                profiles=[ui.attendance.profile(uid) for uid in people]
+                import json
+                days=json.loads(profiles[0][1]) if profiles and all(row[:2]==profiles[0][:2] for row in profiles) else []
+            days=list(days)
+            self.recovery_context={'screen':'usual_schedule','people':list(people),'mode':mode,'days':days}
+            self.name_ids=list(people)
+            self.rebuild=lambda:UsualSchedule(owner,people,guild,mode,days,expected)
+            back=lambda:UsualSchedule(owner,people,guild,mode,days,expected)
+            self.embed=discord.Embed(title='Usual schedule',description='Set the default for the selected people. Date overrides still win. This does not move chores or give them to someone else.',color=0x6B9B77)
+            self.embed.add_field(name='Current defaults',value='\n'.join(clean(person(uid,guild),70)+' · '+ui.attendance.describe(uid) for uid in people) or 'Choose people in Who’s home?',inline=False)
+            modes=[('Use household default','household'),('Home every day','home'),('Away every day','away'),('Home on selected weekdays','weekly'),('Alternating: same weeks as Kas/Zel','same'),('Alternating: opposite weeks','opposite')]
+            picker=discord.ui.Select(placeholder='Choose their usual schedule',row=0,options=[discord.SelectOption(label=label,value=value,default=value==mode) for label,value in modes])
+            async def choose(i):await present(i,UsualSchedule(owner,people,i.guild,picker.values[0],days,expected))
+            picker.callback=choose;self.add_item(picker)
+            if mode=='weekly':
+                weekdays=discord.ui.Select(placeholder='Select the weekdays they are usually home',row=1,min_values=1,max_values=7,options=[discord.SelectOption(label=day_badge(day,True),value=str(index),default=index in days) for index,day in enumerate(WEEKDAYS)])
+                async def selected(i):await present(i,UsualSchedule(owner,people,i.guild,mode,[int(value) for value in weekdays.values],expected))
+                weekdays.callback=selected;self.add_item(weekdays)
+            if mode:
+                preview='\n'.join(clean(person(uid,guild),60)+' · '+ui.attendance.describe(uid,mode,days) for uid in people)
+                self.embed.add_field(name='New default for all selected people',value=preview,inline=False)
+                async def confirm(i):
+                    async def save(event):
+                        async with lock:text=ui.attendance.set_defaults(owner,people,mode,days,expected,timing.now())
+                        await present(event,Trips(owner,event.guild,people),text)
+                    names=', '.join(clean(person(uid,i.guild),60) for uid in people)
+                    await present(i,Confirm(owner,'Change usual schedule?',names+'\n'+preview+'\nSaved date overrides and chore responsibilities stay unchanged.',save,back))
+                self.button('Review & save',confirm,row=2,disabled=mode=='weekly' and not days)
+            self.nav(lambda:Trips(owner,guild,people))
 
     class ExceptionCard(View):
         def __init__(self,owner,record,back):
@@ -1447,6 +1583,12 @@ def install(ns, ui, lock):
      'Points and resets': 'Points and standings',
      'Notifications and recovery': 'Recover a screen'}
 
+    TOPICS['Trips and traded days']='Open **Plan & coordinate → Who’s home?** and choose anyone. **Mark home / Mark away** sets a single date or a trip; Quick dates includes home or away today, tomorrow, and the weekend. Preview the dates before saving.\n\nChoose **Usual schedule** to change a person’s normal arrangement: home daily, away daily, selected weekdays, or alternating weeks. Review & save shows who changes. Use household default restores Kas/Zel’s alternating weeks and everyone else’s home-every-day default.\n\nA dated override always wins. When it ends, the person’s usual schedule resumes. Kas/Zel’s alternating handoff stays Sunday at 6 p.m. Changing attendance keeps chores assigned; review coverage or use Reassign when needed.'
+
+    TOPICS['Workload & pace']='Earned averages use recorded completions through yesterday, excluding undone work. Resets of the points balance do not erase this work. Days before the first recorded completion are unavailable, not invented zeros; today is shown separately.\n\nThe plan covers the next 7, 28, or 90 full days. It uses current assignments and dated week signups; unknown owners stay Unclaimed. Daily/fixed-day chores count scheduled occurrences. Flexible weekly/monthly points are prorated across their period, without choosing a weekday. Moved work counts once before its normal schedule resumes. Undated one-time work is separate. This estimates responsibility, assuming recurring work gets finished on time; it is not guaranteed future earnings.\n\nDaily rates use calendar days; weekly means 7 days and monthly means 30 days. Per home-day uses the saved rotation and exceptions, with Sunday split at 6 p.m. Old attendance edits can change that historical comparison. Away coverage remains in the plan so it is visible. Points measure the household’s chosen effort values, not hours worked.'
+
+    TOPICS['Change list length']='Open **My settings → List length**, then choose **1–10 items per page**. The default is **10**. This changes only your display and is saved for your account.\n\nIt applies to chore lists, calendar days, standings, and paged completion/help history. Detailed reviews and reset records still open one at a time. On larger chore pages, **View & tools…** contains the time views, filters, and Dashboard. Inline Done or Details buttons stay beside the chores.'
+
     TOPICS['Schedules and missed chores'] += DAY_LEGEND+'\nWeekly and monthly symbols mean no fixed weekday until one is chosen.'
 
     class Guide(View):
@@ -1462,7 +1604,7 @@ def install(ns, ui, lock):
             self.add_item(picker)
             self.nav()
 
-    result = SimpleNamespace(Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
+    result = SimpleNamespace(UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
 
     from chore_recovery import install as install_recovery
     recovery = install_recovery(ns, ui, result)

@@ -62,17 +62,27 @@ def install(ns, ui, w):
         kind = context.get('screen')
         parent_context = context.get('parent', {'screen': 'dashboard'})
         parent = lambda: restore(owner, parent_context, guild, depth+1)
+        if kind == 'usual_schedule':
+            return w.UsualSchedule(owner,context.get('people',[]),guild,context.get('mode'),context.get('days',[]))
+        if kind == 'insights_help':
+            return ui.insights.methods(owner,guild,context.get('days',28),context.get('page',0),context.get('order','planned'))
+        if kind == 'insights':
+            return ui.insights.Report(owner,guild,context.get('days',28),context.get('page',0),context.get('order','planned'))
+        if kind == 'list_length':
+            return w.ListLength(owner)
         if kind == 'announcements':
             return w.Announcements(owner,guild)
         if kind == 'browse':
-            return w.Browse(owner, guild=guild, **context['state'])
+            state=dict(context['state'])
+            state['page']=state.get('page',0)*context.get('list_size',w.page_size(owner))//w.page_size(owner)
+            return w.Browse(owner, guild=guild, **state)
         if kind == 'card':
             return w.Card(owner, int(context['qid']), parent, guild, int(context.get('offset', 0)))
         if kind == 'calendar':
             return ui.planning.Calendar(owner, guild, date.fromisoformat(context['day']), context['mode'], context['mine'])
         if kind == 'day':
             return ui.planning.Day(owner, date.fromisoformat(context['day']), context['mine'], guild,
-                context['page'], context['flexible'], context['mode'])
+                context['page']*context.get('list_size',w.page_size(owner))//w.page_size(owner), context['flexible'], context['mode'])
         if kind == 'checklist':
             return ui.planning.Checklist(owner, int(context['qid']), guild, parent)
         if kind == 'points':

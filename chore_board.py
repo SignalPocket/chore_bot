@@ -687,7 +687,9 @@ def install(namespace):
             await interaction.edit_original_response(embed=view.embed, view=view)
 
     def reassign_snapshot(qid):
-        return snapshot(qid),week_key(1),weekly_owner(qid,1),db.execute('SELECT id,active FROM availability_exceptions ORDER BY id').fetchall()
+        base=(snapshot(qid),week_key(1),weekly_owner(qid,1),db.execute('SELECT id,active FROM availability_exceptions ORDER BY id').fetchall())
+        defaults=db.execute('SELECT user_id,mode,weekdays,revision FROM availability_defaults ORDER BY user_id').fetchall()
+        return base+(defaults,) if defaults else base
 
     def reassign(qid,target,scope,expected):
         api.reset_due_quests()
@@ -2048,6 +2050,8 @@ def install(namespace):
     result.workspace=workspace
     from chore_planning import install as install_planning
     result.planning=install_planning(namespace,result,workspace,lock)
+    from chore_insights import install as install_insights
+    result.insights=install_insights(namespace,result,workspace)
     # Changes away and back must not revive an old action or stored trade.
     # SQLite increments these counters in the same transaction as each mutation,
     # including legacy commands, Undo, and rollback. Navigation never bumps them.

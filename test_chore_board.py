@@ -108,6 +108,8 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.db.execute("INSERT INTO quests (name, frequency, points) VALUES ('Fill dishwasher', 'daily', 5)")
         self.db.execute("INSERT INTO quests (name, frequency, points, assigned_to) VALUES ('My bathroom', 'weekly', 10, '10')")
         self.db.commit()
+        self.db.executemany('INSERT INTO workspace_preferences VALUES(?,5)',[('10',),('301104023405199361',)])
+        self.db.commit()
         self.setup_seconds = perf_counter() - setup_started
 
     async def asyncTearDown(self):
@@ -4061,10 +4063,11 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                     buttons=[c for c in panel.walk_children() if isinstance(c,discord.ui.Button)]
                     self.assertEqual(sum(c.label=='Refresh' for c in buttons),1)
                     self.assertFalse(any(c.label=='Refresh / Resume' for c in buttons))
-                    self.assertTrue(all(c in buttons for c in original))
+                    calendar_week=getattr(source,'recovery_context',{}).get('screen')=='calendar' and source.recovery_context['mode']=='week'
+                    self.assertTrue(all(c in buttons or (calendar_week and c.row in (1,2)) for c in original))
                     text=' '.join(c.content for c in panel.walk_children() if isinstance(c,discord.ui.TextDisplay))
                     self.assertNotIn('keeps your place if controls expire',text)
-                    nav=next(c for c in panel.children if isinstance(c,discord.ui.ActionRow) and any(getattr(b,'label',None)=='Refresh' for b in c.children))
+                    nav=next(c for c in panel.walk_children() if isinstance(c,discord.ui.ActionRow) and any(getattr(b,'label',None)=='Refresh' for b in c.children))
                     self.assertLessEqual(len(nav.children),5)
                     if any(c.label=='Dashboard' for c in original):self.assertEqual(nav.children[-1].label,'Dashboard')
                     self.assertLessEqual(len(list(panel.walk_children())),40)
@@ -4202,6 +4205,462 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((restored.day,restored.page,restored.mine,restored.mode),(day,1,False,'month'))
             self.assertFalse(self.db.execute('SELECT * FROM claims').fetchall())
 
+    async def test_usual_defaults_preserve_family_fallback_and_allow_permanent_changes(self):
+        a=self.ui.attendance
+        self.db.executemany('INSERT INTO alternating_members VALUES(?)',[('10',),('20',)]);self.db.commit()
+        with self.clock('2026-10-21T10:00:00'):
+            now=self.ui.timing.now()
+            self.assertFalse(a.at(10,now));self.assertFalse(a.at(20,now))
+            for uid in (30,40,50):self.assertTrue(a.at(uid,now))
+            self.assertIn('Saved'.lower(),a.set_defaults(30,['10'],'home',[],a.defaults_snapshot(['10']),now).lower())
+            self.assertTrue(a.at(10,now));self.assertFalse(a.at(20,now))
+            a.set_defaults(30,['10'],'household',[],a.defaults_snapshot(['10']),now)
+            self.assertFalse(a.at(10,now))
+            a.set_defaults(30,['30'],'away',[],a.defaults_snapshot(['30']),now)
+            self.assertFalse(a.at(30,now))
+            a.add(30,'2026-10-21','2026-10-21','home')
+            self.assertTrue(a.at(30,now));self.assertFalse(a.at(30,now+timedelta(days=1)))
+            a.set_defaults(30,['30'],'home',[],a.defaults_snapshot(['30']),now)
+            self.assertTrue(a.at(30,now+timedelta(days=1)))
+
+    async def test_usual_defaults_weekdays_opposite_rotation_dst_and_date_override_priority(self):
+        a=self.ui.attendance
+        with self.clock('2026-10-21T10:00:00'):
+            now=self.ui.timing.now()
+            a.set_defaults(10,['30'],'weekly',[0,2,4],a.defaults_snapshot(['30']),now)
+            self.assertTrue(a.at(30,now));self.assertFalse(a.at(30,now+timedelta(days=1)))
+            a.add(30,'2026-10-22','2026-10-22','home')
+            self.assertTrue(a.at(30,now+timedelta(days=1)))
+            a.set_defaults(10,['10'],'same',[],a.defaults_snapshot(['10']),now)
+            a.set_defaults(10,['20'],'opposite',[],a.defaults_snapshot(['20']),now)
+        for stamp,home in [('2026-10-25T17:59:59',False),('2026-10-25T18:00:00',True),('2026-11-01T17:59:59',True),('2026-11-01T18:00:00',False)]:
+            with self.clock(stamp):
+                now=self.ui.timing.now();self.assertEqual(a.at(10,now),home);self.assertEqual(a.at(20,now),not home)
+        a.add(10,'2026-11-01','2026-11-01','home')
+        with self.clock('2026-11-01T21:00:00'):self.assertTrue(a.at(10,self.ui.timing.now()))
+
+    async def test_usual_defaults_bulk_stale_aba_validation_and_audit_preserve_other_data(self):
+        a=self.ui.attendance
+        with self.clock('2026-10-21T10:00:00'):
+            now=self.ui.timing.now();expected=a.defaults_snapshot(['10','20'])
+            quests=self.db.execute('SELECT * FROM quests').fetchall()
+            a.set_defaults(30,['10'],'away',[],a.defaults_snapshot(['10']),now)
+            self.assertIn('changed',a.set_defaults(30,['10','20'],'home',[],expected,now))
+            self.assertEqual(a.profile(20)[0],'household')
+            old=a.defaults_snapshot(['10'])
+            a.set_defaults(30,['10'],'home',[],old,now)
+            a.set_defaults(30,['10'],'away',[],a.defaults_snapshot(['10']),now)
+            self.assertIn('changed',a.set_defaults(30,['10'],'home',[],old,now))
+            before=a.defaults_snapshot(['10'])
+            for mode,days in [('invalid',[]),('weekly',[]),('weekly',[7]),('weekly',['bad'])]:
+                self.assertNotIn('saved',a.set_defaults(30,['10'],mode,days,before,now))
+                self.assertEqual(a.defaults_snapshot(['10']),before)
+            count=self.db.execute('SELECT COUNT(*) FROM availability_default_changes').fetchone()[0]
+            self.assertIn('Nothing changed',a.set_defaults(30,['10'],'away',[],before,now))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM availability_default_changes').fetchone()[0],count)
+            self.assertEqual(self.db.execute('SELECT * FROM quests').fetchall(),quests)
+            before=a.defaults_snapshot(['10','20'])
+            self.db.execute("CREATE TRIGGER fail_default_bulk BEFORE INSERT ON availability_defaults WHEN NEW.user_id='20' BEGIN SELECT RAISE(ABORT,'test failure'); END" )
+            with self.assertRaises(sqlite3.IntegrityError):a.set_defaults(30,['10','20'],'home',[],before,now)
+            self.assertEqual(a.defaults_snapshot(['10','20']),before)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM availability_default_changes').fetchone()[0],count)
+
+    async def test_usual_defaults_nonowner_ui_confirmation_cancel_and_private_recovery(self):
+        w=self.ui.workspace;a=self.ui.attendance
+        with self.clock('2026-10-21T10:00:00'):
+            source=w.UsualSchedule(20,['10','30'],Interaction(20).guild,'weekly',[0,2])
+            panel=w.render(source)
+            save=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Review & save')
+            wrong=Interaction(10);await save.callback(wrong)
+            self.assertTrue(wrong.response.payload[1]['ephemeral'])
+            event=Interaction(20);await save.callback(event)
+            confirm=event.response.wire_payload['view']
+            self.assertEqual(a.profile(10)[0],'household')
+            cancel=next(c for c in confirm.walk_children() if getattr(c,'label',None)=='Cancel')
+            event=Interaction(20);await cancel.callback(event)
+            self.assertEqual(a.profile(10)[0],'household')
+            event=Interaction(20);await save.callback(event)
+            confirm=event.response.wire_payload['view']
+            event=Interaction(20);await next(c for c in confirm.walk_children() if getattr(c,'label',None)=='Confirm').callback(event)
+            self.assertEqual(a.profile(10)[0],'weekly');self.assertEqual(a.profile(30)[0],'weekly')
+            self.assertTrue(a.at(10,self.ui.timing.now()))
+            panel=w.render(w.UsualSchedule(20,['10','30'],mode='home'))
+            refresh=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Refresh')
+            w.recovery.live.clear();event=Interaction(20);await refresh.callback(event)
+            self.assertIsInstance(event.response.payload['view'],w.UsualSchedule)
+            self.assertEqual(a.profile(10)[0],'weekly')
+            self.assertLessEqual(len(list(event.response.wire_payload['view'].walk_children())),40)
+
+    async def test_usual_defaults_home_today_shortcut_expires_back_to_normal(self):
+        w=self.ui.workspace;a=self.ui.attendance
+        with self.clock('2026-10-21T10:00:00'):
+            now=self.ui.timing.now();a.set_defaults(10,['30'],'away',[],a.defaults_snapshot(['30']),now)
+            panel=w.render(w.Trips(10,Interaction().guild,['30']))
+            picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='Quick dates…')
+            self.assertTrue(any(o.label=='Home today' for o in picker.options))
+            event=Interaction();event.data={'component_type':3,'values':['home:today']};await picker.callback(event)
+            modal=event.response.payload
+            event=Interaction();await modal.on_submit(event)
+            self.assertFalse(a.at(30,now))
+            confirm=event.response.wire_payload['view']
+            event=Interaction();await next(c for c in confirm.walk_children() if getattr(c,'label',None)=='Confirm').callback(event)
+            self.assertTrue(a.at(30,now));self.assertFalse(a.at(30,now+timedelta(days=1)))
+
+    async def test_usual_defaults_drive_reminders_workload_and_invalidate_old_trade_snapshot(self):
+        a=self.ui.attendance;p=self.ui.planning
+        with self.clock('2026-10-21T09:00:00'):
+            old=self.ui.reassign_snapshot(1)
+            p.save_reminders(10,True,'09:00',p.settings(10))
+            async def fetch(uid):
+                a.set_defaults(20,['10'],'away',[],a.defaults_snapshot(['10']),self.ui.timing.now())
+                return self.dm
+            with patch.object(self.app.bot,'get_user',return_value=None),patch.object(self.app.bot,'fetch_user',side_effect=fetch):
+                await p.send_due_reminders()
+            self.dm.send.assert_not_awaited()
+            self.assertNotEqual(self.ui.reassign_snapshot(1),old)
+            self.assertEqual(self.ui.insights.calculate(7)['people']['10']['future_home'],0)
+            self.assertGreater(self.ui.insights.calculate(7)['people']['10']['planned'],0)
+
+    def workload_clear(self):
+        for table in ('quests','claims','week_signups','alternating_members','archived_chores','availability_exceptions','occurrence_moves','chore_timing','completion_log','users'):
+            self.db.execute('DELETE FROM '+table)
+        self.db.commit()
+
+    def workload_chore(self,frequency,points,owner=None,completed=0,reset=None):
+        cursor=self.db.execute('INSERT INTO quests(name,frequency,points,assigned_to,completed,reset_after) VALUES(?,?,?,?,?,?)',
+            ('Workload fixture '+frequency,frequency,points,str(owner) if owner else None,completed,reset))
+        self.db.commit();return cursor.lastrowid
+
+    def workload_completion(self,uid,points,stamp,undone=None,qid=1):
+        self.db.execute("INSERT INTO completion_log(quest_id,user_id,chore_name,points,completed_at,before_state,after_state,undone_at) VALUES(?,?,?, ?,?,'{}','{}',?)",(qid,str(uid),'Recorded work',points,stamp,undone))
+        self.db.commit()
+
+    async def test_insights_actual_history_undo_resets_timezone_and_sparse_days(self):
+        self.workload_clear()
+        with self.clock('2026-10-21T10:00:00'):
+            self.workload_completion(10,7,'2026-10-14T12:00:00-04:00')
+            self.workload_completion(10,20,'2026-10-15T12:00:00-04:00','2026-10-15T13:00:00-04:00')
+            self.workload_completion(10,5,'2026-10-21T01:00:00+00:00')  # Oct 20 Eastern.
+            self.workload_completion(10,10,'2026-10-21T14:00:00+00:00')
+            self.workload_completion(20,21,'2026-10-20T12:00:00')
+            self.db.execute("INSERT INTO users(id,points,streak) VALUES('10',5000,9)");self.db.commit()
+            before=list(self.db.iterdump());data=self.ui.insights.calculate(28)
+            self.assertEqual(list(self.db.iterdump()),before)
+            self.assertEqual(data['observed'],7)
+            self.assertEqual(data['people']['10']['earned'],12)
+            self.assertEqual(data['people']['10']['today'],10)
+            self.assertAlmostEqual(data['people']['10']['earned_daily'],12/7)
+            self.assertEqual(data['people']['20']['earned_daily'],3)
+            self.db.execute("UPDATE users SET points=0,streak=0 WHERE id='10'");self.db.commit()
+            self.assertEqual(self.ui.insights.calculate(28)['people']['10']['earned'],12)
+
+    async def test_insights_fixed_flexible_twice_daily_and_unclaimed_budget_math(self):
+        self.workload_clear()
+        with self.clock('2026-10-21T10:00:00'):
+            self.workload_chore('daily',5,10)
+            self.workload_chore('twice-daily',3,10)
+            self.workload_chore('daily-am',2,10);self.workload_chore('daily-pm',4,10)
+            self.workload_chore('weekly',7,10);self.workload_chore('monthly',31,10)
+            self.workload_chore('friday',11,10);self.workload_chore('days:tuesday,friday',2,10)
+            self.workload_chore('away:saturday',13,10)
+            self.workload_chore('daily',4)
+            data=self.ui.insights.calculate(7)
+            expected=35+42+14+28+7+7+11+4+13
+            self.assertAlmostEqual(data['people']['10']['planned'],expected)
+            self.assertAlmostEqual(data['unclaimed'],28)
+            self.assertAlmostEqual(data['planned_total'],expected+28)
+            self.assertIsNone(data['people']['10']['earned_daily'])
+
+    async def test_insights_week_signups_stop_and_sunday_handoff_is_split(self):
+        self.workload_clear()
+        with self.clock('2026-10-21T10:00:00'):
+            daily=self.workload_chore('daily-pm',5)
+            flexible=self.workload_chore('weekly',7)
+            for qid in (daily,flexible):
+                self.db.executemany('INSERT INTO week_signups VALUES(?,?,?)',[(qid,'2026-10-18','10'),(qid,'2026-10-25','20')])
+            self.db.commit();data=self.ui.insights.calculate(7)
+            self.assertAlmostEqual(data['people']['10']['planned'],23.75)
+            self.assertAlmostEqual(data['people']['20']['planned'],18.25)
+            self.assertAlmostEqual(data['unclaimed'],0)
+            self.assertGreater(self.ui.insights.calculate(28)['unclaimed'],0)
+
+    async def test_insights_home_day_rotation_exceptions_dst_and_zero_denominator(self):
+        self.workload_clear()
+        with self.clock('2026-10-21T10:00:00'):
+            self.db.execute("INSERT INTO alternating_members VALUES('10')")
+            self.workload_chore('daily',5,10);self.workload_chore('daily',10,20)
+            self.ui.attendance.add(10,'2026-10-22','2026-10-22','home')
+            self.ui.attendance.add(20,'2026-10-22','2026-11-18','away')
+            data=self.ui.insights.calculate(28)
+            self.assertAlmostEqual(data['people']['10']['future_home'],15)
+            self.assertAlmostEqual(data['people']['10']['planned_home'],140/15)
+            self.assertEqual(data['people']['20']['future_home'],0)
+            self.assertIsNone(data['people']['20']['planned_home'])
+            self.assertEqual(data['people']['20']['away'],280)
+
+    async def test_insights_moves_completed_periods_and_undated_work_are_not_duplicated(self):
+        self.workload_clear()
+        with self.clock('2026-10-21T10:00:00'):
+            daily=self.workload_chore('daily',5,10)
+            one=self.workload_chore('one-time',12,20)
+            loose=self.workload_chore('one-time',8)
+            weekly=self.workload_chore('weekly',7,10)
+            monthly=self.workload_chore('monthly',31,20)
+            self.db.executemany('INSERT INTO occurrence_moves VALUES(?,?)',[(daily,'2026-10-24'),(one,'2026-10-27'),(weekly,'2026-10-24'),(monthly,'2026-10-24')])
+            self.db.execute('INSERT INTO claims VALUES(?,?)',(loose,'20'));self.db.commit()
+            data=self.ui.insights.calculate(7)
+            self.assertAlmostEqual(data['people']['10']['planned'],35.25)
+            self.assertAlmostEqual(data['people']['20']['planned'],43)
+            self.assertEqual(data['unplaced'],8)
+            self.assertEqual(data['people']['20']['backlog'],8)
+            self.workload_clear()
+            self.workload_chore('weekly',7,10,1,'2026-10-25T18:00:00-04:00')
+            self.workload_chore('monthly',31,10,1,'2026-11-01T00:00:00-04:00')
+            self.assertAlmostEqual(self.ui.insights.calculate(7)['people']['10']['planned'],3.25)
+            self.workload_clear()
+            twice=self.workload_chore('twice-daily',2,10)
+            self.db.execute('INSERT INTO occurrence_moves VALUES(?,?)',(twice,'2026-10-24'));self.db.commit()
+            self.assertEqual(self.ui.insights.calculate(7)['people']['10']['planned'],20)
+
+    async def test_insights_archive_reassign_points_changes_and_single_claims(self):
+        self.workload_clear()
+        with self.clock('2026-10-21T10:00:00'):
+            qid=self.workload_chore('daily',5,10)
+            self.workload_completion(10,5,'2026-10-20T10:00:00-04:00',qid=qid)
+            self.assertEqual(self.ui.insights.calculate(7)['people']['10']['planned'],35)
+            self.db.execute("UPDATE quests SET points=8,assigned_to='20' WHERE id=?",(qid,));self.db.commit()
+            data=self.ui.insights.calculate(7)
+            self.assertEqual(data['people']['10']['earned'],5)
+            self.assertEqual(data['people']['10']['planned'],0)
+            self.assertEqual(data['people']['20']['planned'],56)
+            self.db.execute("INSERT INTO archived_chores VALUES(?,'10','2026-10-21')",(qid,));self.db.commit()
+            data=self.ui.insights.calculate(7)
+            self.assertEqual(data['people']['10']['earned'],5)
+            self.assertEqual(data['planned_total'],0)
+            self.db.execute('DELETE FROM archived_chores');self.db.execute('UPDATE quests SET assigned_to=NULL')
+            self.db.execute('INSERT INTO claims VALUES(?,?)',(qid,'10'));self.db.commit()
+            data=self.ui.insights.calculate(7)
+            self.assertEqual(data['people']['10']['planned'],0)
+            self.assertEqual(data['unclaimed'],56)
+            self.assertEqual(data['people']['10']['backlog'],8)
+
+    async def test_insights_leap_month_normalization_and_empty_history_are_explicit(self):
+        self.workload_clear()
+        with self.clock('2028-02-01T10:00:00'):
+            self.workload_chore('monthly',29,10)
+            data=self.ui.insights.calculate(28)
+            self.assertAlmostEqual(data['people']['10']['planned'],28)
+            self.assertEqual(data['people']['10']['planned_daily'],1)
+            self.assertEqual(data['observed'],0)
+            source=self.ui.insights.Report(10)
+            self.assertIn('No completed days',source.embed.description)
+            self.assertIn('Month **— → 30**',source.embed.fields[0].value)
+            with self.assertRaises(ValueError):self.ui.insights.calculate(365)
+
+    async def test_insights_private_navigation_methods_recovery_and_large_roster_limits(self):
+        self.workload_clear();w=self.ui.workspace
+        self.db.execute('DELETE FROM workspace_preferences');self.db.commit()
+        with self.clock('2026-10-21T10:00:00'):
+            for uid in range(10,25):self.workload_chore('daily',uid,uid)
+            guild=SimpleNamespace(id=1,get_member=lambda uid:SimpleNamespace(display_name='Name '+str(uid)+'x'*90))
+            source=self.ui.insights.Report(10,guild,28,1,'name')
+            before=[line for line in self.db.iterdump() if 'workspace_' not in line]
+            panel=w.render(source)
+            self.assertEqual(len(source.embed.fields),5)
+            self.assertLessEqual(len(list(panel.walk_children())),40)
+            panel.to_components()
+            wrong=Interaction(20);self.assertFalse(await panel.interaction_check(wrong))
+            self.assertTrue(wrong.response.payload[1]['ephemeral'])
+            methods=next(c for c in panel.walk_children() if getattr(c,'label',None)=='How this is calculated')
+            event=Interaction();await methods.callback(event)
+            help_panel=event.response.wire_payload['view']
+            back=next(c for c in help_panel.walk_children() if getattr(c,'label',None)=='Back')
+            event=Interaction();await back.callback(event)
+            self.assertEqual(event.response.payload['view'].recovery_context,source.recovery_context)
+            refresh=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Refresh')
+            w.recovery.live.clear();event=Interaction();await refresh.callback(event)
+            self.assertEqual(event.response.payload['view'].recovery_context,source.recovery_context)
+            source=self.ui.insights.Report(10,guild,28,0,'planned');panel=w.render(source)
+            body=next(c for c in panel.children if isinstance(c,discord.ui.Container))
+            self.assertEqual(len(body.children),10)
+            self.assertLessEqual(sum(len(c.content) for c in panel.walk_children() if isinstance(c,discord.ui.TextDisplay)),4000)
+            picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select))
+            event=Interaction();event.data={'component_type':3,'values':['7']};await picker.callback(event)
+            self.assertEqual(event.result['view'].data['days'],7)
+            self.assertEqual([line for line in self.db.iterdump() if 'workspace_' not in line],before)
+            self.dm.send.assert_not_awaited()
+
+    async def test_compact_remaining_secondary_screen_matrix_retains_controls_and_privacy(self):
+        w=self.ui.workspace;p=self.ui.planning
+        with self.clock('2026-10-21T10:00:00'):
+            raw_screens=[self.ui.AddChoreMenu(10),self.ui.WeekdayMenu(10),self.ui.RepeatMenu(10,'two-days'),
+                self.ui.RepeatMenu(10,'alternating'),self.ui.HouseholdSetup(10),self.ui.EditChoreView(10,selected=1),
+                self.ui.RemoveChoreView(10),self.ui.RemoveChoreView(10,removed=True),self.ui.ReassignView(10,qid=1),
+                self.ui.DropChoreView(10,2,self.ui.reassign_snapshot(2)),self.ui.TradeOfferView(10,2),
+                self.ui.TradeInboxView(10),self.ui.MissedChoreView(10,1,self.ui.snapshot(1)),
+                self.ui.ChooseDayView(10,2,self.ui.snapshot(2)),self.ui.AttendanceView(10),self.ui.FeedbackView(10,1)]
+            sources=[w.adapt(raw,10,lambda:w.Manage(10)) for raw in raw_screens]
+            sources += [w.Manage(10),w.Notifications(10),w.Announcements(301104023405199361),
+                w.ResetPoints(301104023405199361),w.ResetHistory(301104023405199361),
+                w.Inbox(301104023405199361),w.Trips(10,people=['10']),p.Reminders(10),
+                p.HelpStatus(10,2),p.HelpHistory(10,2),p.NeedsHelp(10)]
+            for source in sources:
+                with self.subTest(screen=type(source).__name__):
+                    original=[c for c in source.children if not isinstance(c,discord.ui.Button) or c.label not in ('Refresh','Refresh / Resume')]
+                    panel=w.render(source);wire=list(panel.walk_children())
+                    self.assertTrue(all(c in wire for c in original))
+                    self.assertEqual(sum(getattr(c,'label',None)=='Refresh' for c in wire),1)
+                    self.assertLessEqual(len(wire),40)
+                    panel.to_components()
+                    wrong=Interaction(20)
+                    self.assertFalse(await panel.interaction_check(wrong))
+                    self.assertTrue(wrong.response.payload[1]['ephemeral'])
+
+    async def test_compact_remaining_calendar_week_and_checklist_keep_all_information(self):
+        w=self.ui.workspace;p=self.ui.planning
+        with self.clock('2026-10-21T10:00:00'):
+            calendar=p.Calendar(10,guild=Interaction().guild)
+            panel=w.render(calendar)
+            picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='Open a day…')
+            self.assertEqual(len(picker.options),7)
+            for index in (0,3,6):
+                event=Interaction();event.data={'component_type':3,'values':[str(index)]};await picker.callback(event)
+                self.assertEqual(event.response.payload['view'].day.weekday(),index)
+            month=w.render(p.Calendar(10,day=self.ui.timing.now().date(),mode='month'))
+            month_text='\n'.join(c.content for c in month.walk_children() if isinstance(c,discord.ui.TextDisplay))
+            self.assertIn('```\nMo Tu We Th Fr Sa Su\n',month_text)
+            p.save_plan(2,10,'First step\nSecond step',p.plan(2))
+            source=p.Checklist(10,2);panel=w.render(source)
+            text='\n'.join(c.content for c in panel.walk_children() if isinstance(c,discord.ui.TextDisplay))
+            self.assertIn('0/2 steps complete',text)
+            self.assertIn('☐ First step',text);self.assertIn('☐ Second step',text)
+            self.assertNotIn('Not checked',text)
+            self.assertFalse(p.checked(2))
+            self.assertLessEqual(len(list(panel.walk_children())),40)
+
+    async def test_compact_remaining_forms_metadata_and_private_actions_stay_available(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-21T10:00:00'):
+            for raw in (self.ui.AddChoreMenu(10),self.ui.WeekdayMenu(10),self.ui.RepeatMenu(10,'two-days'),self.ui.HouseholdSetup(10)):
+                source=w.adapt(raw,10);panel=w.render(source)
+                self.assertTrue(source.embed.title)
+                self.assertTrue(any(isinstance(c,discord.ui.Container) for c in panel.children))
+                self.assertFalse(any(isinstance(c,discord.ui.Separator) for c in panel.children))
+                original=[c for c in source.children if not isinstance(c,discord.ui.Button) or c.label!='Refresh']
+                self.assertTrue(all(c in list(panel.walk_children()) for c in original))
+                self.assertLessEqual(len(list(panel.walk_children())),40)
+            panel=w.render(w.Card(10,2))
+            content=[c.content for c in panel.walk_children() if isinstance(c,discord.ui.TextDisplay)]
+            self.assertTrue(any(c.startswith('**Responsibility** · ') for c in content))
+            self.assertTrue(any(c.startswith('**When** · ') for c in content))
+            source=self.ui.planning.Reminders(10);panel=w.render(source)
+            turn_on=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Turn on')
+            wrong=Interaction(20);await turn_on.callback(wrong)
+            self.assertEqual(self.ui.planning.settings(10)[0],0)
+            self.assertIn('private DMs',source.embed.description)
+
+    async def test_list_length_default_ten_dense_pages_fit_and_do_not_hide_rows(self):
+        w=self.ui.workspace
+        self.db.execute('DELETE FROM workspace_preferences');self.db.commit()
+        self.assertEqual(w.page_size(10),10)
+        with self.clock('2026-10-21T10:00:00'):
+            for n in range(23):self.ui.create_chore(f'Length {n:02} '+'x'*85,'daily','5','','Kitchen')
+            for area in ('pickup','household','mine'):
+                if area=='mine':self.db.execute("UPDATE quests SET assigned_to='10'");self.db.commit()
+                seen=[]
+                for page in range(3):
+                    source=w.Browse(10,area,tab='all',page=page,group='chore')
+                    panel=w.render(source)
+                    sections=[c for c in panel.walk_children() if isinstance(c,discord.ui.Section)]
+                    self.assertEqual(len(sections),len(source.quick_rows))
+                    self.assertEqual(len(sections),min(10,len(source.entries)-page*10))
+                    seen.extend(qid for qid,expected,done in source.quick_rows)
+                    self.assertLessEqual(len(list(panel.walk_children())),40)
+                    panel.to_components()
+                    self.assertTrue(any('Page ' in c.content for c in panel.walk_children() if isinstance(c,discord.ui.TextDisplay)))
+                    if page<2:
+                        picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='View & tools…')
+                        self.assertLessEqual(len(picker.options),25)
+                        self.assertEqual(sum(getattr(c,'label',None)=='Refresh' for c in panel.walk_children()),1)
+                self.assertEqual(len(seen),len(set(seen)))
+
+    async def test_list_length_save_is_personal_validated_and_durable(self):
+        w=self.ui.workspace
+        view=w.ListLength(10);panel=w.render(view)
+        picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select))
+        before=self.db.execute('SELECT * FROM quests').fetchall()
+        wrong=Interaction(20);wrong.data={'component_type':3,'values':['8']};await picker.callback(wrong)
+        self.assertEqual(w.page_size(10),5);self.assertEqual(w.page_size(20),10)
+        event=Interaction();event.data={'component_type':3,'values':['8']};await picker.callback(event)
+        self.assertEqual(w.page_size(10),8);self.assertEqual(w.page_size(20),10)
+        import sqlite3
+        with closing(sqlite3.connect(Path(self.temp.name)/'sprig.db')) as check:
+            self.assertEqual(check.execute("SELECT list_size FROM workspace_preferences WHERE user_id='10'").fetchone(),(8,))
+        for bad in ('0','11','bad'):
+            current=w.render(w.ListLength(10));select=next(c for c in current.walk_children() if isinstance(c,discord.ui.Select))
+            event=Interaction();event.data={'component_type':3,'values':[bad]};await select.callback(event)
+            self.assertEqual(w.page_size(10),8)
+        for value in (1,10):
+            current=w.render(w.ListLength(10));select=next(c for c in current.walk_children() if isinstance(c,discord.ui.Select))
+            event=Interaction();event.data={'component_type':3,'values':[str(value)]};await select.callback(event)
+            self.assertEqual(w.page_size(10),value)
+        self.assertEqual(self.db.execute('SELECT * FROM quests').fetchall(),before)
+        panel=w.render(w.ListLength(10));refresh=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Refresh')
+        w.recovery.live.clear();event=Interaction();await refresh.callback(event)
+        self.assertIsInstance(event.response.payload['view'],w.ListLength)
+
+    async def test_list_length_dense_tools_and_inline_actions_recover_safely(self):
+        w=self.ui.workspace
+        self.db.execute('DELETE FROM workspace_preferences');self.db.commit()
+        with self.clock('2026-10-21T10:00:00'):
+            for n in range(12):self.ui.create_chore(f'Length due {n:02}','daily','5','')
+            source=w.Browse(10,'pickup',tab='all');panel=w.render(source)
+            picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select))
+            option=next(o for o in picker.options if o.label=='Filters')
+            event=Interaction();event.data={'component_type':3,'values':[option.value]};await picker.callback(event)
+            self.assertIn('Filter chores',event.response.payload['view'].embed.title)
+            details=next(c.accessory for c in panel.walk_children() if isinstance(c,discord.ui.Section))
+            event=Interaction();await details.callback(event)
+            self.assertIsInstance(event.response.payload['view'],w.Card)
+            self.assertFalse(self.db.execute('SELECT * FROM claims').fetchall())
+            self.db.execute("UPDATE quests SET assigned_to='10'");self.db.commit()
+            panel=w.render(w.Browse(10,'mine',tab='all'))
+            picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select))
+            option=next(o for o in picker.options if o.label.startswith('Open:'))
+            event=Interaction();event.data={'component_type':3,'values':[option.value]};await picker.callback(event)
+            self.assertIsInstance(event.response.payload['view'],w.Card)
+            done=next(c.accessory for c in panel.walk_children() if isinstance(c,discord.ui.Section) and c.accessory.label=='Done')
+            event=Interaction();await done.callback(event)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(1,))
+            refresh=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Refresh')
+            w.recovery.live.clear();event=Interaction();await refresh.callback(event)
+            self.assertIsInstance(event.response.payload['view'],w.Browse)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(1,))
+
+    async def test_list_length_calendar_and_saved_offset_follow_preference_changes(self):
+        w=self.ui.workspace;p=self.ui.planning
+        self.db.execute('DELETE FROM workspace_preferences');self.db.commit()
+        with self.clock('2026-10-21T10:00:00'):
+            for n in range(22):self.ui.create_chore(f'Length calendar {n:02}','daily','5','')
+            day=p.Day(10,self.ui.timing.now().date(),page=1)
+            panel=w.render(day)
+            self.assertEqual(len(day.embed.fields),10)
+            self.assertIn('Chores 11–20',day.embed.footer.text)
+            self.assertEqual(len([c for c in panel.walk_children() if isinstance(c,discord.ui.Section)]),10)
+            self.assertLessEqual(len(list(panel.walk_children())),40)
+            picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select))
+            option=next(o for o in picker.options if o.label=='Next day')
+            event=Interaction();event.data={'component_type':3,'values':[option.value]};await picker.callback(event)
+            self.assertEqual(event.response.payload['view'].day,day.day+timedelta(days=1))
+            browse=w.Browse(10,'household',tab='all',page=1)
+            context=w.recovery.bookmark(browse);day_context=w.recovery.bookmark(day)
+            self.db.execute("INSERT INTO workspace_preferences VALUES('10',5)");self.db.commit()
+            restored=w.recovery.restore(10,context,Interaction().guild)
+            self.assertEqual(restored.state['page'],2)
+            self.assertEqual(restored.quick_rows[0][0],browse.quick_rows[0][0])
+            restored_day=w.recovery.restore(10,day_context,Interaction().guild)
+            self.assertEqual(restored_day.page,2)
+
     async def test_dashboard_groups_every_control_once_with_short_points_summary(self):
         w=self.ui.workspace
         for owner in (10,301104023405199361):
@@ -4210,13 +4669,21 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             w.render(w.Browse(owner,'pickup'))  # Make Continue available too.
             source=w.Dashboard(owner,guild,member)
             panel=w.render(source)
-            groups=[c for c in panel.children if isinstance(c,discord.ui.Container)]
-            expected_groups=['### Do chores','### Plan & coordinate','### My settings']
-            if owner==301104023405199361:expected_groups.append('### Owner tools')
-            self.assertEqual([g.children[0].content for g in groups],expected_groups)
+            frames=[c for c in panel.children if isinstance(c,discord.ui.Container)]
+            self.assertEqual(len(frames),1)
+            menu=frames[0]
+            groups=[]
+            for item in menu.children:
+                if isinstance(item,discord.ui.TextDisplay):groups.append([item])
+                else:groups[-1].append(item)
+            expected_groups=['**Do chores**','**Plan & coordinate**','**My settings**']
+            if owner==301104023405199361:expected_groups.append('**Owner tools**')
+            self.assertEqual([g[0].content for g in groups],expected_groups)
+            self.assertEqual(len(panel.children),2)  # Heading/Help and one compact menu.
+            self.assertIn('points ·',panel.children[0].children[0].content)
             header=next(c for c in panel.children if isinstance(c,discord.ui.Section))
             self.assertEqual(header.accessory.label,'Help')
-            planning=[c.label for c in groups[1].children[1].children]
+            planning=[c.label for row in groups[1][1:] for c in row.children]
             self.assertIn('Household chores',planning);self.assertIn('Calendar',planning)
             self.assertNotIn('Household',planning)
             if owner!=301104023405199361:self.assertIn('Household setup',planning)
@@ -4224,9 +4691,9 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             expected=[c.label for c in source.children if isinstance(c,discord.ui.Button)]+['Refresh']
             self.assertCountEqual(labels,expected)
             self.assertEqual(len(labels),len(set(labels)))
-            self.assertEqual([c.label for c in groups[0].children[1].children],
+            self.assertEqual([c.label for c in groups[0][1].children],
                 ['My chores','Pick up chores','Needs attention','Manage chores'])
-            self.assertLessEqual(len(groups[2].children[1].children),5)
+            self.assertLessEqual(len(groups[2][1].children),5)
             self.assertNotIn('Refresh / Resume',labels)
             text=' '.join(c.content for c in panel.walk_children() if isinstance(c,discord.ui.TextDisplay))
             self.assertIn('points ·',text);self.assertNotIn('keeps your place',text)

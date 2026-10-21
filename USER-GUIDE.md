@@ -396,3 +396,26 @@ Workspace screens use compact framed content and one Refresh button. Lists retai
 ### In-app Help
 
 Help starts with a short path for doing a chore, taking work, or looking ahead. The topic picker uses concrete tasks (for example, Finish a chore, Set reminders, and Drop, reassign, or trade). Each topic gives the actual button path and explains the result in short paragraphs. Earlier saved help topics map to the matching new topic; an unknown old topic returns to Start here. Help is private and never changes chores or points.
+
+
+The dashboard uses one compact framed menu with small group labels. Points and streak sit directly under its title, with Help beside the heading. The same groups, permissions, and recovery controls remain available.
+
+
+### Personal list length
+
+My settings → List length saves 1–10 items per page for your own account; the default is 10. It applies to chore lists, calendar days, standings, and completion/help-history lists. Detailed review and reset records still open one at a time. Larger chore pages keep inline Done/Details and fixed Previous/Next paging, with a View & tools menu for views, filters, card opening, and navigation, plus one safe Refresh button. This keeps ten rows within Discord’s component limit. Old saved chore/calendar views keep the same approximate item position when the size changes. Other people’s preferences, chores, points, and history are unchanged.
+
+
+### Compact secondary screens
+
+Chore-card metadata and short settings/review fields share single lines where readable; instructions, comments, warnings, and confirmation text retain their full line breaks. Checklists show each step once with its checkbox and a progress count. Week overviews put seven date choices in one Open a day menu; month grids retain their formatting. Add/schedule/setup screens have clear headings and a compact framed control group. These changes preserve the existing callbacks, privacy, permissions, and confirmations.
+
+
+### Workload & pace
+
+Open Plan & coordinate → Workload & pace. Each person has earned and planned daily, weekly, and 30-day monthly point rates, plus points per home-day, today’s earned points, projected household share, away coverage, and current due points. Compare past/next 7, 28, or 90 full days; sort by planned load, earned pace, or name. The past ends yesterday and starts no earlier than the first recorded completion. Undone work is excluded; resetting a balance does not erase earned-work history. Future ownership is taken only from saved assignments and dated signups; unclaimed work stays visible. Flexible weekly/monthly work is prorated over its period, not assigned a made-up due day. Undated one-time work is shown separately. Forecasts assume normal completion pace and use current point values; they do not guarantee earnings. Home-day comparisons use the current rotation and saved exceptions, splitting Sunday at 6 p.m.; past attendance edits can change that denominator. The view is private and read-only.
+
+
+### Home/away defaults for anyone
+
+Who’s home? accepts any household person. With no custom default, Kas and Zel follow their saved alternating weeks (Sunday 6 p.m. Eastern); everyone else is home daily. Usual schedule can change any selected person to home daily, away daily, selected home weekdays, or same/opposite alternating weeks. Review & save confirms the affected people; Use household default restores the original behavior. Mark home / Mark away and Quick dates can override any individual date or trip. Dated overrides take priority over every default and expire back to it. Existing chores, signups, points, and date exceptions are preserved. Changes are recorded and stale bulk edits are rejected together. Reminders, coverage, signup checks, and workload/home-day calculations use the effective schedule. Changing a default can change historical home-day denominators because attendance defaults are not historical snapshots.

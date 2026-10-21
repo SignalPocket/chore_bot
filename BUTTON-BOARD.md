@@ -10,7 +10,7 @@ The discordbot crontab checks at minute 15 of each hour and at reboot. The scrip
 
 Configured and tested on October 20, 2026. Seven Linux integration tests passed, including WAL copying, missing/corrupt sources, repeated execution, lock contention, and Eastern/DST scheduling. Today’s real snapshot was independently restored to a temporary database and passed integrity/count checks. The next scheduled overnight execution remains a future run, not a verified completed run.
 
-Repository sources are `backup_database.py` and `test_backup_database.py`. This standalone helper is separate from the seven bot runtime modules. The installed server copy is outside the checkout, so routine bot pulls do not change it. Changes to the backup helper require a deliberate tested install of that file. Run its Linux tests with `python3 test_backup_database.py -q`. Run a current-day backup/check with `/usr/bin/python3 /home/discordbot/sprig-db-backup.py`; an existing valid snapshot is left untouched. Inspect `crontab -l` to confirm schedule entries.
+Repository sources are `backup_database.py` and `test_backup_database.py`. This standalone helper is separate from the nine bot runtime modules. The installed server copy is outside the checkout, so routine bot pulls do not change it. Changes to the backup helper require a deliberate tested install of that file. Run its Linux tests with `python3 test_backup_database.py -q`. Run a current-day backup/check with `/usr/bin/python3 /home/discordbot/sprig-db-backup.py`; an existing valid snapshot is left untouched. Inspect `crontab -l` to confirm schedule entries.
 
 Restore is a separate deliberate maintenance action: stop Sprig, preserve the current database, verify the selected snapshot/manifest, then restore and test before starting. Never copy over a running production database.
 
@@ -96,12 +96,12 @@ Old saved public panel buttons must be refreshed after deployment. The persisten
 ## Verify and deploy
 
 1. Run the full offline release suite: `python run_tests.py --suite full --profile --report ../sprig-release-tests.json`. It uses isolated temporary databases, a dummy token, and mocked Discord delivery. Keep the passing exact-source report for the server check; see [TESTING.md](TESTING.md). Do not start a second real bot.
-2. Compile all eight modules with `python -m py_compile sprig_bot.py chore_board.py chore_timing.py household_availability.py chore_history.py chore_workspace.py chore_planning.py chore_recovery.py`.
+2. Compile all nine modules with `python -m py_compile sprig_bot.py chore_board.py chore_timing.py household_availability.py chore_history.py chore_workspace.py chore_planning.py chore_recovery.py chore_insights.py`.
 3. Obtain approval for the exact commit, SignalPocket identity, main branch push, and deployment. These steps are separate from local preparation.
 4. Stop the existing sprig service interactively and verify inactive.
 5. Back up the entire server checkout and database, record the previous commit, and verify the backup database integrity before updating.
 6. Fetch and fast-forward only to the exact approved commit. Preserve the existing database, environment, and untracked historical backup.
-7. Install the approved requirements in the existing virtual environment (`.venv/bin/python -m pip install -r requirements.txt`); Components V2 requires discord.py >=2.6,<3. Run `python run_tests.py --suite server --release-report /home/discordbot/sprig-release-tests.json --profile` using the server virtual environment while the service remains stopped. This compiles all eight modules and runs 24 installation checks, gated by the passing full local report. For major dependency, Python, migration, or deployment changes, also run the full suite on the server. See [TESTING.md](TESTING.md) for report transfer and failure handling.
+7. Install the approved requirements in the existing virtual environment (`.venv/bin/python -m pip install -r requirements.txt`); Components V2 requires discord.py >=2.6,<3. Run `python run_tests.py --suite server --release-report /home/discordbot/sprig-release-tests.json --profile` using the server virtual environment while the service remains stopped. This compiles all nine modules and runs 28 installation checks, gated by the passing full local report. For major dependency, Python, migration, or deployment changes, also run the full suite on the server. See [TESTING.md](TESTING.md) for report transfer and failure handling.
 8. Start the existing sprig service interactively; verify active/running and normal startup logs.
 9. Reopen /chores. An administrator runs !refreshchoreboard once to edit the existing saved launcher rather than posting another one. No slash re-registration is needed for this upgrade.
 10. Check real Discord layout on desktop/mobile and with two household accounts: future work, one claim/Done/Undo, weekly reservation, trip preview/edit, owner inbox access, and notification opt-in. Live rendering and notification delivery are not proven by offline tests.
@@ -132,7 +132,7 @@ Bookmarks retain list tabs/pages/search/person/room/date/group filters, chore ID
 
 For active controls, a current household-state fingerprint rejects stale mutating actions and presents the same location with an explanatory notice. Ordinary page/date/dashboard navigation and opening a checklist can still render current data in one click. Backend ownership, availability, occurrence snapshots, mutation locks, completion deduplication, and owner-only checks remain intact. Fingerprints ignore navigation and delivery bookkeeping. A shared interaction-ID claim prevents discord.py's dynamic and static dispatch paths from running the same action twice. Every route rechecks the caller and household channel access. No background polling, channel posts, or test DMs are added.
 
-Recovery metadata is navigation state, not chore history. UI read-only tests exclude only workspace metadata while continuing to compare all household data. Regression tests exercise the real discord.py ViewStore dispatcher and serialized V2 messages, restart recovery with no old view registered, select values, stale/expired Done, owner reset confirmations, filters/pages and calendar return paths, cross-person/guild/access rejection, shortened lists, duplicate dispatch, and message limits. Deploy chore_recovery.py with the other seven runtime modules; no new dependency or slash-command re-registration is needed. Live behavior remains unverified until the approved release is deployed and reopened in Discord.
+Recovery metadata is navigation state, not chore history. UI read-only tests exclude only workspace metadata while continuing to compare all household data. Regression tests exercise the real discord.py ViewStore dispatcher and serialized V2 messages, restart recovery with no old view registered, select values, stale/expired Done, owner reset confirmations, filters/pages and calendar return paths, cross-person/guild/access rejection, shortened lists, duplicate dispatch, and message limits. Deploy chore_recovery.py with the other eight runtime modules; no new dependency or slash-command re-registration is needed. Live behavior remains unverified until the approved release is deployed and reopened in Discord.
 
 ## Needs attention
 
@@ -289,3 +289,26 @@ Workspace screens use compact framed content and one Refresh button. Lists retai
 ### In-app Help
 
 Help starts with a short path for doing a chore, taking work, or looking ahead. The topic picker uses concrete tasks (for example, Finish a chore, Set reminders, and Drop, reassign, or trade). Each topic gives the actual button path and explains the result in short paragraphs. Earlier saved help topics map to the matching new topic; an unknown old topic returns to Start here. Help is private and never changes chores or points.
+
+
+The dashboard uses one compact framed menu with small group labels. Points and streak sit directly under its title, with Help beside the heading. The same groups, permissions, and recovery controls remain available.
+
+
+### Personal list length
+
+My settings → List length saves 1–10 items per page for your own account; the default is 10. It applies to chore lists, calendar days, standings, and completion/help-history lists. Detailed review and reset records still open one at a time. Larger chore pages keep inline Done/Details and fixed Previous/Next paging, with a View & tools menu for views, filters, card opening, and navigation, plus one safe Refresh button. This keeps ten rows within Discord’s component limit. Old saved chore/calendar views keep the same approximate item position when the size changes. Other people’s preferences, chores, points, and history are unchanged.
+
+
+### Compact secondary screens
+
+Chore-card metadata and short settings/review fields share single lines where readable; instructions, comments, warnings, and confirmation text retain their full line breaks. Checklists show each step once with its checkbox and a progress count. Week overviews put seven date choices in one Open a day menu; month grids retain their formatting. Add/schedule/setup screens have clear headings and a compact framed control group. These changes preserve the existing callbacks, privacy, permissions, and confirmations.
+
+
+### Workload & pace
+
+Open Plan & coordinate → Workload & pace. Each person has earned and planned daily, weekly, and 30-day monthly point rates, plus points per home-day, today’s earned points, projected household share, away coverage, and current due points. Compare past/next 7, 28, or 90 full days; sort by planned load, earned pace, or name. The past ends yesterday and starts no earlier than the first recorded completion. Undone work is excluded; resetting a balance does not erase earned-work history. Future ownership is taken only from saved assignments and dated signups; unclaimed work stays visible. Flexible weekly/monthly work is prorated over its period, not assigned a made-up due day. Undated one-time work is shown separately. Forecasts assume normal completion pace and use current point values; they do not guarantee earnings. Home-day comparisons use the current rotation and saved exceptions, splitting Sunday at 6 p.m.; past attendance edits can change that denominator. The view is private and read-only.
+
+
+### Home/away defaults for anyone
+
+Who’s home? accepts any household person. With no custom default, Kas and Zel follow their saved alternating weeks (Sunday 6 p.m. Eastern); everyone else is home daily. Usual schedule can change any selected person to home daily, away daily, selected home weekdays, or same/opposite alternating weeks. Review & save confirms the affected people; Use household default restores the original behavior. Mark home / Mark away and Quick dates can override any individual date or trip. Dated overrides take priority over every default and expire back to it. Existing chores, signups, points, and date exceptions are preserved. Changes are recorded and stale bulk edits are rejected together. Reminders, coverage, signup checks, and workload/home-day calculations use the effective schedule. Changing a default can change historical home-day denominators because attendance defaults are not historical snapshots.
