@@ -279,7 +279,7 @@ def install(ns, ui, w, lock):
             self.day,self.page,self.mine,self.flexible,self.mode=day,page,mine,flexible,mode
             self.recovery_context={'screen':'day','day':day.isoformat(),'page':page,'mine':mine,'flexible':flexible,'mode':mode}
             self.paging_labels=('Previous page','Next page')
-            self.embed=discord.Embed(title=('No fixed day · '+day.strftime('%b %d')) if flexible else day_badge(WEEKDAYS[day.weekday()])+' '+day.strftime('%b %d, %Y'),description='Schedule preview. Calendar dates do not move chores or create a reservation. Choose a chore to see details.'+(' Weekly/monthly chores are flexible until given a day. Owners are shown for this date’s household week.' if flexible else ''),color=0x6B9B77)
+            self.embed=discord.Embed(title=('No fixed day · '+day.strftime('%b %d')) if flexible else day_badge(WEEKDAYS[day.weekday()])+' '+day.strftime('%b %d, %Y'),description='Schedule preview · Details opens a chore; choosing a date does not reserve or reschedule it.'+(' Weekly/monthly chores are flexible until given a day. Owners are shown for this date’s household week.' if flexible else ''),color=0x6B9B77)
             for q,uid in chunk:
                 when=datetime.combine(day,datetime.min.time(),tzinfo=ns['QUEST_TIMEZONE']).replace(hour=12)
                 away=uid and not ui.attendance.at(uid,when)
@@ -287,12 +287,14 @@ def install(ns, ui, w, lock):
             self.embed.set_footer(text=f'Page {page+1} of {max((len(rows)-1)//5+1,1)} · '+(f'Chores {page*5+1}–{page*5+len(chunk)} of {len(rows)}' if rows else '0 chores')+' · Eastern time')
             if chunk:
                 picker=discord.ui.Select(placeholder='Choose chore',row=0,options=[discord.SelectOption(label=q[1][:100],value=str(q[0])) for q,uid in chunk])
-                async def select(i):
-                    qid=int(picker.values[0]);q=chore(qid)
+                async def open_chore(i,qid):
+                    q=chore(qid)
                     if day==timing.now().date():return await w.present(i,w.Card(owner,qid,back=lambda:Day(owner,day,mine,i.guild,page,flexible,mode),guild=i.guild))
                     preview=w.View(owner);preview.embed=discord.Embed(title=w.clean(q[1],100),description=f'Calendar preview for {day:%a %b %d}. This is not a dated claim. Open the current chore to manage its current responsibility.',color=0x6B9B77)
                     preview.button('Open current chore',lambda event:w.present(event,w.Card(owner,qid,back=lambda:Day(owner,day,mine,event.guild,page,flexible,mode),guild=event.guild)),row=0);preview.nav(lambda:Day(owner,day,mine,guild,page,flexible,mode))
                     await w.present(i,preview)
+                self.calendar_details=[(q[0],open_chore) for q,uid in chunk]
+                async def select(i):await open_chore(i,int(picker.values[0]))
                 picker.callback=select;self.add_item(picker)
             else:self.embed.add_field(name='No chores here',value='Try Household, No fixed day, or Due now for overdue work.')
             if page:self.button('Previous page',lambda i:w.present(i,Day(owner,day,mine,i.guild,page-1,flexible,mode)),row=3)

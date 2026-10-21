@@ -95,7 +95,7 @@ def install(ns, ui, lock):
         async def on_error(self, i, error, item):
             import logging
             logging.getLogger('discord.sprig').exception('Workspace action failed', exc_info=error)
-            text = 'An action may already have saved. Use Refresh / Resume to check the current state before trying again; it never repeats the old action.'
+            text = 'An action may already have saved. Use Refresh to check the current state before trying again; it never repeats the old action.'
             if i.response.is_done(): await i.followup.send(text, ephemeral=True)
             else: await i.response.send_message(text, ephemeral=True)
 
@@ -174,7 +174,7 @@ def install(ns, ui, lock):
         def __init__(self, owner, guild=None, member=None):
             super().__init__(owner)
             incoming = db.execute("SELECT COUNT(*) FROM chore_trades WHERE recipient=? AND status='pending'", (str(owner),)).fetchone()[0]
-            self.embed = discord.Embed(title='🌱 Your chore workspace', description='Pick a task, then use its chore card. Your controls are private; household changes are shared.\nNeed a hand? Open Help below.', color=0x6B9B77)
+            self.embed = discord.Embed(title='🌱 Your chore workspace', description='Your controls are private. Chore changes are shared with the household.', color=0x6B9B77)
             self.recovery_context = {'screen':'dashboard'}
             if recovery.latest(owner):
                 self.button('Continue where I left off', recovery.resume_latest, row=3)
@@ -203,7 +203,7 @@ def install(ns, ui, lock):
                 if member and getattr(getattr(member, 'guild_permissions', None), 'manage_guild', False):
                     self.button('Household setup', lambda i: present(i, adapt(ui.HouseholdSetup(owner), owner)), row=3)
             total = db.execute('SELECT points,streak FROM users WHERE id=?', (str(owner),)).fetchone()
-            self.embed.set_footer(text=(f'{total[0]} points · {total[1]} day streak · ' if total else '') + 'Refresh / Resume keeps your place after expiry or a restart.')
+            self.embed.set_footer(text=f'{total[0]} points · {total[1]} day streak' if total else '0 points · 0 day streak')
 
     def attention_deadline(q):
         """Use explicit dates first; persist the first known flexible period end."""
@@ -282,7 +282,7 @@ def install(ns, ui, lock):
             self.name_ids=[r[0] for r in chunk]
             self.rebuild=lambda:Points(owner,guild,page)
             self.recovery_context={'screen':'points','page':page}
-            self.embed=discord.Embed(title='Points & standings',description=f'⭐ Your total: **{total[0]} points**\n🔥 Your streak: **{total[1]} day(s)**\nPoints belong to the person who completes the chore. They do not currently redeem rewards.',color=0x6B9B77)
+            self.embed=discord.Embed(title='Points & standings',description=f'⭐ **{total[0]} points** · 🔥 **{total[1]} day streak**\nEarn points by completing chores.',color=0x6B9B77)
             rank=0;previous=None
             for index,(uid,points) in enumerate(records):
                 if points!=previous:rank=index+1
@@ -290,6 +290,7 @@ def install(ns, ui, lock):
                 if page*5<=index<(page+1)*5:
                     self.embed.add_field(name=f'{rank}. '+clean(person(uid,guild),100),value=f'{points} points',inline=False)
             if not records:self.embed.add_field(name='No scores yet',value='Finish a chore to start earning points.')
+            self.embed.set_footer(text=f'Page {page+1} of {max((len(records)-1)//5+1,1)} · {len(records)} household member(s)')
             if owner==OWNER:self.button('Reset points',lambda i:present(i,ResetPoints(owner,i.guild)),row=2)
             if owner==OWNER:self.button('Reset history / Undo',lambda i:present(i,ResetHistory(owner,i.guild)),row=2)
             if page:self.button('Previous',lambda i:present(i,Points(owner,i.guild,page-1)),row=3)
@@ -579,17 +580,53 @@ def install(ns, ui, lock):
                 return discord.ui.TextDisplay(value)
             header=text((('**'+str(notice)+'**\n\n') if notice else '')+(('# '+embed.title+'\n') if embed and embed.title else '')+(embed.description or '' if embed else ''))
             if header:self.add_item(header)
-            body=discord.ui.Container(accent_colour=0x6B9B77) if isinstance(source,Browse) and source.state['area']=='pickup' else None
+            if isinstance(source,Dashboard):
+                stats=text('-# '+embed.footer.text)
+                if stats:self.add_item(stats)
+                for field in embed.fields:
+                    item=text('**'+field.name+'** · '+field.value)
+                    if item:self.add_item(item)
+                buttons={item.label:item for item in source.children if isinstance(item,discord.ui.Button)}
+                trade=next(label for label in buttons if label.startswith('Trades ('))
+                review=next((label for label in buttons if label.startswith('Review inbox (')),None)
+                groups=[('Chores',['My chores','Pick up chores','Needs attention','Household','Calendar']),
+                    ('Household',['Who’s home?',trade,'Points & standings','Manage chores']),
+                    ('Your settings & help',['Reminders','Notifications','Help','Continue where I left off']),
+                    ('Household tools',[review,'Update announcements','Household setup'])]
+                settings_row=None
+                for title,labels in groups:
+                    items=[buttons[label] for label in labels if label in buttons]
+                    if not items:continue
+                    row=discord.ui.ActionRow(*items)
+                    self.add_item(discord.ui.Container(discord.ui.TextDisplay('### '+title),row,accent_colour=0x6B9B77))
+                    if title=='Your settings & help':settings_row=row
+                recovery.attach(self,source,resume_row=settings_row)
+                return
+            points_screen=isinstance(source,Points)
+            calendar_day=getattr(source,'recovery_context',{}).get('screen')=='day'
+            calendar_details=getattr(source,'calendar_details',[])
+            browse_screen=isinstance(source,Browse)
+            body=discord.ui.Container(accent_colour=0x6B9B77) if embed and embed.fields else None
             def add_body(item):
                 (body if body is not None else self).add_item(item)
             if embed:
                 for index,field in enumerate(embed.fields):
-                    content=text(('**'+field.name+'**\n'+field.value[:300].replace('\n',' · ')) if body is not None else ('### '+field.name+'\n'+(field.value[:300] if isinstance(source,Browse) else field.value)))
+                    # Lists stay compact; instructions and warnings keep their line breaks.
+                    value=field.value[:450].replace('\n',' · ') if browse_screen or calendar_day else field.value
+                    content=text('**'+field.name+'**'+(' · ' if points_screen else '\n')+value)
                     if not content:break
-                    if isinstance(source,Browse) and index<len(source.quick_rows):
+                    if calendar_day and index<len(calendar_details):
+                        qid,open_chore=calendar_details[index]
+                        button=discord.ui.Button(label='Details',style=discord.ButtonStyle.secondary)
+                        async def details(i,qid=qid,open_chore=open_chore):
+                            if not await source.interaction_check(i):return
+                            await open_chore(i,qid)
+                        button.callback=details
+                        add_body(discord.ui.Section(content,accessory=button))
+                    elif isinstance(source,Browse) and index<len(source.quick_rows):
                         qid,expected,can_done=source.quick_rows[index]
                         pending_steps=can_done and not ui.planning.complete(qid)
-                        can_done=can_done and body is None
+                        can_done=can_done and source.state['area']=='mine'
                         button=discord.ui.Button(label='Checklist' if pending_steps and can_done else 'Done' if can_done else 'Details',style=discord.ButtonStyle.success if can_done else discord.ButtonStyle.secondary,disabled=can_done and not ui.available(source.owner))
                         async def click(i,qid=qid,expected=expected,can_done=can_done,pending_steps=pending_steps):
                             if not await source.interaction_check(i):return
@@ -612,7 +649,9 @@ def install(ns, ui, lock):
                         add_body(discord.ui.Section(content,accessory=button))
                     else:add_body(content)
                 if body is not None and body.children:self.add_item(body)
-                footer=text(('-# '+embed.footer.text.split(' · Eastern time')[0]+' · Eastern time') if body is not None else ('-# '+((embed.footer.text+' · ') if embed.footer and embed.footer.text else '')+'Refresh / Resume keeps your place if controls expire.'))
+                footer_value=embed.footer.text if embed.footer and embed.footer.text else ''
+                if browse_screen:footer_value=footer_value.split(' · Eastern time')[0]+' · Eastern time'
+                footer=text('-# '+footer_value) if footer_value else None
                 if footer:self.add_item(footer)
             rows={}
             row_ids={child['custom_id']:index for index,row in enumerate(source.to_components()) for child in row.get('components',[]) if 'custom_id' in child}
@@ -626,11 +665,13 @@ def install(ns, ui, lock):
                     if isinstance(item,discord.ui.Button) and item.label in ('Previous page','Next page'):
                         item.label='Previous' if item.label=='Previous page' else 'Next'
             for item in source.children:
-                if isinstance(source,Browse) and source.state['area']=='pickup' and isinstance(item,discord.ui.Select) and item.placeholder=='Open a chore card…':
+                if isinstance(item,discord.ui.Button) and item.label in ('Refresh','Refresh / Resume'):continue
+                if calendar_day and isinstance(item,discord.ui.Select) and item.placeholder=='Choose chore':continue
+                if isinstance(source,Browse) and source.state['area'] in ('pickup','household') and isinstance(item,discord.ui.Select) and item.placeholder=='Open a chore card…':
                     continue  # Each chore already has its own Details button.
                 # Paired pickup controls use the existing Refresh / Resume;
                 # omit the duplicate Refresh to stay within Discord's limit.
-                if isinstance(source,Browse) and source.state['area']=='pickup' and isinstance(item,discord.ui.Button) and item.label=='Refresh':
+                if isinstance(source,Browse) and source.state['area'] in ('pickup','household') and isinstance(item,discord.ui.Button) and item.label=='Refresh':
                     continue
                 if isinstance(item,discord.ui.Button) and paging_labels and item.label in paging_labels:
                     paging.append(item)
@@ -651,7 +692,20 @@ def install(ns, ui, lock):
                 self.add_item(discord.ui.ActionRow(*fixed))
             self.add_item(discord.ui.Separator())
             utility_row=None
-            if body is not None:
+            if points_screen:
+                controls={getattr(item,'label',None):item for items in rows.values() for item in items}
+                owner_tools=[controls[label] for label in ('Reset points','Reset history / Undo') if label in controls]
+                if owner_tools:
+                    self.add_item(discord.ui.TextDisplay('### Owner controls'))
+                    self.add_item(discord.ui.ActionRow(*owner_tools))
+                utility_row=discord.ui.ActionRow(controls['Dashboard'])
+                self.add_item(utility_row)
+            elif calendar_day:
+                controls={getattr(item,'label',None):item for items in rows.values() for item in items}
+                self.add_item(discord.ui.ActionRow(*(controls[label] for label in ('Previous day','Today','Next day'))))
+                utility_row=discord.ui.ActionRow(*(controls[label] for label in ('Week','Month','Back','Dashboard')))
+                self.add_item(utility_row)
+            elif browse_screen:
                 utilities={getattr(item,'label',None):item for items in rows.values() for item in items
                     if isinstance(item,discord.ui.Button) and item.label in ('Search','Filters','Dashboard')}
                 for row,items in sorted(rows.items()):
@@ -660,8 +714,27 @@ def install(ns, ui, lock):
                 utility_row=discord.ui.ActionRow(*(utilities[label] for label in ('Search','Filters','Dashboard')))
                 self.add_item(utility_row)
             else:
+                # Keep selects and meaningful action groups intact, with one
+                # consistent Back / Refresh / Dashboard row below them.
+                navigation={getattr(item,'label',None):item for items in rows.values() for item in items
+                    if isinstance(item,discord.ui.Button) and item.label in ('Back','Dashboard')}
+                pending=[]
+                def flush():
+                    if pending:
+                        self.add_item(discord.ui.ActionRow(*pending))
+                        pending.clear()
+                calendar_overview=getattr(source,'recovery_context',{}).get('screen')=='calendar'
                 for row,items in sorted(rows.items()):
-                    self.add_item(discord.ui.ActionRow(*items))
+                    remaining=[item for item in items if item not in navigation.values()]
+                    if not remaining:continue
+                    if any(not isinstance(item,discord.ui.Button) for item in remaining):
+                        flush();self.add_item(discord.ui.ActionRow(*remaining));continue
+                    if calendar_overview or len(pending)+len(remaining)>5:flush()
+                    pending.extend(remaining)
+                    if calendar_overview:flush()
+                flush()
+                utility_row=discord.ui.ActionRow(*(navigation[label] for label in ('Back','Dashboard') if label in navigation))
+                self.add_item(utility_row)
             recovery.attach(self,source,resume_row=utility_row)
 
         async def interaction_check(self,i):
@@ -1214,7 +1287,7 @@ def install(ns, ui, lock):
         'Planning and reminders':'Calendar previews scheduled chores by week or month; No fixed day keeps flexible work separate. Chore cards offer estimates and per-occurrence checklists. Finish steps before Done. Reminders are personal, off by default, with up to ten Eastern times and an off switch.',
         'Help statuses and copies':'Stuck / need help on a chore lets its current responsible person explain the obstacle. Everyone sees active issues under Needs attention and can confirm resolution without completing or dropping work. Status history keeps older notes. Duplicate chore copies settings into a fresh unassigned chore after reviewing a new name.',
         'Points and resets':'Points & standings shows your total and streak. Only ginaria can reset one person or everyone, with confirmation and optional streak reset. History stays saved. Ginaria can undo a reset from Reset history / Undo while affected scores have no newer activity.',
-        'Notifications and recovery':'Trades appear on the dashboard. Trade DMs are optional: turn them on in Notifications for your own account. Feedback DMs go to ginaria. Use Refresh / Resume after a restart or ten minutes to restore your page, filters, and date. Expired actions and confirmations are never replayed. /chores also offers Continue where I left off. Private controls edit shared household information.'}
+        'Notifications and recovery':'Trades appear on the dashboard. Trade DMs are optional: turn them on in Notifications for your own account. Feedback DMs go to ginaria. Use Refresh after a restart or ten minutes to restore your page, filters, and date. Expired actions and confirmations are never replayed. /chores also offers Continue where I left off. Private controls edit shared household information.'}
 
     class Guide(View):
         def __init__(self,owner,topic='Start here'):

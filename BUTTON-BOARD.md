@@ -126,7 +126,7 @@ See [BACKUP-RECOVERY.md](BACKUP-RECOVERY.md) for the installed server/laptop sch
 
 ## Expired and outdated private controls
 
-Every V2 workspace screen includes Refresh / Resume. Persistent dynamic routing recognizes owner/guild-bound opaque session tokens even after the old view times out or the bot restarts. A recovery click rebuilds navigation from SQLite workspace_sessions/workspace_places, then presents fresh controls; it never replays an old mutation or confirmation. /chores opens the same V2 layout and includes Continue where I left off when a saved location exists. The public !chores starter remains a persistent launcher that opens private controls.
+Every V2 workspace screen includes Refresh. Persistent dynamic routing recognizes owner/guild-bound opaque session tokens even after the old view times out or the bot restarts. A recovery click rebuilds navigation from SQLite workspace_sessions/workspace_places, then presents fresh controls; it never replays an old mutation or confirmation. /chores opens the same V2 layout and includes Continue where I left off when a saved location exists. The public !chores starter remains a persistent launcher that opens private controls.
 
 Bookmarks retain list tabs/pages/search/person/room/date/group filters, chore IDs and parent return paths, calendar dates/month/week/personal scope and page, checklists, points/history pages, trips, owner review inbox, reminders, and help topics. Lists clamp to the nearest available page if rows disappear. Specialized editors/confirmations return to their safe parent or dashboard, not an old executable confirmation; unsaved modal text is not restored. Screens predating this release have no recovery tokens: reopen /chores once after deployment.
 
@@ -192,7 +192,7 @@ side beneath its description. Claim takes the current occurrence immediately;
 Details opens instructions, schedule, weekly sign-ups, and other actions without
 claiming it. Back returns to the same filtered page. Future/next-week work keeps
 Details without an early Claim, and away people can still read Details while
-Claim is disabled. The footer uses Refresh / Resume instead of a second Refresh
+Claim is disabled. The footer uses Refresh instead of a second Refresh
 button. All controls and replies stay private.
 
 
@@ -256,6 +256,31 @@ Done or Checklist buttons. Earlier paired-button notes describe the previous UI.
 Below the chore card: Previous / Next, then Due now / This week / Next week /
 All chores, then Search / Filters / Refresh / Dashboard. Refresh is the single
 recovery control: it reloads current information and keeps your place after
-expiry or restart. There is no separate Refresh / Resume row in Pick up chores.
+expiry or restart. There is no separate Refresh row in Pick up chores.
 The footer shows the page number and Eastern time; week ranges remain in the
 weekly view heading. Other screens retain their existing recovery controls.
+
+
+### Dashboard groups
+
+The private dashboard groups its controls into Chores, Household, Your settings & help, and Household tools. Points and streak appear at the top. Help, reminders, notifications, Continue where I left off (when available), and a single Refresh control share the personal section. Refresh safely restores an expired screen after a restart. Household tools appear only when your account has access; owner review and announcements remain owner only.
+
+
+### Calendar day layout
+
+Calendar days show a framed chore list with Details beside each chore. Page controls stay below the page count, followed by Previous day / Today / Next day, then Week / Month / Back / Refresh / Dashboard. Refresh restores the date, page, calendar mode, and personal or household scope. Future and past dates open a schedule preview first; opening Details never claims or reschedules a chore.
+
+
+### Household list layout
+
+Household uses the same framed, two-line chore rows and right-side Details buttons as Pick up chores. Responsibility, schedule, points, and due status stay visible. Below the fixed Previous / Next row are time tabs, the grouping and unclaimed controls, then Search / Filters / Refresh / Dashboard. Person, chore, and day grouping are unchanged; opening a card and returning or refreshing retains your view and filters.
+
+
+### Points & standings layout
+
+Your points and streak appear together at the top, followed by a compact framed ranking list. Fixed Previous / Next buttons follow the page count. Owner reset and reset-history controls are grouped under Owner controls; everyone has one Refresh / Dashboard row. Refresh restores the current ranking page after expiry or a restart. These display changes do not change points, streaks, history, permissions, or reset confirmations. Points do not currently redeem rewards.
+
+
+### Consistent workspace style
+
+Workspace screens use compact framed content and one Refresh button. Lists retain fixed page controls; primary actions and selects stay above a shared Back / Refresh / Dashboard row where available. Small adjacent action groups share rows when they fit. Calendar navigation keeps its date groups. Instructions, warnings, confirmation text, owner permissions, and private recovery rules are preserved. My chores retains inline Done and Checklist actions. Refreshing an expired confirmation returns safely without applying it.

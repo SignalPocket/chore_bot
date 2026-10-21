@@ -190,7 +190,7 @@ Open a chore card → More actions → Edit chore. Edit details changes the name
 
 ## If something goes wrong
 
-- **Old or expired buttons.** Use Refresh / Resume, or click the old control: it restores fresh controls in the same place without repeating the old action. You can also reopen /chores → Continue where I left off. Screens from before this update need a fresh /chores once.
+- **Old or expired buttons.** Use Refresh, or click the old control: it restores fresh controls in the same place without repeating the old action. You can also reopen /chores → Continue where I left off. Screens from before this update need a fresh /chores once.
 - **This chore changed.** Read the refreshed card; someone else or a reset changed its state.
 - **Nothing matches.** Clear filters and check another time tab.
 - **Away today.** Check Who’s home? and coverage; responsibilities have not disappeared.
@@ -229,7 +229,7 @@ Remaining improvements to consider: arbitrary owner score adjustments with an au
 
 ## Keep your place when screens expire or change
 
-**Refresh / Resume** brings the current information back into your private screen. After ten minutes or a restart, an old button or selection refreshes the saved location first; it does not perform that old action. Review the new controls, then choose Done, Claim, or another action again if still appropriate.
+**Refresh** brings the current information back into your private screen. After ten minutes or a restart, an old button or selection refreshes the saved location first; it does not perform that old action. Review the new controls, then choose Done, Claim, or another action again if still appropriate.
 
 Your page, tab, search, filters, chore card and return path, and calendar date/view are kept. If a list becomes shorter, Sprig uses the nearest available page and tells you. Reopening **/chores → Continue where I left off** restores your last saved location after a restart. Your saved place is private to your Discord account and household.
 
@@ -239,7 +239,7 @@ After this feature is first deployed, reopen /chores once. Earlier messages were
 
 ## Find work needing attention
 
-Open **Dashboard → Needs attention**. This private household view shows each chore once, with every applicable label: **Overdue**, **Needs someone**, and **Blocked** (Stuck, Need supplies, or Need help). Counts can overlap. Help notes and current responsible people appear beside the schedule and points. Open a chore card to claim, reassign, complete, or review its help status; Back returns to your page. Previous and Next sit below the page number. Refresh / Resume restores the view after expiry or restart.
+Open **Dashboard → Needs attention**. This private household view shows each chore once, with every applicable label: **Overdue**, **Needs someone**, and **Blocked** (Stuck, Need supplies, or Need help). Counts can overlap. Help notes and current responsible people appear beside the schedule and points. Open a chore card to claim, reassign, complete, or review its help status; Back returns to your page. Previous and Next sit below the page number. Refresh restores the view after expiry or restart.
 
 Needs someone includes unfinished work due now without a current owner; next week's reservation does not cover this week. Overdue means its scheduled day or shift has ended, or a flexible weekly/monthly period has ended. Due today alone is not overdue. Moved occurrences use the end of the moved day. One-time chores have no overdue deadline. Completed, archived, skipped expired occurrences, and resolved help notes are excluded as appropriate.
 
@@ -251,7 +251,7 @@ If two people try to take the same chore or weekly responsibility, one succeeds 
 
 Old actions require fresh review after a chore changes, even if its owner or settings later return to the original values, or its completion is undone. Reopen the chore and choose again deliberately. An old weekly Release cannot remove a new reservation. A stored trade becomes outdated if either chore changes; propose a fresh trade instead. Pending trades created before this protection was installed may also require a fresh proposal.
 
-If Discord fails after an action saves, check the current card or Refresh / Resume before trying again. Sprig does not automatically repeat uncertain actions. When Done competes with Drop, Reassign, accepting a Trade, or changing the regular day, the first valid action saves and the outdated action asks for review. Earned points and recorded completions remain attached to the completing person.
+If Discord fails after an action saves, check the current card or Refresh before trying again. Sprig does not automatically repeat uncertain actions. When Done competes with Drop, Reassign, accepting a Trade, or changing the regular day, the first valid action saves and the outdated action asks for review. Earned points and recorded completions remain attached to the completing person.
 
 ## How reminders follow changes
 
@@ -299,7 +299,7 @@ side beneath its description. Claim takes the current occurrence immediately;
 Details opens instructions, schedule, weekly sign-ups, and other actions without
 claiming it. Back returns to the same filtered page. Future/next-week work keeps
 Details without an early Claim, and away people can still read Details while
-Claim is disabled. The footer uses Refresh / Resume instead of a second Refresh
+Claim is disabled. The footer uses Refresh instead of a second Refresh
 button. All controls and replies stay private.
 
 
@@ -363,6 +363,31 @@ Done or Checklist buttons. Earlier paired-button notes describe the previous UI.
 Below the chore card: Previous / Next, then Due now / This week / Next week /
 All chores, then Search / Filters / Refresh / Dashboard. Refresh is the single
 recovery control: it reloads current information and keeps your place after
-expiry or restart. There is no separate Refresh / Resume row in Pick up chores.
+expiry or restart. There is no separate Refresh row in Pick up chores.
 The footer shows the page number and Eastern time; week ranges remain in the
 weekly view heading. Other screens retain their existing recovery controls.
+
+
+### Dashboard groups
+
+The private dashboard groups its controls into Chores, Household, Your settings & help, and Household tools. Points and streak appear at the top. Help, reminders, notifications, Continue where I left off (when available), and a single Refresh control share the personal section. Refresh safely restores an expired screen after a restart. Household tools appear only when your account has access; owner review and announcements remain owner only.
+
+
+### Calendar day layout
+
+Calendar days show a framed chore list with Details beside each chore. Page controls stay below the page count, followed by Previous day / Today / Next day, then Week / Month / Back / Refresh / Dashboard. Refresh restores the date, page, calendar mode, and personal or household scope. Future and past dates open a schedule preview first; opening Details never claims or reschedules a chore.
+
+
+### Household list layout
+
+Household uses the same framed, two-line chore rows and right-side Details buttons as Pick up chores. Responsibility, schedule, points, and due status stay visible. Below the fixed Previous / Next row are time tabs, the grouping and unclaimed controls, then Search / Filters / Refresh / Dashboard. Person, chore, and day grouping are unchanged; opening a card and returning or refreshing retains your view and filters.
+
+
+### Points & standings layout
+
+Your points and streak appear together at the top, followed by a compact framed ranking list. Fixed Previous / Next buttons follow the page count. Owner reset and reset-history controls are grouped under Owner controls; everyone has one Refresh / Dashboard row. Refresh restores the current ranking page after expiry or a restart. These display changes do not change points, streaks, history, permissions, or reset confirmations. Points do not currently redeem rewards.
+
+
+### Consistent workspace style
+
+Workspace screens use compact framed content and one Refresh button. Lists retain fixed page controls; primary actions and selects stay above a shared Back / Refresh / Dashboard row where available. Small adjacent action groups share rows when they fit. Calendar navigation keeps its date groups. Instructions, warnings, confirmation text, owner permissions, and private recovery rules are preserved. My chores retains inline Done and Checklist actions. Refreshing an expired confirmation returns safely without applying it.
