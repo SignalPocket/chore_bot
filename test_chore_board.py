@@ -373,14 +373,14 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.db.execute("INSERT INTO update_announcements VALUES(?, '1','2','sent','30')",('a'*40,));self.db.commit()
         self.assertEqual(recovery.fingerprint(),before)
 
-    async def test_pickup_uses_horizontal_card_and_keeps_slot_information(self):
+    async def test_pickup_uses_framed_two_line_rows_and_keeps_slot_information(self):
         w=self.ui.workspace
         with self.clock('2026-10-20T10:00:00'):
             self.db.execute("UPDATE quests SET frequency='twice-daily' WHERE id=1");self.db.commit()
             panel=w.render(w.Browse(10,'pickup'))
             card=next(c for c in panel.children if isinstance(c,discord.ui.Container))
             row=self.pickup_rows(panel)[0]
-            self.assertIn('**Fill dishwasher** · ',row.children[0].content)
+            self.assertIn('**Fill dishwasher**\n',row.children[0].content)
             self.assertIn('AM slot',row.children[0].content)
             self.assertNotIn('Needs someone',row.children[0].content)
             self.assertNotIn('Due now',row.children[0].content)
@@ -457,9 +457,11 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.ui.create_chore('Friday task','friday','5','')
             panel=w.render(w.Browse(10,'pickup',tab='week'))
             future=next(c for c in self.pickup_rows(panel) if 'Friday task' in c.children[0].content)
-            self.assertEqual(future.accessory.label,'Details')
+            self.assertEqual(future.details.label,'Details')
+            self.assertEqual(future.accessory.label,'Claim');self.assertTrue(future.accessory.disabled)
             panel=w.render(w.Browse(10,'pickup',tab='next'))
-            self.assertTrue(all(c.accessory.label=='Details' for c in self.pickup_rows(panel)))
+            rows=self.pickup_rows(panel);self.assertTrue(rows)
+            self.assertTrue(all(c.details.label=='Details' and c.accessory.disabled for c in rows))
 
     async def test_inline_claim_keeps_filters_and_clamps_last_page(self):
         w=self.ui.workspace
@@ -497,6 +499,28 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             view=event.response.payload['view'];self.assertEqual((view.state['area'],view.state['query'],view.state['page']),('pickup','Paired',1))
             event=Interaction(20);await row.details.callback(event)
             self.assertTrue(event.response.wire_payload[1]['ephemeral'])
+
+    async def test_pickup_mixed_due_and_future_rows_have_identical_action_placement(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.create_chore('Future Friday','friday','5','')
+            panel=w.render(w.Browse(10,'pickup',tab='week'))
+            rows=self.pickup_rows(panel)
+            self.assertEqual(len(rows),2)
+            future=next(r for r in rows if 'Future Friday' in r.children[0].content)
+            due=next(r for r in rows if 'Fill dishwasher' in r.children[0].content)
+            self.assertTrue(future.accessory.disabled);self.assertFalse(due.accessory.disabled)
+            for row in rows:
+                self.assertEqual([row.accessory.label,row.details.label],['Claim','Details'])
+                self.assertEqual(row.children[0].content.count('\n'),1)
+                self.assertNotIn('Needs someone',row.children[0].content)
+            self.assertIn('Next due',future.children[0].content)
+            self.assertIn('Due now',due.children[0].content)
+            before=list(self.db.iterdump());event=Interaction()
+            await future.accessory.callback(event)
+            self.assertEqual(before,list(self.db.iterdump()));self.assertIsNone(event.response.payload)
+            event=Interaction();await future.details.callback(event)
+            self.assertEqual(event.response.payload['view'].qid,self.db.execute("SELECT id FROM quests WHERE name='Future Friday'").fetchone()[0])
 
     async def test_pickup_paired_controls_fit_discord_and_match_each_chore(self):
         w=self.ui.workspace
@@ -4039,12 +4063,13 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_paging_buttons_immediately_follow_page_numbers_on_all_list_pages(self):
         with self.clock('2026-10-20T10:00:00'):
             for n in range(12):self.ui.create_chore(f'Paged chore {n}','daily','5','')
-            for page,expected in [(0,['Next']),(1,['Previous','Next']),(2,['Previous'])]:
+            for page,disabled in [(0,[True,False]),(1,[False,False]),(2,[False,True])]:
                 panel=self.ui.workspace.render(self.ui.workspace.Browse(10,'household',tab='all',page=page))
                 footer=next(i for i,c in enumerate(panel.children) if isinstance(c,discord.ui.TextDisplay) and 'Page ' in c.content)
                 paging=panel.children[footer+1]
                 self.assertIsInstance(paging,discord.ui.ActionRow)
-                self.assertEqual([c.label for c in paging.children],expected)
+                self.assertEqual([c.label for c in paging.children],['Previous','Next'])
+                self.assertEqual([c.disabled for c in paging.children],disabled)
                 self.assertIsInstance(panel.children[footer+2],discord.ui.Separator)
                 self.assertTrue(all(c.label in ('Previous','Next') for c in paging.children))
                 later=[c for row in panel.children[footer+2:] if isinstance(row,discord.ui.ActionRow) for c in row.children]
@@ -4055,6 +4080,52 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             await paging.children[1].callback(event)
             self.assertEqual(event.response.payload['view'].state['page'],2)
             self.assertEqual(event.response.payload['view'].state['area'],'household')
+
+    async def test_stable_paging_disabled_buttons_are_noops_and_single_page_keeps_both(self):
+        w=self.ui.workspace
+        panel=w.render(w.Browse(10,'pickup'))
+        row=next(c for c in panel.children if isinstance(c,discord.ui.ActionRow) and [getattr(b,'label',None) for b in c.children]==['Previous','Next'])
+        self.assertTrue(all(b.disabled for b in row.children))
+        before=list(self.db.iterdump())
+        for button in row.children:
+            event=Interaction();await button.callback(event)
+            self.assertIsNone(event.response.payload)
+            self.assertIsNone(event.result)
+        self.assertEqual(before,list(self.db.iterdump()))
+        empty=w.render(w.Browse(10,'pickup',query='does not exist'))
+        row=next(c for c in empty.children if isinstance(c,discord.ui.ActionRow) and [getattr(b,'label',None) for b in c.children]==['Previous','Next'])
+        self.assertTrue(all(b.disabled for b in row.children))
+
+    async def test_stable_paging_pickup_positions_and_component_limit_on_every_boundary(self):
+        w=self.ui.workspace
+        def count(items):
+            return sum(1+count(item.get('components',[]))+count([item['accessory']] if item.get('accessory') else []) for item in items)
+        with self.clock('2026-10-20T10:00:00'):
+            for n in range(15):self.ui.create_chore(f'Stable {n:02}','daily','5','')
+            for page,disabled in ((0,[True,False]),(1,[False,False]),(2,[False,True])):
+                panel=w.render(w.Browse(10,'pickup',query='Stable',page=page))
+                footer=next(i for i,c in enumerate(panel.children) if isinstance(c,discord.ui.TextDisplay) and 'Page ' in c.content)
+                row=panel.children[footer+1]
+                self.assertEqual([b.label for b in row.children],['Previous','Next'])
+                self.assertEqual([b.disabled for b in row.children],disabled)
+                self.assertLessEqual(count(panel.to_components()),40)
+
+    async def test_stable_paging_calendar_and_other_workspace_lists_keep_fixed_pair(self):
+        w=self.ui.workspace;p=self.ui.planning;owner=301104023405199361
+        day=p.Day(10,datetime(2026,10,20).date())
+        views=[(day,('Previous page','Next page')), (w.Points(10),('Previous','Next')),
+            (w.History(10,1,lambda:w.Dashboard(10)),('Previous','Next')),
+            (w.Attention(10),('Previous','Next')),(w.Inbox(owner),('Previous','Next')),
+            (w.ResetHistory(owner),('Previous','Next')),(w.Trips(10),('Previous','Next')),
+            (p.HelpHistory(10,1),('Previous','Next')),(p.NeedsHelp(10),('Previous','Next'))]
+        for view,labels in views:
+            with self.subTest(view=type(view).__name__):
+                panel=w.render(view)
+                rows=[c for c in panel.children if isinstance(c,discord.ui.ActionRow) and tuple(getattr(b,'label',None) for b in c.children)==labels]
+                self.assertEqual(len(rows),1)
+        panel=w.render(day)
+        temporal=[b for b in panel.walk_children() if getattr(b,'label',None) in ('Previous day','Next day')]
+        self.assertEqual(len(temporal),2);self.assertTrue(all(not b.disabled for b in temporal))
 
     async def test_daily_am_pm_have_independent_weekly_owners_and_completions(self):
         with self.clock('2026-10-20T10:00:00'):

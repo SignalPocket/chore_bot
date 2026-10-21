@@ -370,6 +370,7 @@ def install(ns, ui, w, lock):
     class HelpHistory(w.View):
         def __init__(self,owner,qid,guild=None,page=0):
             super().__init__(owner)
+            self.paging_labels=('Previous','Next')
             rows=db.execute('SELECT kind,note,reporter,created_at,resolved_at,resolved_by,resolution FROM chore_help WHERE quest_id=? ORDER BY id DESC',(qid,)).fetchall()
             page=min(max(page,0),max((len(rows)-1)//5,0))
             self.embed=discord.Embed(title='Chore help history',description='Earlier occurrences and resolved or updated notes remain saved.',color=0x6B9B77)
@@ -382,6 +383,7 @@ def install(ns, ui, w, lock):
     class NeedsHelp(w.View):
         def __init__(self,owner,guild=None,page=0):
             super().__init__(owner)
+            self.paging_labels=('Previous','Next')
             rows=[(q,help_record(q[0])) for q in db.execute('SELECT id,name FROM quests WHERE completed=0 ORDER BY name').fetchall() if not ui.is_archived(q[0]) and help_record(q[0])]
             page=min(max(page,0),max((len(rows)-1)//5,0));chunk=rows[page*5:(page+1)*5]
             self.embed=discord.Embed(title='Chores needing help',description=f'{len(rows)} active issue(s). Everyone can read notes and mark resolved when the obstacle is handled.',color=0x6B9B77)

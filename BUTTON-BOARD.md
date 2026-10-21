@@ -220,3 +220,22 @@ status. Details replaces the redundant card picker in this view. Discord control
 the actual displayed width and wrapping; the bot cannot set a pixel width or
 force full-window columns. This layout needs a real Discord visual check after
 deployment; serialized-component tests do not prove that it looks wider.
+
+
+### Fixed pagination controls
+
+Paged workspace lists always show Previous on the left and Next on the right,
+in the same pagination row. Previous is greyed out on the first page; Next is
+greyed out on the last. Both are greyed out for a single-page or empty list.
+Disabled buttons do nothing and never change chores or jump pages. Calendar day
+lists use Previous page / Next page; moving to another day remains separate.
+
+
+### Consistent pickup rows
+
+The wider framed card keeps each chore name on its own line, with schedule,
+points, and relevant due status below. Every chore has the same Claim / Details
+button row. Claim is greyed out and does nothing for future, next-week, completed,
+or otherwise unavailable work; Details still opens the correct chore and week.
+Pickup rows do not repeat Needs someone. This week still distinguishes Due now
+from future dates. Paging controls retain their fixed positions.

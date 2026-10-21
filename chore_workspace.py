@@ -536,8 +536,9 @@ def install(ns, ui, lock):
                         slot='AM slot' if q[2]=='twice-daily' and timing.now().hour<12 else 'PM slot' if q[2]=='twice-daily' else ''
                         if slot:details+='\n'+slot
                     else:details+='\n'+status
-                elif area=='pickup' and tab=='due' and not uid:
-                    if q[2] in ('twice-daily','daily-am','daily-pm'):details+=' · '+status.removeprefix('Due now · ')
+                elif area=='pickup' and not uid:
+                    if tab!='due':details+='\n'+status
+                    elif q[2] in ('twice-daily','daily-am','daily-pm'):details+=' · '+status.removeprefix('Due now · ')
                 else:details+='\n'+clean(person(uid,guild),100)+' · '+status
                 if warning:details+='\n⚠ '+clean(warning,180)
                 self.embed.add_field(name=clean(heading,200),value=details[:450],inline=False)
@@ -585,7 +586,7 @@ def install(ns, ui, lock):
                 (body if body is not None else self).add_item(item)
             if embed:
                 for index,field in enumerate(embed.fields):
-                    content=text(('**'+field.name+'** · '+field.value[:300].replace('\n',' · ')) if body is not None else ('### '+field.name+'\n'+(field.value[:300] if isinstance(source,Browse) else field.value)))
+                    content=text(('**'+field.name+'**\n'+field.value[:300].replace('\n',' · ')) if body is not None else ('### '+field.name+'\n'+(field.value[:300] if isinstance(source,Browse) else field.value)))
                     if not content:break
                     if isinstance(source,Browse) and index<len(source.quick_rows):
                         qid,expected,can_done=source.quick_rows[index]
@@ -610,11 +611,18 @@ def install(ns, ui, lock):
                             result=await task
                             await present(i,Browse(source.owner,**source.state,guild=i.guild),result[:800])
                         button.callback=click
-                        if can_claim:
+                        if body is not None:
+                            if not can_claim:
+                                button=discord.ui.Button(label='Claim',style=discord.ButtonStyle.secondary,disabled=True)
+                                async def unavailable_claim(i):
+                                    return None
+                                button.callback=unavailable_claim
+                            elif button.disabled:
+                                button.style=discord.ButtonStyle.secondary
                             details=discord.ui.Button(label='Details',style=discord.ButtonStyle.secondary)
                             async def open_details(i,qid=qid):
                                 if not await source.interaction_check(i):return
-                                await present(i,Card(source.owner,qid,lambda:Browse(source.owner,**source.state,guild=i.guild),i.guild))
+                                await present(i,Card(source.owner,qid,lambda:Browse(source.owner,**source.state,guild=i.guild),i.guild,1 if source.state['tab']=='next' else 0))
                             details.callback=open_details
                             add_body(content)
                             add_body(discord.ui.ActionRow(button,details))
@@ -627,6 +635,14 @@ def install(ns, ui, lock):
             rows={}
             row_ids={child['custom_id']:index for index,row in enumerate(source.to_components()) for child in row.get('components',[]) if 'custom_id' in child}
             paging=[]
+            paging_labels=getattr(source,'paging_labels',None)
+            if paging_labels is None and isinstance(source,(Browse,Attention,Points,ResetHistory,History,Inbox,Trips)):
+                paging_labels=('Previous','Next')
+            if paging_labels is None and embed and embed.footer and 'Page ' in (embed.footer.text or ''):
+                paging_labels=('Previous','Next')
+                for item in source.children:
+                    if isinstance(item,discord.ui.Button) and item.label in ('Previous page','Next page'):
+                        item.label='Previous' if item.label=='Previous page' else 'Next'
             for item in source.children:
                 if isinstance(source,Browse) and source.state['area']=='pickup' and isinstance(item,discord.ui.Select) and item.placeholder=='Open a chore card…':
                     continue  # Each chore already has its own Details button.
@@ -634,12 +650,23 @@ def install(ns, ui, lock):
                 # omit the duplicate Refresh to stay within Discord's limit.
                 if isinstance(source,Browse) and source.state['area']=='pickup' and isinstance(item,discord.ui.Button) and item.label=='Refresh':
                     continue
-                if isinstance(item,discord.ui.Button) and item.label in getattr(source,'paging_labels',('Previous','Next') if isinstance(source,Browse) else ()):
+                if isinstance(item,discord.ui.Button) and paging_labels and item.label in paging_labels:
                     paging.append(item)
                     continue
                 row=row_ids.get(item.custom_id,item.row if item.row is not None else 0)
                 rows.setdefault(row,[]).append(item)
-            if paging:self.add_item(discord.ui.ActionRow(*paging))
+            if paging_labels:
+                available={button.label:button for button in paging}
+                fixed=[]
+                for label in paging_labels:
+                    button=available.get(label)
+                    if button is None:
+                        button=discord.ui.Button(label=label,style=discord.ButtonStyle.secondary,disabled=True)
+                        async def unavailable(i):
+                            return None
+                        button.callback=unavailable
+                    fixed.append(button)
+                self.add_item(discord.ui.ActionRow(*fixed))
             self.add_item(discord.ui.Separator())
             for row,items in sorted(rows.items()):
                 self.add_item(discord.ui.ActionRow(*items))
