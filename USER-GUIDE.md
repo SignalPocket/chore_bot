@@ -346,3 +346,13 @@ button row. Claim is greyed out and does nothing for future, next-week, complete
 or otherwise unavailable work; Details still opens the correct chore and week.
 Pickup rows do not repeat Needs someone. This week still distinguishes Due now
 from future dates. Paging controls retain their fixed positions.
+
+
+## Pickup list: Details on the right
+
+Each chore now has one Details button to the right of its text. Open Details
+for instructions, Just this time, weekly sign-ups, and other chore actions.
+Opening Details never claims or completes the chore. The wider frame, separate
+name/schedule lines, saved filters, and fixed Previous/Next controls remain.
+There is no inline Claim button in the pickup list. My chores keeps its inline
+Done or Checklist buttons. Earlier paired-button notes describe the previous UI.

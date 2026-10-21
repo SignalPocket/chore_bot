@@ -22,7 +22,7 @@ SERVER_CHECKS = {
     'update notice routing and deduplication': 'test_update_notice_once_per_release_concurrent_and_no_mentions',
     'schema, legacy upgrade, saved data': 'test_bootstrap_blank_and_legacy_database_use_real_migrations',
     'fixture isolation and durability settings': 'test_fixture_template_contains_schema_without_household_state',
-    'inline Claim': 'test_inline_claim_button_claims_matching_chore_without_points_or_checklist_completion',
+    'pickup Details and card Claim': 'test_pickup_details_opens_card_without_claiming_and_card_claim_still_works',
     'simultaneous Claim': 'test_audit9_competing_card_claims_in_both_orders',
     'single completion award': 'test_audit9_card_and_inline_done_together_award_once',
     'transaction rollback': 'test_audit9_completion_failure_rolls_back_points_history_and_revision',

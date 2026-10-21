@@ -384,7 +384,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('AM slot',row.children[0].content)
             self.assertNotIn('Needs someone',row.children[0].content)
             self.assertNotIn('Due now',row.children[0].content)
-            self.assertEqual([b.label for b in card.children[1].children],['Claim','Details'])
+            self.assertEqual(card.children[0].accessory.label,'Details')
             self.assertFalse(card.spoiler)
 
     async def audit9_queue(self,*actions):
@@ -398,142 +398,73 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(*tasks)
 
     def pickup_rows(self,panel):
-        rows=[]
-        children=[]
-        for item in panel.children:
-            children.extend(item.children if isinstance(item,discord.ui.Container) else [item])
-        for index,item in enumerate(children):
-            if isinstance(item,discord.ui.Section):
-                rows.append(item)
-            elif isinstance(item,discord.ui.TextDisplay) and index+1<len(children):
-                actions=children[index+1]
-                if isinstance(actions,discord.ui.ActionRow) and [getattr(b,'label',None) for b in actions.children]==['Claim','Details']:
-                    rows.append(SimpleNamespace(children=[item],accessory=actions.children[0],details=actions.children[1]))
-        return rows
+        return [item for item in panel.walk_children() if isinstance(item,discord.ui.Section)]
 
-    async def test_inline_claim_button_claims_matching_chore_without_points_or_checklist_completion(self):
+    async def test_pickup_details_opens_card_without_claiming_and_card_claim_still_works(self):
         w=self.ui.workspace;p=self.ui.planning
         with self.clock('2026-10-20T10:00:00'):
             p.save_plan(1,'5','Load cups',p.plan(1))
-            panel=w.render(w.Browse(10,'pickup'))
-            row=next(c for c in self.pickup_rows(panel) if 'Fill dishwasher' in c.children[0].content)
-            self.assertEqual(row.accessory.label,'Claim')
-            event=Interaction();await row.accessory.callback(event)
-            self.assertEqual(self.ui.owned_scope(1),('10','occurrence'))
-            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
-            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM users').fetchone(),(0,))
-            self.assertEqual(p.checked(1),set())
-            view=event.response.payload['view'];self.assertEqual(view.state['area'],'pickup')
-            self.assertNotIn(1,[q[0] for q in view.entries])
-
-    async def test_inline_claim_double_tap_and_competing_people_only_one_owner(self):
-        w=self.ui.workspace
-        with self.clock('2026-10-20T10:00:00'):
-            buttons=[next(c.accessory for c in self.pickup_rows(w.render(w.Browse(uid,'pickup'))) if c.accessory.label=='Claim') for uid in (10,20)]
-            await asyncio.gather(buttons[0].callback(Interaction()),buttons[0].callback(Interaction()),buttons[1].callback(Interaction(20)))
-            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM claims WHERE quest_id=1').fetchone(),(1,))
-            self.assertIn(self.ui.owned_scope(1)[0],('10','20'))
-            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
-
-    async def test_inline_claim_stale_assignment_wrong_user_and_away_are_safe(self):
-        w=self.ui.workspace
-        with self.clock('2026-10-20T10:00:00'):
-            button=next(c.accessory for c in self.pickup_rows(w.render(w.Browse(10,'pickup'))) if c.accessory.label=='Claim')
-            event=Interaction(20);await button.callback(event)
-            self.assertTrue(event.response.wire_payload[1]['ephemeral']);self.assertIsNone(self.ui.owned_scope(1)[0])
-            self.ui.reassign(1,20,'assignment',self.ui.reassign_snapshot(1))
-            await button.callback(Interaction());self.assertEqual(self.ui.owned_scope(1)[0],'20')
-            self.ui.create_chore('Away claim','daily','5','')
-            self.ui.attendance.add(10,'2026-10-20','2026-10-20','away')
-            panel=w.render(w.Browse(10,'pickup'))
-            buttons=[c.accessory for c in self.pickup_rows(panel) if c.accessory.label=='Claim']
-            self.assertTrue(buttons);self.assertTrue(all(b.disabled for b in buttons))
-            await buttons[0].callback(Interaction())
-            self.assertIsNone(self.ui.owned_scope(self.db.execute('SELECT MAX(id) FROM quests').fetchone()[0])[0])
-
-    async def test_inline_claim_future_chore_and_next_week_keep_details(self):
-        w=self.ui.workspace
-        with self.clock('2026-10-20T10:00:00'):
-            self.ui.create_chore('Friday task','friday','5','')
-            panel=w.render(w.Browse(10,'pickup',tab='week'))
-            future=next(c for c in self.pickup_rows(panel) if 'Friday task' in c.children[0].content)
-            self.assertEqual(future.details.label,'Details')
-            self.assertEqual(future.accessory.label,'Claim');self.assertTrue(future.accessory.disabled)
-            panel=w.render(w.Browse(10,'pickup',tab='next'))
-            rows=self.pickup_rows(panel);self.assertTrue(rows)
-            self.assertTrue(all(c.details.label=='Details' and c.accessory.disabled for c in rows))
-
-    async def test_inline_claim_keeps_filters_and_clamps_last_page(self):
-        w=self.ui.workspace
-        with self.clock('2026-10-20T10:00:00'):
-            for n in range(6):self.ui.create_chore(f'Pickup {n}','one-time','5','')
-            panel=w.render(w.Browse(10,'pickup',tab='all',query='Pickup',page=1))
-            button=next(c.accessory for c in self.pickup_rows(panel) if c.accessory.label=='Claim')
-            event=Interaction();await button.callback(event)
-            view=event.response.payload['view']
-            self.assertEqual(view.state['query'],'Pickup');self.assertEqual(view.state['tab'],'all');self.assertEqual(view.state['page'],0)
-            self.assertEqual(len(view.entries),5)
-
-    async def test_inline_claim_expired_screen_restores_without_claiming(self):
-        w=self.ui.workspace
-        with self.clock('2026-10-20T10:00:00'):
-            panel=w.render(w.Browse(10,'pickup'));token=panel.recovery_token
-            button=next(c.accessory for c in self.pickup_rows(panel) if c.accessory.label=='Claim')
-            w.recovery.live.clear();event=Interaction();await button.callback(event)
-            self.assertIsNone(self.ui.owned_scope(1)[0]);self.assertEqual(event.response.payload['view'].state['area'],'pickup')
-            self.assertIn('Nothing was repeated',event.response.payload['content'])
-
-    async def test_pickup_claim_and_details_are_paired_and_details_keeps_filtered_place(self):
-        w=self.ui.workspace
-        with self.clock('2026-10-20T10:00:00'):
-            for n in range(6):self.ui.create_chore(f'Paired {n}','daily','5','Instructions '+str(n))
-            source=w.Browse(10,'pickup',query='Paired',page=1)
-            panel=w.render(source);rows=self.pickup_rows(panel)
-            self.assertEqual(len(rows),1)
-            row=rows[0];self.assertEqual((row.accessory.label,row.details.label),('Claim','Details'))
+            row=next(r for r in self.pickup_rows(w.render(w.Browse(10,'pickup'))) if 'Fill dishwasher' in r.children[0].content)
+            self.assertEqual(row.accessory.label,'Details')
             before={t:self.db.execute('SELECT * FROM '+t).fetchall() for t in ('quests','users','claims','completion_log')}
-            event=Interaction();await row.details.callback(event)
-            card=event.response.payload['view'];self.assertEqual(card.qid,source.entries[5][0])
+            event=Interaction();await row.accessory.callback(event)
+            card=event.response.payload['view'];self.assertEqual(card.qid,1)
             self.assertEqual(before,{t:self.db.execute('SELECT * FROM '+t).fetchall() for t in before})
-            event=Interaction();await next(c for c in card.children if getattr(c,'label',None)=='Back').callback(event)
-            view=event.response.payload['view'];self.assertEqual((view.state['area'],view.state['query'],view.state['page']),('pickup','Paired',1))
-            event=Interaction(20);await row.details.callback(event)
-            self.assertTrue(event.response.wire_payload[1]['ephemeral'])
+            await next(c for c in card.children if getattr(c,'label',None)=='Just this time').callback(Interaction())
+            self.assertEqual(self.ui.owned_scope(1),('10','occurrence'))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM users').fetchone(),(0,))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+            self.assertEqual(p.checked(1),set())
 
-    async def test_pickup_mixed_due_and_future_rows_have_identical_action_placement(self):
+    async def test_pickup_details_keeps_filtered_page_and_rejects_wrong_person(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            for n in range(6):self.ui.create_chore(f'Details {n}','daily','5','Instructions')
+            source=w.Browse(10,'pickup',query='Details',page=1)
+            row=self.pickup_rows(w.render(source))[0]
+            event=Interaction(20);await row.accessory.callback(event)
+            self.assertTrue(event.response.wire_payload[1]['ephemeral'])
+            event=Interaction();await row.accessory.callback(event)
+            card=event.response.payload['view'];self.assertEqual(card.qid,source.entries[5][0])
+            event=Interaction();await next(c for c in card.children if getattr(c,'label',None)=='Back').callback(event)
+            self.assertEqual(event.response.payload['view'].state['query'],'Details')
+            self.assertEqual(event.response.payload['view'].state['page'],1)
+
+    async def test_pickup_details_for_due_future_next_week_and_away_stays_readable(self):
         w=self.ui.workspace
         with self.clock('2026-10-20T10:00:00'):
             self.ui.create_chore('Future Friday','friday','5','')
-            panel=w.render(w.Browse(10,'pickup',tab='week'))
-            rows=self.pickup_rows(panel)
-            self.assertEqual(len(rows),2)
-            future=next(r for r in rows if 'Future Friday' in r.children[0].content)
-            due=next(r for r in rows if 'Fill dishwasher' in r.children[0].content)
-            self.assertTrue(future.accessory.disabled);self.assertFalse(due.accessory.disabled)
-            for row in rows:
-                self.assertEqual([row.accessory.label,row.details.label],['Claim','Details'])
-                self.assertEqual(row.children[0].content.count('\n'),1)
-                self.assertNotIn('Needs someone',row.children[0].content)
-            self.assertIn('Next due',future.children[0].content)
-            self.assertIn('Due now',due.children[0].content)
-            before=list(self.db.iterdump());event=Interaction()
-            await future.accessory.callback(event)
-            self.assertEqual(before,list(self.db.iterdump()));self.assertIsNone(event.response.payload)
-            event=Interaction();await future.details.callback(event)
-            self.assertEqual(event.response.payload['view'].qid,self.db.execute("SELECT id FROM quests WHERE name='Future Friday'").fetchone()[0])
+            self.ui.attendance.add(10,'2026-10-20','2026-10-20','away')
+            for tab in ('week','next'):
+                panel=w.render(w.Browse(10,'pickup',tab=tab));rows=self.pickup_rows(panel)
+                self.assertTrue(rows)
+                self.assertTrue(all(r.accessory.label=='Details' and not r.accessory.disabled for r in rows))
+                self.assertFalse(any(getattr(c,'label',None)=='Claim' for c in panel.walk_children()))
+                event=Interaction();await rows[0].accessory.callback(event)
+                card=event.response.payload['view']
+                self.assertEqual(card.recovery_context['offset'],int(tab=='next'))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM claims').fetchone(),(0,))
 
-    async def test_pickup_paired_controls_fit_discord_and_match_each_chore(self):
+    async def test_pickup_details_expired_screen_restores_without_claiming(self):
+        w=self.ui.workspace
+        panel=w.render(w.Browse(10,'pickup'))
+        button=self.pickup_rows(panel)[0].accessory
+        w.recovery.live.clear();event=Interaction();await button.callback(event)
+        self.assertEqual(event.response.payload['view'].state['area'],'pickup')
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM claims').fetchone(),(0,))
+
+    async def test_pickup_details_right_side_controls_fit_discord_and_match_each_chore(self):
         w=self.ui.workspace
         def count(items):
-            return sum(1+count(item.get('components',[]))+count([item['accessory']] if item.get('accessory') else []) for item in items)
+            return sum(1+count(i.get('components',[]))+count([i['accessory']] if i.get('accessory') else []) for i in items)
         with self.clock('2026-10-20T10:00:00'):
-            for n in range(16):self.ui.create_chore(f'Paired {n:02}','daily','5','')
-            source=w.Browse(10,'pickup',query='Paired',page=1)
+            for n in range(16):self.ui.create_chore(f'Details {n:02}','daily','5','')
+            source=w.Browse(10,'pickup',query='Details',page=1)
             panel=w.render(source);rows=self.pickup_rows(panel)
-            self.assertEqual(len(rows),5)
-            self.assertLessEqual(count(panel.to_components()),40)
+            self.assertEqual(len(rows),5);self.assertLessEqual(count(panel.to_components()),40)
             for row,entry in zip(rows,source.entries[5:10]):
-                event=Interaction();await row.details.callback(event)
+                self.assertEqual(row.accessory.label,'Details')
+                event=Interaction();await row.accessory.callback(event)
                 self.assertEqual(event.response.payload['view'].qid,entry[0])
 
     async def test_audit10_completion_drop_archive_and_move_during_lookup_cancel(self):

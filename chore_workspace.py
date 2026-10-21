@@ -519,7 +519,6 @@ def install(ns, ui, lock):
             if area == 'mine' and not ui.available(owner): description += '\nYou’re away today. Responsibilities remain saved; review coverage before completing work.'
             self.embed = discord.Embed(title=title, description=description, color=0x6B9B77)
             self.quick_rows=[]
-            self.claimable=set()
             for heading,q in chunk:
                 uid, scope = ownership(q[0], offset)
                 heading = (heading + ' · ' if area == 'household' else '') + q[1]
@@ -529,7 +528,6 @@ def install(ns, ui, lock):
                     last=db.execute('SELECT completed_at FROM completion_log WHERE quest_id=? AND user_id=? AND undone_at IS NULL ORDER BY id DESC LIMIT 1',(q[0],str(owner))).fetchone()
                     status='Last completed '+last[0][:16].replace('T',' ') if last else status
                 self.quick_rows.append((q[0],ui.snapshot(q[0]),tab not in ('next','upcoming','done') and offset==0 and uid==str(owner) and not q[5] and ready(q[0])))
-                if area=='pickup' and tab!='next' and not uid and not q[5] and ready(q[0]):self.claimable.add(q[0])
                 details=f'{timing.compact_label(q[2])} · {q[3]} points'+ui.planning.summary(q[0])+ui.planning.help_summary(q[0])
                 if area=='mine':
                     if tab=='due':
@@ -591,11 +589,11 @@ def install(ns, ui, lock):
                     if isinstance(source,Browse) and index<len(source.quick_rows):
                         qid,expected,can_done=source.quick_rows[index]
                         pending_steps=can_done and not ui.planning.complete(qid)
-                        can_claim=qid in source.claimable
-                        button=discord.ui.Button(label='Checklist' if pending_steps else 'Done' if can_done else 'Claim' if can_claim else 'Details',style=discord.ButtonStyle.success if can_done else discord.ButtonStyle.primary if can_claim else discord.ButtonStyle.secondary,disabled=(can_done or can_claim) and not ui.available(source.owner))
-                        async def click(i,qid=qid,expected=expected,can_done=can_done,can_claim=can_claim,pending_steps=pending_steps):
+                        can_done=can_done and body is None
+                        button=discord.ui.Button(label='Checklist' if pending_steps and can_done else 'Done' if can_done else 'Details',style=discord.ButtonStyle.success if can_done else discord.ButtonStyle.secondary,disabled=can_done and not ui.available(source.owner))
+                        async def click(i,qid=qid,expected=expected,can_done=can_done,pending_steps=pending_steps):
                             if not await source.interaction_check(i):return
-                            if not can_done and not can_claim:
+                            if not can_done:
                                 return await present(i,Card(source.owner,qid,lambda:Browse(source.owner,**source.state,guild=i.guild),i.guild,1 if source.state['tab']=='next' else 0))
                             if can_done and (pending_steps or not ui.planning.complete(qid)):return await present(i,ui.planning.Checklist(source.owner,qid,i.guild,lambda:Card(source.owner,qid,lambda:Browse(source.owner,**source.state,guild=i.guild),i.guild)))
                             async def complete():
@@ -603,7 +601,7 @@ def install(ns, ui, lock):
                                     ns['reset_due_quests']()
                                     if ui.snapshot(qid)!=expected:return 'This occurrence changed. Review the refreshed list.'
                                     context=ui.Context(i)
-                                    await bot.get_command('claim' if can_claim else 'done').callback(context,qid)
+                                    await bot.get_command('done').callback(context,qid)
                                     return '\n'.join(context.messages)
                             task=asyncio.create_task(complete())
                             finished,_=await asyncio.wait({task},timeout=1.0)
@@ -611,23 +609,7 @@ def install(ns, ui, lock):
                             result=await task
                             await present(i,Browse(source.owner,**source.state,guild=i.guild),result[:800])
                         button.callback=click
-                        if body is not None:
-                            if not can_claim:
-                                button=discord.ui.Button(label='Claim',style=discord.ButtonStyle.secondary,disabled=True)
-                                async def unavailable_claim(i):
-                                    return None
-                                button.callback=unavailable_claim
-                            elif button.disabled:
-                                button.style=discord.ButtonStyle.secondary
-                            details=discord.ui.Button(label='Details',style=discord.ButtonStyle.secondary)
-                            async def open_details(i,qid=qid):
-                                if not await source.interaction_check(i):return
-                                await present(i,Card(source.owner,qid,lambda:Browse(source.owner,**source.state,guild=i.guild),i.guild,1 if source.state['tab']=='next' else 0))
-                            details.callback=open_details
-                            add_body(content)
-                            add_body(discord.ui.ActionRow(button,details))
-                        else:
-                            add_body(discord.ui.Section(content,accessory=button))
+                        add_body(discord.ui.Section(content,accessory=button))
                     else:add_body(content)
                 if body is not None and body.children:self.add_item(body)
                 footer=text('-# '+((embed.footer.text+' · ') if embed.footer and embed.footer.text else '')+'Refresh / Resume keeps your place if controls expire.')
