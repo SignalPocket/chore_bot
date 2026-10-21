@@ -183,7 +183,7 @@ def install(ns, ui, lock):
                 return Browse(owner, **dict(saved, area=area), guild=guild)
             self.button('My chores', lambda i: present(i, browse('mine')), row=0, primary=True)
             self.button('Pick up chores', lambda i: present(i, browse('pickup')), row=0)
-            self.button('Household', lambda i: present(i, browse('household')), row=0)
+            self.button('Household chores', lambda i: present(i, browse('household')), row=0)
             self.button('Who’s home?', lambda i: present(i, Trips(owner, i.guild)), row=1)
             self.button('Manage chores', lambda i: present(i, Manage(owner, i.guild)), row=1)
             self.button('Help', lambda i: present(i, Guide(owner)), row=1)
@@ -579,27 +579,30 @@ def install(ns, ui, lock):
                 budget-=len(value)
                 return discord.ui.TextDisplay(value)
             header=text((('**'+str(notice)+'**\n\n') if notice else '')+(('# '+embed.title+'\n') if embed and embed.title else '')+(embed.description or '' if embed else ''))
-            if header:self.add_item(header)
+            if header and not isinstance(source,Dashboard):self.add_item(header)
             if isinstance(source,Dashboard):
+                buttons={item.label:item for item in source.children if isinstance(item,discord.ui.Button)}
+                if header:self.add_item(discord.ui.Section(header,accessory=buttons['Help']))
                 stats=text('-# '+embed.footer.text)
                 if stats:self.add_item(stats)
                 for field in embed.fields:
                     item=text('**'+field.name+'** · '+field.value)
                     if item:self.add_item(item)
-                buttons={item.label:item for item in source.children if isinstance(item,discord.ui.Button)}
                 trade=next(label for label in buttons if label.startswith('Trades ('))
                 review=next((label for label in buttons if label.startswith('Review inbox (')),None)
-                groups=[('Chores',['My chores','Pick up chores','Needs attention','Household','Calendar']),
-                    ('Household',['Who’s home?',trade,'Points & standings','Manage chores']),
-                    ('Your settings & help',['Reminders','Notifications','Help','Continue where I left off']),
-                    ('Household tools',[review,'Update announcements','Household setup'])]
+                planning=['Calendar','Household chores','Who’s home?',trade]
+                if source.owner!=OWNER:planning.append('Household setup')
+                groups=[('Do chores',['My chores','Pick up chores','Needs attention','Manage chores']),
+                    ('Plan & coordinate',planning),
+                    ('My settings',['Reminders','Notifications','Points & standings','Continue where I left off']),
+                    ('Owner tools',[review,'Update announcements','Household setup'] if source.owner==OWNER else [])]
                 settings_row=None
                 for title,labels in groups:
                     items=[buttons[label] for label in labels if label in buttons]
                     if not items:continue
                     row=discord.ui.ActionRow(*items)
                     self.add_item(discord.ui.Container(discord.ui.TextDisplay('### '+title),row,accent_colour=0x6B9B77))
-                    if title=='Your settings & help':settings_row=row
+                    if title=='My settings':settings_row=row
                 recovery.attach(self,source,resume_row=settings_row)
                 return
             points_screen=isinstance(source,Points)
@@ -1275,25 +1278,184 @@ def install(ns, ui, lock):
             self.button('Cancel exception',cancel)
             self.nav(back)
 
-    TOPICS = {
-        'Start here':'Needs attention combines overdue, due unclaimed, and blocked chores with help notes. Each chore appears once with all applicable labels. My chores shows your points total, Due now, This week, Upcoming, and Completed. Points & standings on the dashboard shows scores without commands. Pick up chores lets you take work just once or for a week. Household shows everyone’s work; every chore opens the same card.',
-        'Taking responsibility':'Just this time takes one due occurrence. Take this week / next week reserves repeating work until Sunday 6 p.m. An ongoing assignment continues across weeks. Drop and Reassign show scope before saving. Trades change nothing until accepted.',
-        'Dates and colors':DAY_LEGEND+'\nAll times are Eastern. Daily resets at midnight, twice daily at noon and midnight, weekly Sunday 6 p.m., monthly on the first. Flexible weekly/monthly markers do not imply a weekday.',
-        'Schedules and missed work':'Daily AM and Daily PM can have different weekly owners. A twice-daily chore card offers Separate AM and PM sign-ups. Change regular day changes future weeks. Move this occurrence changes one unfinished occurrence. Edit chore → Missed chores chooses Keep overdue or Skip if missed. Notes such as “afternoon” are instructions, not automatic reminders.',
-        'Trips and traded days':'Who’s home? accepts multiple people, date shortcuts, and full-day ranges. Preview before confirming. Edit saved exceptions directly. Normal rotation resumes afterward; existing responsibilities remain saved. Base home/away chore schedules do not shift with a person’s trip.',
-        'Feedback and points':'Give feedback on a chore card to suggest timing, instructions, or points. Ginaria receives feedback DMs and resolves reviews in the owner inbox. Everyone can discuss; only ginaria resolves. Suggestions never apply themselves. Edits affect future points, not points already earned.',
-        'History and mistakes':'Done awards points once per occurrence. Completion history records work after this update. Undo your most recent recorded completion only while its state and points remain unchanged. Undo reverses its points and streak changes. Earlier totals remain intact.',
-        'Managing chores':'Manage chores groups Add and Archive/Restore. Edit any chore from its card. Room is optional and can be used as a filter. Archiving hides work and keeps records; restoring retains its state.',
-        'Planning and reminders':'Calendar previews scheduled chores by week or month; No fixed day keeps flexible work separate. Chore cards offer estimates and per-occurrence checklists. Finish steps before Done. Reminders are personal, off by default, with up to ten Eastern times and an off switch.',
-        'Help statuses and copies':'Stuck / need help on a chore lets its current responsible person explain the obstacle. Everyone sees active issues under Needs attention and can confirm resolution without completing or dropping work. Status history keeps older notes. Duplicate chore copies settings into a fresh unassigned chore after reviewing a new name.',
-        'Points and resets':'Points & standings shows your total and streak. Only ginaria can reset one person or everyone, with confirmation and optional streak reset. History stays saved. Ginaria can undo a reset from Reset history / Undo while affected scores have no newer activity.',
-        'Notifications and recovery':'Trades appear on the dashboard. Trade DMs are optional: turn them on in Notifications for your own account. Feedback DMs go to ginaria. Use Refresh after a restart or ten minutes to restore your page, filters, and date. Expired actions and confirmations are never replayed. /chores also offers Continue where I left off. Private controls edit shared household information.'}
+    TOPICS = {'Start here': '**To do a chore:** Open **My chores → Due now**. Use **Done** beside the chore, or open '
+                   'its card to read instructions and finish its checklist.\n'
+                   '\n'
+                   '**To take a chore:** Open **Pick up chores → Details** and choose how long you want '
+                   'responsibility. **Details** opens the same card from any list.\n'
+                   '\n'
+                   '**To look ahead:** My chores has **This week**, **Next week**, **Upcoming**, and '
+                   '**Completed**. Under **Plan & coordinate**, use **Household chores** to see everyone’s '
+                   'work or **Calendar** to browse dates.\n'
+                   '\n'
+                   'Choose a topic below for the steps you need.',
+     'Pick up a chore': '1. Open **Do chores → Pick up chores**. Find a chore and press **Details**.\n'
+                        '2. Choose **Just this time** for one due occurrence, **Take this week** or **Take '
+                        'next week** for a weekly responsibility, or **Every week · ongoing** for a continuing '
+                        'assignment. Only available choices appear.\n'
+                        '3. Read any confirmation before saving.\n'
+                        '\n'
+                        'A weekly signup lasts until Sunday at 6 p.m. Eastern. Finishing today’s chore does '
+                        'not release the rest of your week.',
+     'Finish a chore': '1. Open **Do chores → My chores → Due now**.\n'
+                       '2. Read the chore’s instructions. If it has a **Checklist**, check off its steps '
+                       'first.\n'
+                       '3. Press **Done** when the work is finished.\n'
+                       '\n'
+                       'The points go to the Discord account that completes it. A repeating chore can become '
+                       'due again; marking it Done completes only its current occurrence.\n'
+                       '\n'
+                       'If something is stopping you, open its card and use **Stuck / need help** instead.',
+     'Drop, reassign, or trade': 'Open the chore card, then **More actions…**.\n'
+                                 '\n'
+                                 '**Drop responsibility** gives up your responsibility without completing the '
+                                 'work. **Reassign** gives it to another person. Check whether the '
+                                 'confirmation covers one occurrence, a whole week, or an ongoing assignment.\n'
+                                 '\n'
+                                 '**Propose trade** offers an exchange with someone else. The other person '
+                                 'must accept in **Plan & coordinate → Trades** before ownership changes. '
+                                 'Declining or canceling leaves both chores as they were.\n'
+                                 '\n'
+                                 'Previously earned points and history stay saved.',
+     'Choose or change a day': 'Open the chore card, then **More actions…**.\n'
+                               '\n'
+                               'Choose **Change regular day** to set the weekday for a weekly chore in future '
+                               'weeks too.\n'
+                               '\n'
+                               'Choose **Move this occurrence** to move only the current unfinished '
+                               'occurrence. **Cancel occurrence move** removes that one-time change.\n'
+                               '\n'
+                               'Choosing a date in Calendar only shows its schedule. It does not move the '
+                               'chore or sign you up.',
+     'Schedules and missed chores': '**Keep overdue** leaves unfinished work due until someone completes it. '
+                                    '**Skip if missed** lets an expired occurrence pass without awarding '
+                                    'points; the next scheduled occurrence still happens. Choose this under '
+                                    '**Edit chore → Missed chores**.\n'
+                                    '\n'
+                                    'All times are **Eastern**. Daily chores reset at midnight; twice-daily '
+                                    'chores have morning and afternoon slots. Household weeks change Sunday at '
+                                    '6 p.m.; monthly periods begin on the first.\n'
+                                    '\n'
+                                    'Separate **Daily AM** and **Daily PM** chores can have different owners. '
+                                    'An unsplit twice-daily chore offers **Separate AM and PM sign-ups** in '
+                                    'its card’s More actions menu.\n'
+                                    '\n',
+     'Use the calendar': 'Open **Plan & coordinate → Calendar** to see today. Use **Previous day**, **Today**, '
+                         'or **Next day** to change the date. **Previous page / Next page** shows more chores '
+                         'on the same date.\n'
+                         '\n'
+                         'Press **Details** beside a chore to read more. Past and future dates show a preview '
+                         'before you open the current chore.\n'
+                         '\n'
+                         'Use **Week** or **Month** for an overview. **No fixed day** shows flexible weekly or '
+                         'monthly chores that have not been given a weekday.\n'
+                         '\n'
+                         'The calendar is a schedule preview, not a complete record of finished work.',
+     'Set reminders': '1. Open **My settings → Reminders**.\n'
+                      '2. Use **Change times** to enter up to ten times, such as **09:00, 17:00**. Times are '
+                      'Eastern and use the 24-hour clock.\n'
+                      '3. Press **Turn on** to allow private reminder DMs. Use **Turn off** whenever you '
+                      'want.\n'
+                      '\n'
+                      'These settings belong to your account, not to an individual chore. Reminders include '
+                      'your due, unfinished responsibilities. Sprig stays quiet when you are away or have '
+                      'nothing due.\n'
+                      '\n'
+                      'Trade DMs have a separate switch under **My settings → Notifications**.',
+     'Report a problem': 'Open the chore card and press **Stuck / need help**. Choose **Stuck**, **Need '
+                         'supplies**, or **Need help**, then explain what is stopping you.\n'
+                         '\n'
+                         'The note is shared with the household and appears under **Needs attention**. '
+                         'Reporting a problem keeps the chore assigned to you and does not mark it Done.\n'
+                         '\n'
+                         'When the obstacle is gone, mark the help status resolved. You still need to finish '
+                         'the work and press **Done** separately. Older notes stay in status history.',
+     'Suggest a chore change': 'Open the chore card, then **More actions… → Give feedback**.\n'
+                               '\n'
+                               'Explain what should change: the instructions, timing, or number of points. You '
+                               'can suggest an effort score for the household to discuss.\n'
+                               '\n'
+                               'Ginaria receives a private notification and can read it under **Owner tools → '
+                               'Review inbox**. Suggestions do not change the chore automatically. If you '
+                               'agree on a change, use **Edit chore** to apply it.\n'
+                               '\n'
+                               'Changing a chore’s point value affects future completions; previously earned '
+                               'points stay as they are.',
+     'Add, edit, or copy chores': 'Open **Do chores → Manage chores** to add a chore or archive one. New '
+                                  'chores default to **5 points**.\n'
+                                  '\n'
+                                  'To change an existing chore, open its card and choose **More actions… → '
+                                  'Edit chore**. The same menu has **Estimate / checklist** for steps and a '
+                                  'time estimate, and **Duplicate chore** to make a fresh, unassigned copy '
+                                  'with a new name.\n'
+                                  '\n'
+                                  'Archiving hides a chore while keeping its records. Use **Manage chores → '
+                                  'Archived chores** to restore it.\n'
+                                  '\n'
+                                  'Everyone can manage chores; owner-only points and review controls are '
+                                  'separate.',
+     'Trips and traded days': 'Open **Plan & coordinate → Who’s home?**. Select the people affected, choose '
+                              'home or away, and enter the first and last dates. Preview the dates before '
+                              'confirming.\n'
+                              '\n'
+                              'These are full days in Eastern time. You can edit or cancel a saved exception. '
+                              'The normal rotation resumes afterward.\n'
+                              '\n'
+                              'Existing chore responsibilities stay saved. Review coverage warnings and use '
+                              'Reassign or Trade when someone else needs to cover the work; a trip does not '
+                              'automatically transfer chores.',
+     'Points and standings': 'Open **My settings → Points & standings** to see your total, streak, and '
+                             'household rankings. Points belong to the account that completes the chore. They '
+                             'do not currently redeem rewards.\n'
+                             '\n'
+                             '**Owner only:** Ginaria can use **Reset points** for one person or everyone, '
+                             'choose whether to reset streaks, and confirm the change. History stays saved.\n'
+                             '\n'
+                             '**Reset history / Undo** can reverse a reset while the affected scores have no '
+                             'newer activity. If something has changed, Sprig stops the undo so it cannot '
+                             'overwrite newer work.',
+     'Undo a mistake': 'If you just marked a chore Done by mistake, open its card and look for **Undo '
+                       'completion**. This is available for your most recent recorded completion while its '
+                       'chore state and points have not changed.\n'
+                       '\n'
+                       'Read the confirmation. Undo restores the previous chore state and reverses that '
+                       'completion’s points and streak changes.\n'
+                       '\n'
+                       'If Undo is unavailable, ask ginaria to check **Completion history**. Owner corrections '
+                       'have the same safety limits; not every older completion can be reversed. Ginaria can '
+                       'also reopen a resolved review in the review inbox.\n'
+                       '\n'
+                       'There is no universal Undo for every change.',
+     'Recover a screen': 'If buttons stop responding, press **Refresh**. It restores your page, filters, and '
+                         'date after controls expire or Sprig restarts.\n'
+                         '\n'
+                         'If you cannot use that screen, open **/chores** again. **My settings → Continue '
+                         'where I left off** returns to your saved place when one is available.\n'
+                         '\n'
+                         'Refreshing never repeats an expired action or confirmation. Review the current state '
+                         'before trying a change again.\n'
+                         '\n'
+                         'Your controls are private, but changes to chores are shared with the household.'}
+    HELP_ALIASES = {'Taking responsibility': 'Pick up a chore',
+     'Dates and colors': 'Schedules and missed chores',
+     'Schedules and missed work': 'Schedules and missed chores',
+     'Feedback and points': 'Suggest a chore change',
+     'History and mistakes': 'Undo a mistake',
+     'Managing chores': 'Add, edit, or copy chores',
+     'Planning and reminders': 'Set reminders',
+     'Help statuses and copies': 'Report a problem',
+     'Points and resets': 'Points and standings',
+     'Notifications and recovery': 'Recover a screen'}
+
+    TOPICS['Schedules and missed chores'] += DAY_LEGEND+'\nWeekly and monthly symbols mean no fixed weekday until one is chosen.'
 
     class Guide(View):
         def __init__(self,owner,topic='Start here'):
             super().__init__(owner)
+            topic=HELP_ALIASES.get(topic,topic)
+            if topic not in TOPICS:topic='Start here'
             self.recovery_context={'screen':'guide','topic':topic}
-            self.embed = discord.Embed(title=topic,description=TOPICS[topic],color=0x6B9B77)
+            self.embed = discord.Embed(title='Help · '+topic,description=TOPICS[topic],color=0x6B9B77)
             picker = discord.ui.Select(placeholder='What would you like to do?',options=[discord.SelectOption(label=k,value=k,default=k==topic) for k in TOPICS])
             async def choose(i): await present(i,Guide(owner,picker.values[0]))
             picker.callback = choose

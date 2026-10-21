@@ -3544,7 +3544,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_workspace_browse_preferences_remembered_per_person(self):
         w=self.ui.workspace
         w.Browse(10,'household',tab='all',group='person',query='bath')
-        event=Interaction();await next(c for c in w.Dashboard(10).children if c.label=='Household').callback(event)
+        event=Interaction();await next(c for c in w.Dashboard(10).children if c.label=='Household chores').callback(event)
         self.assertEqual(event.response.payload['view'].state['query'],'bath')
         self.assertNotIn((20,'household'),w.memory)
 
@@ -4012,6 +4012,40 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(event.response.payload['view'].state['page'],2)
             self.assertEqual(event.response.payload['view'].state['area'],'household')
 
+    async def test_help_topics_use_task_steps_and_real_button_paths_without_commands(self):
+        w=self.ui.workspace;source=w.Guide(10)
+        picker=next(c for c in source.children if isinstance(c,discord.ui.Select))
+        self.assertLessEqual(len(picker.options),25)
+        self.assertEqual(picker.options[0].value,'Start here')
+        for option in picker.options:
+            guide=w.Guide(10,option.value)
+            self.assertIn('\n\n',guide.embed.description)
+            self.assertLess(len(guide.embed.description),1400)
+            self.assertNotIn('!points',guide.embed.description)
+            self.assertNotIn('!help',guide.embed.description)
+            self.assert_screen_limits(guide)
+        self.assertIn('My settings → Reminders',w.Guide(10,'Set reminders').embed.description)
+        self.assertIn('not to an individual chore',w.Guide(10,'Set reminders').embed.description)
+        self.assertIn('More actions… → Give feedback',w.Guide(10,'Suggest a chore change').embed.description)
+
+    async def test_help_topic_selection_old_bookmarks_and_privacy_preserve_data(self):
+        w=self.ui.workspace
+        before=self.db.execute('SELECT * FROM quests').fetchall()
+        guide=w.Guide(10,'Planning and reminders')
+        self.assertEqual(guide.recovery_context['topic'],'Set reminders')
+        panel=w.render(guide)
+        picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select))
+        event=Interaction();event.data={'component_type':3,'values':['Finish a chore']}
+        await picker.callback(event)
+        self.assertEqual(event.response.payload['view'].recovery_context['topic'],'Finish a chore')
+        wrong=Interaction(20);await panel.interaction_check(wrong)
+        self.assertTrue(wrong.response.payload[1]['ephemeral'])
+        refresh=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Refresh')
+        w.recovery.live.clear();event=Interaction();await refresh.callback(event)
+        self.assertEqual(event.response.payload['view'].recovery_context['topic'],'Set reminders')
+        self.assertEqual(self.db.execute('SELECT * FROM quests').fetchall(),before)
+        self.assertEqual(w.Guide(10,'unknown old topic').recovery_context['topic'],'Start here')
+
     async def test_workspace_polish_shared_screens_have_single_refresh_and_navigation_row(self):
         w=self.ui.workspace
         with self.clock('2026-10-21T10:00:00'):
@@ -4177,14 +4211,21 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             source=w.Dashboard(owner,guild,member)
             panel=w.render(source)
             groups=[c for c in panel.children if isinstance(c,discord.ui.Container)]
-            self.assertEqual([g.children[0].content for g in groups],
-                ['### Chores','### Household','### Your settings & help','### Household tools'])
+            expected_groups=['### Do chores','### Plan & coordinate','### My settings']
+            if owner==301104023405199361:expected_groups.append('### Owner tools')
+            self.assertEqual([g.children[0].content for g in groups],expected_groups)
+            header=next(c for c in panel.children if isinstance(c,discord.ui.Section))
+            self.assertEqual(header.accessory.label,'Help')
+            planning=[c.label for c in groups[1].children[1].children]
+            self.assertIn('Household chores',planning);self.assertIn('Calendar',planning)
+            self.assertNotIn('Household',planning)
+            if owner!=301104023405199361:self.assertIn('Household setup',planning)
             labels=[c.label for c in panel.walk_children() if isinstance(c,discord.ui.Button)]
             expected=[c.label for c in source.children if isinstance(c,discord.ui.Button)]+['Refresh']
             self.assertCountEqual(labels,expected)
             self.assertEqual(len(labels),len(set(labels)))
             self.assertEqual([c.label for c in groups[0].children[1].children],
-                ['My chores','Pick up chores','Needs attention','Household','Calendar'])
+                ['My chores','Pick up chores','Needs attention','Manage chores'])
             self.assertLessEqual(len(groups[2].children[1].children),5)
             self.assertNotIn('Refresh / Resume',labels)
             text=' '.join(c.content for c in panel.walk_children() if isinstance(c,discord.ui.TextDisplay))

@@ -370,7 +370,7 @@ weekly view heading. Other screens retain their existing recovery controls.
 
 ### Dashboard groups
 
-The private dashboard groups its controls into Chores, Household, Your settings & help, and Household tools. Points and streak appear at the top. Help, reminders, notifications, Continue where I left off (when available), and a single Refresh control share the personal section. Refresh safely restores an expired screen after a restart. Household tools appear only when your account has access; owner review and announcements remain owner only.
+The private dashboard groups controls by purpose: Do chores (My chores, Pick up chores, Needs attention, Manage chores); Plan & coordinate (Calendar, Household chores, Who’s home?, incoming trades); My settings (Reminders, Notifications, Points & standings, Continue where I left off when available, Refresh); and Owner tools (review inbox, update announcements, household setup when permitted). Help sits beside the dashboard heading. Points and streak appear at the top. Non-owner members with setup permission find Household setup under Plan & coordinate. Refresh safely restores an expired screen after a restart; owner permissions remain unchanged.
 
 
 ### Calendar day layout
@@ -391,3 +391,8 @@ Your points and streak appear together at the top, followed by a compact framed 
 ### Consistent workspace style
 
 Workspace screens use compact framed content and one Refresh button. Lists retain fixed page controls; primary actions and selects stay above a shared Back / Refresh / Dashboard row where available. Small adjacent action groups share rows when they fit. Calendar navigation keeps its date groups. Instructions, warnings, confirmation text, owner permissions, and private recovery rules are preserved. My chores retains inline Done and Checklist actions. Refreshing an expired confirmation returns safely without applying it.
+
+
+### In-app Help
+
+Help starts with a short path for doing a chore, taking work, or looking ahead. The topic picker uses concrete tasks (for example, Finish a chore, Set reminders, and Drop, reassign, or trade). Each topic gives the actual button path and explains the result in short paragraphs. Earlier saved help topics map to the matching new topic; an unknown old topic returns to Start here. Help is private and never changes chores or points.
