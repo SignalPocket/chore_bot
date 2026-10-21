@@ -612,7 +612,7 @@ def install(ns, ui, lock):
                         add_body(discord.ui.Section(content,accessory=button))
                     else:add_body(content)
                 if body is not None and body.children:self.add_item(body)
-                footer=text('-# '+((embed.footer.text+' · ') if embed.footer and embed.footer.text else '')+'Refresh / Resume keeps your place if controls expire.')
+                footer=text(('-# '+embed.footer.text.split(' · Eastern time')[0]+' · Eastern time') if body is not None else ('-# '+((embed.footer.text+' · ') if embed.footer and embed.footer.text else '')+'Refresh / Resume keeps your place if controls expire.'))
                 if footer:self.add_item(footer)
             rows={}
             row_ids={child['custom_id']:index for index,row in enumerate(source.to_components()) for child in row.get('components',[]) if 'custom_id' in child}
@@ -650,9 +650,19 @@ def install(ns, ui, lock):
                     fixed.append(button)
                 self.add_item(discord.ui.ActionRow(*fixed))
             self.add_item(discord.ui.Separator())
-            for row,items in sorted(rows.items()):
-                self.add_item(discord.ui.ActionRow(*items))
-            recovery.attach(self,source)
+            utility_row=None
+            if body is not None:
+                utilities={getattr(item,'label',None):item for items in rows.values() for item in items
+                    if isinstance(item,discord.ui.Button) and item.label in ('Search','Filters','Dashboard')}
+                for row,items in sorted(rows.items()):
+                    remaining=[item for item in items if item not in utilities.values()]
+                    if remaining:self.add_item(discord.ui.ActionRow(*remaining))
+                utility_row=discord.ui.ActionRow(*(utilities[label] for label in ('Search','Filters','Dashboard')))
+                self.add_item(utility_row)
+            else:
+                for row,items in sorted(rows.items()):
+                    self.add_item(discord.ui.ActionRow(*items))
+            recovery.attach(self,source,resume_row=utility_row)
 
         async def interaction_check(self,i):
             return await self.source.interaction_check(i)

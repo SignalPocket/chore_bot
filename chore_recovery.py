@@ -173,7 +173,7 @@ def install(ns, ui, w):
 
     bot.add_dynamic_items(RecoveryControl)
 
-    def attach(panel, source):
+    def attach(panel, source, resume_row=None):
         now = monotonic()
         for key, value in list(live.items()):
             if now-value['created'] >= 600:
@@ -199,11 +199,19 @@ def install(ns, ui, w):
             async def callback(i, action=action):
                 await route(i, token, action)
             item.callback = callback
-        resume = discord.ui.Button(label='Refresh / Resume', custom_id=f'sprig:recover:v1:{token}:r')
+        resume = discord.ui.Button(label='Refresh' if resume_row is not None else 'Refresh / Resume', custom_id=f'sprig:recover:v1:{token}:r')
         async def refresh(i):
             await route(i, token, 'r')
         resume.callback = refresh
-        panel.add_item(discord.ui.ActionRow(resume))
+        if resume_row is None:
+            panel.add_item(discord.ui.ActionRow(resume))
+        else:
+            # Existing controls have already been registered for recovery;
+            # preserve those objects and IDs while keeping Home last.
+            home=[item for item in resume_row.children if getattr(item,'label',None)=='Dashboard']
+            for item in home:resume_row.remove_item(item)
+            resume_row.add_item(resume)
+            for item in home:resume_row.add_item(item)
         panel.recovery_token = token
         live[token] = dict(panel=panel, source=source, controls=controls, created=now, fingerprint=fingerprint())
 

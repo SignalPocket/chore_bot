@@ -4012,6 +4012,54 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(event.response.payload['view'].state['page'],2)
             self.assertEqual(event.response.payload['view'].state['area'],'household')
 
+    async def test_pickup_footer_has_three_ordered_button_rows_and_one_refresh(self):
+        w=self.ui.workspace
+        for tab in ('due','week','next','all'):
+            with self.subTest(tab=tab):
+                panel=w.render(w.Browse(10,'pickup',tab=tab))
+                rows=[c for c in panel.children if isinstance(c,discord.ui.ActionRow)]
+                self.assertEqual([[b.label for b in r.children] for r in rows],
+                    [['Previous','Next'],['Due now','This week','Next week','All chores'],['Search','Filters','Refresh','Dashboard']])
+                controls=list(panel.walk_children())
+                self.assertEqual(sum(getattr(c,'label',None)=='Refresh' for c in controls),1)
+                self.assertNotIn('Refresh / Resume',[getattr(c,'label',None) for c in controls])
+                footer=next(c for c in panel.children if isinstance(c,discord.ui.TextDisplay) and 'Page ' in c.content)
+                self.assertNotIn('Weeks change',footer.content)
+                self.assertNotIn('controls expire',footer.content)
+
+    async def test_pickup_footer_refresh_restores_page_filters_and_dashboard_after_restart(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            for n in range(11):self.ui.create_chore(f'Footer {n:02}','daily','5','')
+            panel=w.render(w.Browse(10,'pickup',query='Footer',tab='week',page=1))
+            refresh=next(b for b in panel.walk_children() if getattr(b,'label',None)=='Refresh')
+            home=next(b for b in panel.walk_children() if getattr(b,'label',None)=='Dashboard')
+            self.assertTrue(refresh.custom_id.endswith(':r'))
+            before={t:self.db.execute('SELECT * FROM '+t).fetchall() for t in ('quests','users','claims','completion_log')}
+            w.recovery.live.clear()
+            event=Interaction();await refresh.callback(event)
+            restored=event.response.payload['view']
+            self.assertEqual((restored.state['query'],restored.state['tab'],restored.state['page']),('Footer','week',1))
+            self.assertEqual(before,{t:self.db.execute('SELECT * FROM '+t).fetchall() for t in before})
+            event=Interaction();await home.callback(event)
+            self.assertEqual(event.response.payload['view'].state['area'],'pickup')
+            current=event.response.wire_payload['view']
+            event=Interaction();await next(b for b in current.walk_children() if getattr(b,'label',None)=='Dashboard').callback(event)
+            self.assertIsInstance(event.response.payload['view'],w.Dashboard)
+
+    async def test_pickup_footer_search_filters_and_privacy_survive_combined_row(self):
+        w=self.ui.workspace;panel=w.render(w.Browse(10,'pickup'))
+        search=next(b for b in panel.walk_children() if getattr(b,'label',None)=='Search')
+        event=Interaction();await search.callback(event)
+        self.assertIsInstance(event.response.payload,discord.ui.Modal)
+        filters=next(b for b in panel.walk_children() if getattr(b,'label',None)=='Filters')
+        event=Interaction();await filters.callback(event)
+        self.assertEqual(event.response.payload['view'].embed.title,'Filter chores')
+        refresh=next(b for b in panel.walk_children() if getattr(b,'label',None)=='Refresh')
+        event=Interaction(20);await refresh.callback(event)
+        self.assertTrue(event.response.wire_payload[1]['ephemeral'])
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM claims').fetchone(),(0,))
+
     async def test_stable_paging_disabled_buttons_are_noops_and_single_page_keeps_both(self):
         w=self.ui.workspace
         panel=w.render(w.Browse(10,'pickup'))

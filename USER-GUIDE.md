@@ -356,3 +356,13 @@ Opening Details never claims or completes the chore. The wider frame, separate
 name/schedule lines, saved filters, and fixed Previous/Next controls remain.
 There is no inline Claim button in the pickup list. My chores keeps its inline
 Done or Checklist buttons. Earlier paired-button notes describe the previous UI.
+
+
+### Pickup list footer
+
+Below the chore card: Previous / Next, then Due now / This week / Next week /
+All chores, then Search / Filters / Refresh / Dashboard. Refresh is the single
+recovery control: it reloads current information and keeps your place after
+expiry or restart. There is no separate Refresh / Resume row in Pick up chores.
+The footer shows the page number and Eastern time; week ranges remain in the
+weekly view heading. Other screens retain their existing recovery controls.
