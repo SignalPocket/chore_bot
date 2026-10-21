@@ -18,6 +18,7 @@ SOURCES = RUNTIME + ('requirements.txt', 'test_chore_board.py', 'run_tests.py')
 # Reuse regression tests, rather than maintaining a second set of assertions.
 # These cover host-dependent loading, SQLite, async callbacks, and serialization.
 SERVER_CHECKS = {
+    'announcement owner permission and quiet default': 'test_announcement_controls_are_owner_only_including_forged_callbacks',
     'update notice routing and deduplication': 'test_update_notice_once_per_release_concurrent_and_no_mentions',
     'schema, legacy upgrade, saved data': 'test_bootstrap_blank_and_legacy_database_use_real_migrations',
     'fixture isolation and durability settings': 'test_fixture_template_contains_schema_without_household_state',

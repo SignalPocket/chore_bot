@@ -45,7 +45,7 @@ While it remains stopped:
 .venv/bin/python run_tests.py --suite server --release-report /home/discordbot/sprig-release-tests.json --profile --report /home/discordbot/sprig-server-checks.json
 ```
 
-The server command compiles all eight runtime modules and runs 23 selected
+The server command compiles all eight runtime modules and runs 24 selected
 regressions using the server's Python, SQLite, and installed Discord library:
 
 | Coverage | Why it stays in the server check |
@@ -115,3 +115,5 @@ the live bot checkout, database, and service were not changed. These are observe
 times, not a fixed performance guarantee.
 
 The update-announcement feature adds one server check (23 total). Its delivery is mocked, so installation checks never post a real announcement. The 22-check timing above describes the original test-speed audit.
+
+Owner announcement permissions and quiet defaults add another server check (24 total). Automatic and manual delivery are mocked in all installation tests.

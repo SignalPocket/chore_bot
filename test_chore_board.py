@@ -181,6 +181,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_update_notice_once_per_release_concurrent_and_no_mentions(self):
         import chore_board
+        self.ui.set_announcement_mode(301104023405199361,True,self.ui.announcement_mode())
         channel=SimpleNamespace(id=2,guild=SimpleNamespace(id=1),send=AsyncMock(return_value=SimpleNamespace(id=30)))
         before={t:self.db.execute('SELECT * FROM '+t).fetchall() for t in ('quests','users','claims','completion_log')}
         with patch.object(chore_board,'current_release',return_value='a'*40),patch.object(self.app.bot,'get_channel',return_value=channel):
@@ -198,6 +199,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_update_notice_restart_keeps_delivery_record(self):
         import chore_board
+        self.ui.set_announcement_mode(301104023405199361,True,self.ui.announcement_mode())
         channel=SimpleNamespace(id=2,guild=SimpleNamespace(id=1),send=AsyncMock(return_value=SimpleNamespace(id=30)))
         with patch.object(chore_board,'current_release',return_value='a'*40),patch.object(self.app.bot,'get_channel',return_value=channel):
             await self.ui.announce_update()
@@ -212,6 +214,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_update_notice_uncertain_send_never_retries(self):
         import chore_board
+        self.ui.set_announcement_mode(301104023405199361,True,self.ui.announcement_mode())
         channel=SimpleNamespace(id=2,guild=SimpleNamespace(id=1),send=AsyncMock(side_effect=TimeoutError('reply lost')))
         with patch.object(chore_board,'current_release',return_value='a'*40),patch.object(self.app.bot,'get_channel',return_value=channel):
             with self.assertLogs('discord.sprig',level='ERROR'):
@@ -222,6 +225,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_update_notice_missing_release_setup_and_wrong_channel_send_nothing(self):
         import chore_board
+        self.ui.set_announcement_mode(301104023405199361,True,self.ui.announcement_mode())
         channel=SimpleNamespace(id=2,guild=SimpleNamespace(id=99),send=AsyncMock())
         with patch.object(chore_board,'current_release',return_value=None):
             self.assertEqual(await self.ui.announce_update(),'no_release')
@@ -236,6 +240,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_update_notice_channel_lookup_rechecks_canonical_location(self):
         import chore_board
+        self.ui.set_announcement_mode(301104023405199361,True,self.ui.announcement_mode())
         channel=SimpleNamespace(id=2,guild=SimpleNamespace(id=1),send=AsyncMock())
         async def changed(cid):
             self.db.execute("UPDATE chore_board SET channel_id='4'");self.db.commit()
@@ -265,6 +270,123 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         with patch('subprocess.run',return_value=SimpleNamespace(stdout='a'*40+'\n')):
             self.assertEqual(chore_board.current_release(Path(self.temp.name)),'a'*40)
 
+    async def test_announcement_controls_are_owner_only_including_forged_callbacks(self):
+        w=self.ui.workspace;owner=301104023405199361
+        self.assertIn('Update announcements',[getattr(c,'label',None) for c in w.Dashboard(owner).children])
+        self.assertNotIn('Update announcements',[getattr(c,'label',None) for c in w.Dashboard(10).children])
+        denied=w.Announcements(10)
+        self.assertNotIn('Announce this update',[getattr(c,'label',None) for c in denied.children])
+        view=w.Announcements(owner)
+        for label in ('Turn automatic on','Announce this update'):
+            event=Interaction(10)
+            await next(c for c in view.children if getattr(c,'label',None)==label).callback(event)
+            self.assertTrue(event.response.wire_payload[1]['ephemeral'])
+        self.assertIn('Only ginaria',self.ui.set_announcement_mode(10,True,(False,0)))
+        self.assertEqual(await self.ui.announce_update(manual_actor=10),'owner_only')
+        self.assertEqual(self.ui.announcement_mode(),(False,0))
+
+    async def test_announcement_mode_quiet_default_toggle_stale_and_persistence(self):
+        import chore_board
+        owner=301104023405199361
+        self.assertEqual(self.ui.announcement_mode(),(False,0))
+        with patch.object(chore_board,'current_release') as release:
+            self.assertEqual(await self.ui.announce_update(),'disabled');release.assert_not_called()
+        self.assertIn('on',self.ui.set_announcement_mode(owner,True,(False,0)))
+        self.assertIn('changed',self.ui.set_announcement_mode(owner,False,(False,0)))
+        self.assertEqual(self.ui.announcement_mode(),(True,1))
+        self.ui.set_announcement_mode(owner,False,(True,1))
+        spec=importlib.util.spec_from_file_location('sprig_quiet_restart',self.app.__file__)
+        restarted=importlib.util.module_from_spec(spec);spec.loader.exec_module(restarted)
+        try:
+            self.assertEqual(restarted.chore_ui.announcement_mode(),(False,2))
+            self.assertEqual(await restarted.chore_ui.announce_update(),'disabled')
+        finally:
+            await restarted.bot.close();restarted.db.close()
+
+    async def test_manual_announcement_confirmation_cancel_owner_checks_and_dedup(self):
+        import chore_board
+        w=self.ui.workspace;owner=301104023405199361
+        channel=SimpleNamespace(id=2,guild=SimpleNamespace(id=1),send=AsyncMock(return_value=SimpleNamespace(id=30)))
+        view=w.Announcements(owner)
+        button=next(c for c in view.children if getattr(c,'label',None)=='Announce this update')
+        event=Interaction(owner);await button.callback(event)
+        confirm=event.response.payload['view']
+        self.assertIn('<#2>',confirm.embed.description)
+        self.assertIn(chore_board.UPDATE_NOTICE,confirm.embed.description)
+        event=Interaction(owner);await next(c for c in confirm.children if getattr(c,'label',None)=='Cancel').callback(event)
+        channel.send.assert_not_awaited()
+        with patch.object(chore_board,'current_release',return_value='a'*40),patch.object(self.app.bot,'get_channel',return_value=channel):
+            save=next(c for c in confirm.children if getattr(c,'label',None)=='Confirm')
+            wrong=Interaction(10);await save.callback(wrong)
+            channel.send.assert_not_awaited()
+            event=Interaction(owner);await save.callback(event)
+            self.assertIsInstance(event.wire_result['view'],w.LayoutPanel)
+            await save.callback(Interaction(owner))
+        channel.send.assert_awaited_once()
+        self.assertEqual(self.ui.announcement_mode(),(False,0))
+
+    async def test_automatic_announcement_cancels_if_owner_turns_it_off_during_lookup(self):
+        import chore_board
+        owner=301104023405199361
+        self.ui.set_announcement_mode(owner,True,(False,0))
+        channel=SimpleNamespace(id=2,guild=SimpleNamespace(id=1),send=AsyncMock())
+        async def fetch(cid):
+            self.ui.set_announcement_mode(owner,False,self.ui.announcement_mode())
+            return channel
+        with patch.object(chore_board,'current_release',return_value='a'*40),patch.object(self.app.bot,'get_channel',return_value=None),patch.object(self.app.bot,'fetch_channel',side_effect=fetch):
+            self.assertEqual(await self.ui.announce_update(),'changed')
+        channel.send.assert_not_awaited()
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM update_announcements').fetchone(),(0,))
+
+    async def test_manual_announcement_rechecks_confirmed_destination_after_acknowledgement(self):
+        import chore_board
+        w=self.ui.workspace;owner=301104023405199361
+        channel=SimpleNamespace(id=4,guild=SimpleNamespace(id=1),send=AsyncMock())
+        view=w.Announcements(owner);event=Interaction(owner)
+        await next(c for c in view.children if getattr(c,'label',None)=='Announce this update').callback(event)
+        confirm=event.response.payload['view']
+        async def change_during_ack():
+            self.db.execute("UPDATE chore_board SET channel_id='4'");self.db.commit()
+        event=Interaction(owner);event.response.defer=AsyncMock(side_effect=change_during_ack)
+        with patch.object(chore_board,'current_release',return_value='a'*40),patch.object(self.app.bot,'get_channel',return_value=channel):
+            await next(c for c in confirm.children if getattr(c,'label',None)=='Confirm').callback(event)
+        channel.send.assert_not_awaited()
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM update_announcements').fetchone(),(0,))
+
+    async def test_announcement_expired_confirmation_recovers_without_posting(self):
+        w=self.ui.workspace;owner=301104023405199361
+        panel=w.render(w.Announcements(owner))
+        event=Interaction(owner)
+        await next(c for c in panel.walk_children() if getattr(c,'label',None)=='Announce this update').callback(event)
+        confirmation=event.response.wire_payload['view']
+        save=next(c for c in confirmation.walk_children() if getattr(c,'label',None)=='Confirm')
+        w.recovery.live.clear()
+        event=Interaction(owner);await save.callback(event)
+        self.assertIsInstance(event.response.payload['view'],w.Announcements)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM update_announcements').fetchone(),(0,))
+        self.assertEqual(self.ui.announcement_mode(),(False,0))
+
+    async def test_announcement_preferences_do_not_invalidate_chore_actions(self):
+        recovery=self.ui.workspace.recovery
+        before=recovery.fingerprint()
+        self.ui.set_announcement_mode(301104023405199361,True,self.ui.announcement_mode())
+        self.db.execute("INSERT INTO update_announcements VALUES(?, '1','2','sent','30')",('a'*40,));self.db.commit()
+        self.assertEqual(recovery.fingerprint(),before)
+
+    async def test_pickup_uses_horizontal_card_and_keeps_slot_information(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("UPDATE quests SET frequency='twice-daily' WHERE id=1");self.db.commit()
+            panel=w.render(w.Browse(10,'pickup'))
+            card=next(c for c in panel.children if isinstance(c,discord.ui.Container))
+            row=self.pickup_rows(panel)[0]
+            self.assertIn('**Fill dishwasher** · ',row.children[0].content)
+            self.assertIn('AM slot',row.children[0].content)
+            self.assertNotIn('Needs someone',row.children[0].content)
+            self.assertNotIn('Due now',row.children[0].content)
+            self.assertEqual([b.label for b in card.children[1].children],['Claim','Details'])
+            self.assertFalse(card.spoiler)
+
     async def audit9_queue(self,*actions):
         # Queue real callbacks behind the production mutation lock, in each
         # tested order, without wall-clock sleeps or replacing DB operations.
@@ -277,11 +399,14 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
 
     def pickup_rows(self,panel):
         rows=[]
-        for index,item in enumerate(panel.children):
+        children=[]
+        for item in panel.children:
+            children.extend(item.children if isinstance(item,discord.ui.Container) else [item])
+        for index,item in enumerate(children):
             if isinstance(item,discord.ui.Section):
                 rows.append(item)
-            elif isinstance(item,discord.ui.TextDisplay) and index+1<len(panel.children):
-                actions=panel.children[index+1]
+            elif isinstance(item,discord.ui.TextDisplay) and index+1<len(children):
+                actions=children[index+1]
                 if isinstance(actions,discord.ui.ActionRow) and [getattr(b,'label',None) for b in actions.children]==['Claim','Details']:
                     rows.append(SimpleNamespace(children=[item],accessory=actions.children[0],details=actions.children[1]))
         return rows

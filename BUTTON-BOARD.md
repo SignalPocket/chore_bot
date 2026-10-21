@@ -101,7 +101,7 @@ Old saved public panel buttons must be refreshed after deployment. The persisten
 4. Stop the existing sprig service interactively and verify inactive.
 5. Back up the entire server checkout and database, record the previous commit, and verify the backup database integrity before updating.
 6. Fetch and fast-forward only to the exact approved commit. Preserve the existing database, environment, and untracked historical backup.
-7. Install the approved requirements in the existing virtual environment (`.venv/bin/python -m pip install -r requirements.txt`); Components V2 requires discord.py >=2.6,<3. Run `python run_tests.py --suite server --release-report /home/discordbot/sprig-release-tests.json --profile` using the server virtual environment while the service remains stopped. This compiles all eight modules and runs 23 installation checks, gated by the passing full local report. For major dependency, Python, migration, or deployment changes, also run the full suite on the server. See [TESTING.md](TESTING.md) for report transfer and failure handling.
+7. Install the approved requirements in the existing virtual environment (`.venv/bin/python -m pip install -r requirements.txt`); Components V2 requires discord.py >=2.6,<3. Run `python run_tests.py --suite server --release-report /home/discordbot/sprig-release-tests.json --profile` using the server virtual environment while the service remains stopped. This compiles all eight modules and runs 24 installation checks, gated by the passing full local report. For major dependency, Python, migration, or deployment changes, also run the full suite on the server. See [TESTING.md](TESTING.md) for report transfer and failure handling.
 8. Start the existing sprig service interactively; verify active/running and normal startup logs.
 9. Reopen /chores. An administrator runs !refreshchoreboard once to edit the existing saved launcher rather than posting another one. No slash re-registration is needed for this upgrade.
 10. Check real Discord layout on desktop/mobile and with two household accounts: future work, one claim/Done/Undo, weekly reservation, trip preview/edit, owner inbox access, and notification opt-in. Live rendering and notification delivery are not proven by offline tests.
@@ -170,8 +170,8 @@ Calendar on the Dashboard opens today’s dated chores in Eastern time. Use Prev
 
 ## Update announcement
 
-After a new installed Git commit starts successfully, Sprig posts once in the
-configured household chores channel: **Sprig has been updated. Open /chores for
+If ginaria enables automatic announcements, a new installed Git commit posts
+once after startup in the configured household chores channel: **Sprig has been updated. Open /chores for
 fresh controls.** There are no mentions or mass pings. Open /chores again to get
 the updated controls; existing chores, assignments, points, and history remain.
 
@@ -194,3 +194,29 @@ claiming it. Back returns to the same filtered page. Future/next-week work keeps
 Details without an early Claim, and away people can still read Details while
 Claim is disabled. The footer uses Refresh / Resume instead of a second Refresh
 button. All controls and replies stay private.
+
+
+## Owner announcement choices and horizontal pickup card
+
+Ginaria opens **Dashboard → Update announcements**. Automatic announcements
+default **Off**, including when upgrading from the earlier always-automatic
+release. This gives a quiet restart until the owner deliberately enables them.
+The switch persists across restarts. Turning it on applies to future starts; it
+does not post immediately. Turning it off during preparation cancels that
+automatic attempt before sending.
+
+**Announce this update** works even while automatic announcements are off. It
+shows the exact message and destination, then requires Confirm. Cancel posts
+nothing. Owner checks apply again at confirmation, and changed destinations or
+expired screens require fresh review. There is still at most one attempt per
+release: already posted or uncertain notices cannot be reposted by the button.
+No pings or new personal DMs are added.
+
+Pick up chores now uses a framed Components V2 card. Chore name and schedule run
+across one text line where they fit, followed by Claim and Details together.
+Due-now pickup rows omit redundant Needs someone / Due now labels while keeping
+AM/PM slots, estimates, help notes, and away warnings. Other dates retain their
+status. Details replaces the redundant card picker in this view. Discord controls
+the actual displayed width and wrapping; the bot cannot set a pixel width or
+force full-window columns. This layout needs a real Discord visual check after
+deployment; serialized-component tests do not prove that it looks wider.

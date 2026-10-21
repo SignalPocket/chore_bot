@@ -48,7 +48,7 @@ def install(ns, ui, w):
         digest = hashlib.sha256()
         tables = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall()
         for name, in tables:
-            if name.startswith('workspace_') or name in ('reminder_deliveries', 'trade_notifications', 'feedback_notifications'):
+            if name.startswith('workspace_') or name in ('reminder_deliveries', 'trade_notifications', 'feedback_notifications', 'update_announcements', 'announcement_settings'):
                 continue
             quoted = '"' + name.replace('"', '""') + '"'
             rows = db.execute('SELECT * FROM '+quoted+' ORDER BY rowid').fetchall()
@@ -62,6 +62,8 @@ def install(ns, ui, w):
         kind = context.get('screen')
         parent_context = context.get('parent', {'screen': 'dashboard'})
         parent = lambda: restore(owner, parent_context, guild, depth+1)
+        if kind == 'announcements':
+            return w.Announcements(owner,guild)
         if kind == 'browse':
             return w.Browse(owner, guild=guild, **context['state'])
         if kind == 'card':

@@ -177,10 +177,32 @@ def install(namespace):
         status TEXT NOT NULL, message_id TEXT)""")
     db.commit()
 
-    async def announce_update():
+    db.execute("""CREATE TABLE IF NOT EXISTS announcement_settings (
+        singleton INTEGER PRIMARY KEY CHECK(singleton=1), automatic INTEGER NOT NULL,
+        revision INTEGER NOT NULL)""")
+    db.commit()
+
+    def announcement_mode():
+        row = db.execute('SELECT automatic,revision FROM announcement_settings WHERE singleton=1').fetchone()
+        return (bool(row[0]),row[1]) if row else (False,0)
+
+    def set_announcement_mode(actor,enabled,expected):
+        if str(actor)!=str(REVIEW_OWNER_ID):return 'Only ginaria can change update announcements.'
+        if announcement_mode()!=expected:return 'This setting changed. Review the current choice.'
+        with db:
+            db.execute('INSERT INTO announcement_settings VALUES(1,?,?) ON CONFLICT(singleton) DO UPDATE SET automatic=excluded.automatic,revision=excluded.revision',
+                (int(bool(enabled)),expected[1]+1))
+        return 'Automatic update announcements are '+('on.' if enabled else 'off. You can still choose Announce this update.')
+
+    async def announce_update(manual_actor=None,expected_location=None):
+        if manual_actor is not None and str(manual_actor)!=str(REVIEW_OWNER_ID):
+            return 'owner_only'
+        expected_mode=announcement_mode()
+        if manual_actor is None and not expected_mode[0]:return 'disabled'
         import logging
         logger = logging.getLogger('discord.sprig')
         saved = location()
+        if expected_location is not None and saved!=expected_location:return 'changed'
         if not saved or saved[2] == 'pending':
             return 'not_configured'
         release = await asyncio.to_thread(current_release, api.BASE_DIR)
@@ -193,7 +215,7 @@ def install(namespace):
         except Exception:
             logger.exception('Update notice channel lookup failed; no message was attempted')
             return 'lookup_failed'
-        if location() != saved:
+        if location() != saved or (manual_actor is None and announcement_mode()!=expected_mode):
             return 'changed'
         if (str(getattr(channel, 'id', '')) != saved[1]
                 or str(getattr(getattr(channel, 'guild', None), 'id', '')) != saved[0]):
@@ -2044,4 +2066,6 @@ def install(namespace):
                 END""")
     db.commit()
     result.announce_update = announce_update
+    result.announcement_mode = announcement_mode
+    result.set_announcement_mode = set_announcement_mode
     return result

@@ -197,6 +197,7 @@ def install(ns, ui, lock):
             if owner == OWNER:
                 count = db.execute('SELECT COUNT(*) FROM chore_feedback WHERE reviewed=0').fetchone()[0]
                 self.button(f'Review inbox ({count})', lambda i: present(i, Inbox(owner, i.guild)), row=2)
+                self.button('Update announcements',lambda i:present(i,Announcements(owner,i.guild)),row=2)
             if guild:
                 member = member or getattr(guild, 'get_member', lambda uid: None)(owner)
                 if member and getattr(getattr(member, 'guild_permissions', None), 'manage_guild', False):
@@ -535,6 +536,8 @@ def install(ns, ui, lock):
                         slot='AM slot' if q[2]=='twice-daily' and timing.now().hour<12 else 'PM slot' if q[2]=='twice-daily' else ''
                         if slot:details+='\n'+slot
                     else:details+='\n'+status
+                elif area=='pickup' and tab=='due' and not uid:
+                    if q[2] in ('twice-daily','daily-am','daily-pm'):details+=' · '+status.removeprefix('Due now · ')
                 else:details+='\n'+clean(person(uid,guild),100)+' · '+status
                 if warning:details+='\n⚠ '+clean(warning,180)
                 self.embed.add_field(name=clean(heading,200),value=details[:450],inline=False)
@@ -577,9 +580,12 @@ def install(ns, ui, lock):
                 return discord.ui.TextDisplay(value)
             header=text((('**'+str(notice)+'**\n\n') if notice else '')+(('# '+embed.title+'\n') if embed and embed.title else '')+(embed.description or '' if embed else ''))
             if header:self.add_item(header)
+            body=discord.ui.Container(accent_colour=0x6B9B77) if isinstance(source,Browse) and source.state['area']=='pickup' else None
+            def add_body(item):
+                (body if body is not None else self).add_item(item)
             if embed:
                 for index,field in enumerate(embed.fields):
-                    content=text('### '+field.name+'\n'+(field.value[:300] if isinstance(source,Browse) else field.value))
+                    content=text(('**'+field.name+'** · '+field.value[:300].replace('\n',' · ')) if body is not None else ('### '+field.name+'\n'+(field.value[:300] if isinstance(source,Browse) else field.value)))
                     if not content:break
                     if isinstance(source,Browse) and index<len(source.quick_rows):
                         qid,expected,can_done=source.quick_rows[index]
@@ -610,17 +616,20 @@ def install(ns, ui, lock):
                                 if not await source.interaction_check(i):return
                                 await present(i,Card(source.owner,qid,lambda:Browse(source.owner,**source.state,guild=i.guild),i.guild))
                             details.callback=open_details
-                            self.add_item(content)
-                            self.add_item(discord.ui.ActionRow(button,details))
+                            add_body(content)
+                            add_body(discord.ui.ActionRow(button,details))
                         else:
-                            self.add_item(discord.ui.Section(content,accessory=button))
-                    else:self.add_item(content)
+                            add_body(discord.ui.Section(content,accessory=button))
+                    else:add_body(content)
+                if body is not None and body.children:self.add_item(body)
                 footer=text('-# '+((embed.footer.text+' · ') if embed.footer and embed.footer.text else '')+'Refresh / Resume keeps your place if controls expire.')
                 if footer:self.add_item(footer)
             rows={}
             row_ids={child['custom_id']:index for index,row in enumerate(source.to_components()) for child in row.get('components',[]) if 'custom_id' in child}
             paging=[]
             for item in source.children:
+                if isinstance(source,Browse) and source.state['area']=='pickup' and isinstance(item,discord.ui.Select) and item.placeholder=='Open a chore card…':
+                    continue  # Each chore already has its own Details button.
                 # Paired pickup controls use the existing Refresh / Resume;
                 # omit the duplicate Refresh to stay within Discord's limit.
                 if isinstance(source,Browse) and source.state['area']=='pickup' and isinstance(item,discord.ui.Button) and item.label=='Refresh':
@@ -946,6 +955,49 @@ def install(ns, ui, lock):
             self.button('Archived chores',lambda i:present(i,adapt(ui.RemoveChoreView(owner,removed=True),owner,back)))
             self.nav()
 
+    class Announcements(View):
+        def __init__(self,owner,guild=None):
+            super().__init__(owner)
+            self.recovery_context={'screen':'announcements'}
+            expected=ui.announcement_mode()
+            self.embed=discord.Embed(title='Update announcements',description='Only ginaria controls these household announcements.',color=0x6B9B77)
+            if owner!=OWNER:
+                self.embed.description='Only ginaria can manage update announcements.'
+                self.nav();return
+            self.embed.description='Automatic update announcements: **'+('On' if expected[0] else 'Off')+'**. Off means a quiet start. Announce this update lets you post deliberately even while automatic announcements are off. One notice per release; uncertain sends are never repeated. No pings.'
+            async def toggle(i):
+                if not await self.interaction_check(i):return
+                async with lock:message=ui.set_announcement_mode(i.user.id,not expected[0],expected)
+                await present(i,Announcements(owner,i.guild),message)
+            self.button('Turn automatic '+('off' if expected[0] else 'on'),toggle,row=0)
+            async def announce(i):
+                if not await self.interaction_check(i):return
+                saved=db.execute('SELECT guild_id,channel_id,message_id FROM chore_board WHERE singleton=1').fetchone()
+                if not saved or saved[2]=='pending':return await present(i,Announcements(owner,i.guild),'Set up the household chores channel first.')
+                async def save(event):
+                    if not await self.interaction_check(event):return
+                    if db.execute('SELECT guild_id,channel_id,message_id FROM chore_board WHERE singleton=1').fetchone()!=saved:
+                        return await present(event,Announcements(owner,event.guild),'The destination changed. Review it again; no notice was sent.')
+                    await event.response.defer()
+                    status=await ui.announce_update(manual_actor=event.user.id,expected_location=saved)
+                    messages={'sent':'Update announced.','already_attempted':'This release was already announced or attempted; no duplicate was sent.',
+                        'failed_uncertain':'Delivery is uncertain. Check the chores channel; it will not be repeated.',
+                        'no_release':'Could not identify the installed release. No notice was sent.',
+                        'changed':'Settings or destination changed. No notice was sent.',
+                        'lookup_failed':'Could not open the chores channel. No notice was sent.',
+                        'wrong_channel':'The channel did not match the household. No notice was sent.'}
+                    await present(event,Announcements(owner,event.guild),messages.get(status,'No notice was sent.'))
+                from chore_board import UPDATE_NOTICE
+                await present(i,Confirm(owner,'Announce this update?',f'Post as ChoreSprite in <#{saved[1]}>:\n\n'+UPDATE_NOTICE+'\n\nNo pings. An already attempted release will not post again.',save,lambda:Announcements(owner,i.guild)))
+            self.button('Announce this update',announce,row=0,primary=True)
+            self.nav()
+
+        async def interaction_check(self,i):
+            if self.owner!=OWNER or i.user.id!=OWNER:
+                await i.response.send_message('Only ginaria can manage update announcements.',ephemeral=True)
+                return False
+            return await super().interaction_check(i)
+
     class Notifications(View):
         def __init__(self, owner):
             super().__init__(owner)
@@ -1156,7 +1208,7 @@ def install(ns, ui, lock):
             self.add_item(picker)
             self.nav()
 
-    result = SimpleNamespace(Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
+    result = SimpleNamespace(Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
 
     from chore_recovery import install as install_recovery
     recovery = install_recovery(ns, ui, result)
