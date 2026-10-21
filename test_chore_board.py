@@ -179,6 +179,92 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         bodies=Counter(ast.dump(ast.Module(body=n.body,type_ignores=[]),include_attributes=False) for n in methods)
         self.assertTrue(all(count==1 for count in bodies.values()),'Identical test bodies should be consolidated')
 
+    async def test_update_notice_once_per_release_concurrent_and_no_mentions(self):
+        import chore_board
+        channel=SimpleNamespace(id=2,guild=SimpleNamespace(id=1),send=AsyncMock(return_value=SimpleNamespace(id=30)))
+        before={t:self.db.execute('SELECT * FROM '+t).fetchall() for t in ('quests','users','claims','completion_log')}
+        with patch.object(chore_board,'current_release',return_value='a'*40),patch.object(self.app.bot,'get_channel',return_value=channel):
+            await asyncio.gather(self.ui.announce_update(),self.ui.announce_update())
+            self.assertEqual(await self.ui.announce_update(),'already_attempted')
+        channel.send.assert_awaited_once()
+        args,kwargs=channel.send.call_args
+        self.assertEqual(args,('Sprig has been updated. Open /chores for fresh controls.',))
+        self.assertEqual(kwargs['allowed_mentions'].to_dict(),{'parse':[]})
+        self.assertEqual(self.db.execute('SELECT status,message_id FROM update_announcements').fetchall(),[('sent','30')])
+        self.assertEqual(before,{t:self.db.execute('SELECT * FROM '+t).fetchall() for t in before})
+        with patch.object(chore_board,'current_release',return_value='b'*40),patch.object(self.app.bot,'get_channel',return_value=channel):
+            self.assertEqual(await self.ui.announce_update(),'sent')
+        self.assertEqual(channel.send.await_count,2)
+
+    async def test_update_notice_restart_keeps_delivery_record(self):
+        import chore_board
+        channel=SimpleNamespace(id=2,guild=SimpleNamespace(id=1),send=AsyncMock(return_value=SimpleNamespace(id=30)))
+        with patch.object(chore_board,'current_release',return_value='a'*40),patch.object(self.app.bot,'get_channel',return_value=channel):
+            await self.ui.announce_update()
+        spec=importlib.util.spec_from_file_location('sprig_notice_restarted',self.app.__file__)
+        restarted=importlib.util.module_from_spec(spec);spec.loader.exec_module(restarted)
+        try:
+            with patch.object(chore_board,'current_release',return_value='a'*40),patch.object(restarted.bot,'get_channel',return_value=channel):
+                self.assertEqual(await restarted.chore_ui.announce_update(),'already_attempted')
+            channel.send.assert_awaited_once()
+        finally:
+            await restarted.bot.close();restarted.db.close()
+
+    async def test_update_notice_uncertain_send_never_retries(self):
+        import chore_board
+        channel=SimpleNamespace(id=2,guild=SimpleNamespace(id=1),send=AsyncMock(side_effect=TimeoutError('reply lost')))
+        with patch.object(chore_board,'current_release',return_value='a'*40),patch.object(self.app.bot,'get_channel',return_value=channel):
+            with self.assertLogs('discord.sprig',level='ERROR'):
+                self.assertEqual(await self.ui.announce_update(),'failed_uncertain')
+            self.assertEqual(await self.ui.announce_update(),'already_attempted')
+        channel.send.assert_awaited_once()
+        self.assertEqual(self.db.execute('SELECT status FROM update_announcements').fetchone(),('failed_uncertain',))
+
+    async def test_update_notice_missing_release_setup_and_wrong_channel_send_nothing(self):
+        import chore_board
+        channel=SimpleNamespace(id=2,guild=SimpleNamespace(id=99),send=AsyncMock())
+        with patch.object(chore_board,'current_release',return_value=None):
+            self.assertEqual(await self.ui.announce_update(),'no_release')
+        with patch.object(chore_board,'current_release',return_value='a'*40),patch.object(self.app.bot,'get_channel',return_value=channel):
+            self.assertEqual(await self.ui.announce_update(),'wrong_channel')
+            self.db.execute("UPDATE chore_board SET message_id='pending'");self.db.commit()
+            self.assertEqual(await self.ui.announce_update(),'not_configured')
+            self.db.execute('DELETE FROM chore_board');self.db.commit()
+            self.assertEqual(await self.ui.announce_update(),'not_configured')
+        channel.send.assert_not_awaited()
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM update_announcements').fetchone(),(0,))
+
+    async def test_update_notice_channel_lookup_rechecks_canonical_location(self):
+        import chore_board
+        channel=SimpleNamespace(id=2,guild=SimpleNamespace(id=1),send=AsyncMock())
+        async def changed(cid):
+            self.db.execute("UPDATE chore_board SET channel_id='4'");self.db.commit()
+            return channel
+        with patch.object(chore_board,'current_release',return_value='a'*40),patch.object(self.app.bot,'get_channel',return_value=None),patch.object(self.app.bot,'fetch_channel',side_effect=changed):
+            self.assertEqual(await self.ui.announce_update(),'changed')
+        channel.send.assert_not_awaited()
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM update_announcements').fetchone(),(0,))
+
+    async def test_update_notice_ready_hook_and_failure_do_not_interrupt_startup(self):
+        from unittest.mock import Mock
+        loop=SimpleNamespace(is_running=Mock(return_value=True),start=Mock())
+        with patch('builtins.print'),patch.object(self.app,'quest_reset_loop',loop),patch.object(self.ui,'announce_update',new_callable=AsyncMock) as announce:
+            await self.app.on_ready();announce.assert_awaited_once()
+            announce.side_effect=RuntimeError('announcement unavailable')
+            with self.assertLogs('discord.sprig',level='ERROR'):
+                await self.app.on_ready()
+        loop.start.assert_not_called()
+
+    async def test_update_notice_release_detection_rejects_invalid_git_and_timeout(self):
+        import chore_board,subprocess
+        for output in ('', 'not-a-sha', 'a'*40+' extra'):
+            with patch('subprocess.run',return_value=SimpleNamespace(stdout=output)):
+                self.assertIsNone(chore_board.current_release(Path(self.temp.name)))
+        with patch('subprocess.run',side_effect=subprocess.TimeoutExpired('git',3)):
+            self.assertIsNone(chore_board.current_release(Path(self.temp.name)))
+        with patch('subprocess.run',return_value=SimpleNamespace(stdout='a'*40+'\n')):
+            self.assertEqual(chore_board.current_release(Path(self.temp.name)),'a'*40)
+
     async def audit9_queue(self,*actions):
         # Queue real callbacks behind the production mutation lock, in each
         # tested order, without wall-clock sleeps or replacing DB operations.
@@ -189,12 +275,23 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                 for _ in range(3):await asyncio.sleep(0)
         await asyncio.gather(*tasks)
 
+    def pickup_rows(self,panel):
+        rows=[]
+        for index,item in enumerate(panel.children):
+            if isinstance(item,discord.ui.Section):
+                rows.append(item)
+            elif isinstance(item,discord.ui.TextDisplay) and index+1<len(panel.children):
+                actions=panel.children[index+1]
+                if isinstance(actions,discord.ui.ActionRow) and [getattr(b,'label',None) for b in actions.children]==['Claim','Details']:
+                    rows.append(SimpleNamespace(children=[item],accessory=actions.children[0],details=actions.children[1]))
+        return rows
+
     async def test_inline_claim_button_claims_matching_chore_without_points_or_checklist_completion(self):
         w=self.ui.workspace;p=self.ui.planning
         with self.clock('2026-10-20T10:00:00'):
             p.save_plan(1,'5','Load cups',p.plan(1))
             panel=w.render(w.Browse(10,'pickup'))
-            row=next(c for c in panel.children if isinstance(c,discord.ui.Section) and 'Fill dishwasher' in c.children[0].content)
+            row=next(c for c in self.pickup_rows(panel) if 'Fill dishwasher' in c.children[0].content)
             self.assertEqual(row.accessory.label,'Claim')
             event=Interaction();await row.accessory.callback(event)
             self.assertEqual(self.ui.owned_scope(1),('10','occurrence'))
@@ -207,7 +304,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_inline_claim_double_tap_and_competing_people_only_one_owner(self):
         w=self.ui.workspace
         with self.clock('2026-10-20T10:00:00'):
-            buttons=[next(c.accessory for c in w.render(w.Browse(uid,'pickup')).children if isinstance(c,discord.ui.Section) and c.accessory.label=='Claim') for uid in (10,20)]
+            buttons=[next(c.accessory for c in self.pickup_rows(w.render(w.Browse(uid,'pickup'))) if c.accessory.label=='Claim') for uid in (10,20)]
             await asyncio.gather(buttons[0].callback(Interaction()),buttons[0].callback(Interaction()),buttons[1].callback(Interaction(20)))
             self.assertEqual(self.db.execute('SELECT COUNT(*) FROM claims WHERE quest_id=1').fetchone(),(1,))
             self.assertIn(self.ui.owned_scope(1)[0],('10','20'))
@@ -216,7 +313,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_inline_claim_stale_assignment_wrong_user_and_away_are_safe(self):
         w=self.ui.workspace
         with self.clock('2026-10-20T10:00:00'):
-            button=next(c.accessory for c in w.render(w.Browse(10,'pickup')).children if isinstance(c,discord.ui.Section) and c.accessory.label=='Claim')
+            button=next(c.accessory for c in self.pickup_rows(w.render(w.Browse(10,'pickup'))) if c.accessory.label=='Claim')
             event=Interaction(20);await button.callback(event)
             self.assertTrue(event.response.wire_payload[1]['ephemeral']);self.assertIsNone(self.ui.owned_scope(1)[0])
             self.ui.reassign(1,20,'assignment',self.ui.reassign_snapshot(1))
@@ -224,7 +321,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.ui.create_chore('Away claim','daily','5','')
             self.ui.attendance.add(10,'2026-10-20','2026-10-20','away')
             panel=w.render(w.Browse(10,'pickup'))
-            buttons=[c.accessory for c in panel.children if isinstance(c,discord.ui.Section) and c.accessory.label=='Claim']
+            buttons=[c.accessory for c in self.pickup_rows(panel) if c.accessory.label=='Claim']
             self.assertTrue(buttons);self.assertTrue(all(b.disabled for b in buttons))
             await buttons[0].callback(Interaction())
             self.assertIsNone(self.ui.owned_scope(self.db.execute('SELECT MAX(id) FROM quests').fetchone()[0])[0])
@@ -234,17 +331,17 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         with self.clock('2026-10-20T10:00:00'):
             self.ui.create_chore('Friday task','friday','5','')
             panel=w.render(w.Browse(10,'pickup',tab='week'))
-            future=next(c for c in panel.children if isinstance(c,discord.ui.Section) and 'Friday task' in c.children[0].content)
+            future=next(c for c in self.pickup_rows(panel) if 'Friday task' in c.children[0].content)
             self.assertEqual(future.accessory.label,'Details')
             panel=w.render(w.Browse(10,'pickup',tab='next'))
-            self.assertTrue(all(c.accessory.label=='Details' for c in panel.children if isinstance(c,discord.ui.Section)))
+            self.assertTrue(all(c.accessory.label=='Details' for c in self.pickup_rows(panel)))
 
     async def test_inline_claim_keeps_filters_and_clamps_last_page(self):
         w=self.ui.workspace
         with self.clock('2026-10-20T10:00:00'):
             for n in range(6):self.ui.create_chore(f'Pickup {n}','one-time','5','')
             panel=w.render(w.Browse(10,'pickup',tab='all',query='Pickup',page=1))
-            button=next(c.accessory for c in panel.children if isinstance(c,discord.ui.Section) and c.accessory.label=='Claim')
+            button=next(c.accessory for c in self.pickup_rows(panel) if c.accessory.label=='Claim')
             event=Interaction();await button.callback(event)
             view=event.response.payload['view']
             self.assertEqual(view.state['query'],'Pickup');self.assertEqual(view.state['tab'],'all');self.assertEqual(view.state['page'],0)
@@ -254,10 +351,41 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         w=self.ui.workspace
         with self.clock('2026-10-20T10:00:00'):
             panel=w.render(w.Browse(10,'pickup'));token=panel.recovery_token
-            button=next(c.accessory for c in panel.children if isinstance(c,discord.ui.Section) and c.accessory.label=='Claim')
+            button=next(c.accessory for c in self.pickup_rows(panel) if c.accessory.label=='Claim')
             w.recovery.live.clear();event=Interaction();await button.callback(event)
             self.assertIsNone(self.ui.owned_scope(1)[0]);self.assertEqual(event.response.payload['view'].state['area'],'pickup')
             self.assertIn('Nothing was repeated',event.response.payload['content'])
+
+    async def test_pickup_claim_and_details_are_paired_and_details_keeps_filtered_place(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            for n in range(6):self.ui.create_chore(f'Paired {n}','daily','5','Instructions '+str(n))
+            source=w.Browse(10,'pickup',query='Paired',page=1)
+            panel=w.render(source);rows=self.pickup_rows(panel)
+            self.assertEqual(len(rows),1)
+            row=rows[0];self.assertEqual((row.accessory.label,row.details.label),('Claim','Details'))
+            before={t:self.db.execute('SELECT * FROM '+t).fetchall() for t in ('quests','users','claims','completion_log')}
+            event=Interaction();await row.details.callback(event)
+            card=event.response.payload['view'];self.assertEqual(card.qid,source.entries[5][0])
+            self.assertEqual(before,{t:self.db.execute('SELECT * FROM '+t).fetchall() for t in before})
+            event=Interaction();await next(c for c in card.children if getattr(c,'label',None)=='Back').callback(event)
+            view=event.response.payload['view'];self.assertEqual((view.state['area'],view.state['query'],view.state['page']),('pickup','Paired',1))
+            event=Interaction(20);await row.details.callback(event)
+            self.assertTrue(event.response.wire_payload[1]['ephemeral'])
+
+    async def test_pickup_paired_controls_fit_discord_and_match_each_chore(self):
+        w=self.ui.workspace
+        def count(items):
+            return sum(1+count(item.get('components',[]))+count([item['accessory']] if item.get('accessory') else []) for item in items)
+        with self.clock('2026-10-20T10:00:00'):
+            for n in range(16):self.ui.create_chore(f'Paired {n:02}','daily','5','')
+            source=w.Browse(10,'pickup',query='Paired',page=1)
+            panel=w.render(source);rows=self.pickup_rows(panel)
+            self.assertEqual(len(rows),5)
+            self.assertLessEqual(count(panel.to_components()),40)
+            for row,entry in zip(rows,source.entries[5:10]):
+                event=Interaction();await row.details.callback(event)
+                self.assertEqual(event.response.payload['view'].qid,entry[0])
 
     async def test_audit10_completion_drop_archive_and_move_during_lookup_cancel(self):
         p=self.ui.planning

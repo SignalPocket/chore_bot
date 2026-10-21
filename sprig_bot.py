@@ -1300,6 +1300,12 @@ async def on_ready():
     if not quest_reset_loop.is_running():
         quest_reset_loop.start()
 
+    try:
+        await chore_ui.announce_update()
+    except Exception:
+        import logging
+        logging.getLogger('discord.sprig').exception('Update notice failed; bot remains available')
+
     print(
         f"Sprig is alive as {bot.user} 🌱 "
         f"({QUEST_TIMEZONE_NAME}; reset {reset_count} due quest(s))"

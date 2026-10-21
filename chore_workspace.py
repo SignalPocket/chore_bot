@@ -604,7 +604,16 @@ def install(ns, ui, lock):
                             result=await task
                             await present(i,Browse(source.owner,**source.state,guild=i.guild),result[:800])
                         button.callback=click
-                        self.add_item(discord.ui.Section(content,accessory=button))
+                        if can_claim:
+                            details=discord.ui.Button(label='Details',style=discord.ButtonStyle.secondary)
+                            async def open_details(i,qid=qid):
+                                if not await source.interaction_check(i):return
+                                await present(i,Card(source.owner,qid,lambda:Browse(source.owner,**source.state,guild=i.guild),i.guild))
+                            details.callback=open_details
+                            self.add_item(content)
+                            self.add_item(discord.ui.ActionRow(button,details))
+                        else:
+                            self.add_item(discord.ui.Section(content,accessory=button))
                     else:self.add_item(content)
                 footer=text('-# '+((embed.footer.text+' · ') if embed.footer and embed.footer.text else '')+'Refresh / Resume keeps your place if controls expire.')
                 if footer:self.add_item(footer)
@@ -612,6 +621,10 @@ def install(ns, ui, lock):
             row_ids={child['custom_id']:index for index,row in enumerate(source.to_components()) for child in row.get('components',[]) if 'custom_id' in child}
             paging=[]
             for item in source.children:
+                # Paired pickup controls use the existing Refresh / Resume;
+                # omit the duplicate Refresh to stay within Discord's limit.
+                if isinstance(source,Browse) and source.state['area']=='pickup' and isinstance(item,discord.ui.Button) and item.label=='Refresh':
+                    continue
                 if isinstance(item,discord.ui.Button) and item.label in getattr(source,'paging_labels',('Previous','Next') if isinstance(source,Browse) else ()):
                     paging.append(item)
                     continue

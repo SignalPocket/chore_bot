@@ -101,7 +101,7 @@ Old saved public panel buttons must be refreshed after deployment. The persisten
 4. Stop the existing sprig service interactively and verify inactive.
 5. Back up the entire server checkout and database, record the previous commit, and verify the backup database integrity before updating.
 6. Fetch and fast-forward only to the exact approved commit. Preserve the existing database, environment, and untracked historical backup.
-7. Install the approved requirements in the existing virtual environment (`.venv/bin/python -m pip install -r requirements.txt`); Components V2 requires discord.py >=2.6,<3. Run `python run_tests.py --suite server --release-report /home/discordbot/sprig-release-tests.json --profile` using the server virtual environment while the service remains stopped. This compiles all eight modules and runs 22 installation checks, gated by the passing full local report. For major dependency, Python, migration, or deployment changes, also run the full suite on the server. See [TESTING.md](TESTING.md) for report transfer and failure handling.
+7. Install the approved requirements in the existing virtual environment (`.venv/bin/python -m pip install -r requirements.txt`); Components V2 requires discord.py >=2.6,<3. Run `python run_tests.py --suite server --release-report /home/discordbot/sprig-release-tests.json --profile` using the server virtual environment while the service remains stopped. This compiles all eight modules and runs 23 installation checks, gated by the passing full local report. For major dependency, Python, migration, or deployment changes, also run the full suite on the server. See [TESTING.md](TESTING.md) for report transfer and failure handling.
 8. Start the existing sprig service interactively; verify active/running and normal startup logs.
 9. Reopen /chores. An administrator runs !refreshchoreboard once to edit the existing saved launcher rather than posting another one. No slash re-registration is needed for this upgrade.
 10. Check real Discord layout on desktop/mobile and with two household accounts: future work, one claim/Done/Undo, weekly reservation, trip preview/edit, owner inbox access, and notification opt-in. Live rendering and notification delivery are not proven by offline tests.
@@ -166,3 +166,31 @@ Due, unclaimed chores in **Pick up chores** have a **Claim** button beside each 
 ### Calendar starts with today
 
 Calendar on the Dashboard opens today’s dated chores in Eastern time. Use Previous day, Today, or Next day to change dates, or Week and Month to see the broader schedule. Existing saved screens still resume their selected date and page.
+
+
+## Update announcement
+
+After a new installed Git commit starts successfully, Sprig posts once in the
+configured household chores channel: **Sprig has been updated. Open /chores for
+fresh controls.** There are no mentions or mass pings. Open /chores again to get
+the updated controls; existing chores, assignments, points, and history remain.
+
+Restarts and Discord reconnects on the same release do not post again. A saved
+per-release delivery claim prevents duplicate announcements, including concurrent
+ready events. If delivery is uncertain, it is logged without automatic retry.
+Missing Git/version information or an unconfigured board produces no notice.
+Channel lookup must match the saved household and channel, and a changed
+destination cancels the attempt. Announcement failure does not stop the bot.
+Offline tests mock channel delivery; deploying the code does not itself post a
+notice until Sprig starts with the approved feature installed.
+
+
+### Claim and Details together
+
+In Pick up chores, each due, available chore has **Claim** and **Details** side by
+side beneath its description. Claim takes the current occurrence immediately;
+Details opens instructions, schedule, weekly sign-ups, and other actions without
+claiming it. Back returns to the same filtered page. Future/next-week work keeps
+Details without an early Claim, and away people can still read Details while
+Claim is disabled. The footer uses Refresh / Resume instead of a second Refresh
+button. All controls and replies stay private.

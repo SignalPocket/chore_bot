@@ -16,6 +16,21 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
+UPDATE_NOTICE = 'Sprig has been updated. Open /chores for fresh controls.'
+
+
+def current_release(base_dir):
+    """Read the deployed commit without a shell or any network access."""
+    import subprocess
+    try:
+        result = subprocess.run(['git', '-C', str(base_dir), 'rev-parse', '--verify', 'HEAD'],
+            capture_output=True, text=True, check=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    sha = result.stdout.strip()
+    return sha if len(sha) == 40 and all(c in '0123456789abcdef' for c in sha) else None
+
+
 def install(namespace):
     api = SimpleNamespace(**namespace)
     bot, db = api.bot, api.db
@@ -156,6 +171,51 @@ def install(namespace):
 
     def location():
         return db.execute("SELECT guild_id, channel_id, message_id FROM chore_board WHERE singleton = 1").fetchone()
+
+    db.execute("""CREATE TABLE IF NOT EXISTS update_announcements (
+        release_id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, channel_id TEXT NOT NULL,
+        status TEXT NOT NULL, message_id TEXT)""")
+    db.commit()
+
+    async def announce_update():
+        import logging
+        logger = logging.getLogger('discord.sprig')
+        saved = location()
+        if not saved or saved[2] == 'pending':
+            return 'not_configured'
+        release = await asyncio.to_thread(current_release, api.BASE_DIR)
+        if not release:
+            return 'no_release'
+        if db.execute('SELECT 1 FROM update_announcements WHERE release_id=?', (release,)).fetchone():
+            return 'already_attempted'
+        try:
+            channel = bot.get_channel(int(saved[1])) or await bot.fetch_channel(int(saved[1]))
+        except Exception:
+            logger.exception('Update notice channel lookup failed; no message was attempted')
+            return 'lookup_failed'
+        if location() != saved:
+            return 'changed'
+        if (str(getattr(channel, 'id', '')) != saved[1]
+                or str(getattr(getattr(channel, 'guild', None), 'id', '')) != saved[0]):
+            return 'wrong_channel'
+        # Persist before sending. Discord might accept a message even if the
+        # reply is lost; never replay an uncertain announcement on reconnect.
+        with db:
+            claimed = db.execute('INSERT OR IGNORE INTO update_announcements VALUES(?,?,?,?,NULL)',
+                (release, saved[0], saved[1], 'sending')).rowcount
+        if not claimed:
+            return 'already_attempted'
+        try:
+            message = await channel.send(UPDATE_NOTICE, allowed_mentions=discord.AllowedMentions.none())
+        except Exception:
+            with db:
+                db.execute("UPDATE update_announcements SET status='failed_uncertain' WHERE release_id=?", (release,))
+            logger.exception('Update notice delivery uncertain; not retrying automatically')
+            return 'failed_uncertain'
+        with db:
+            db.execute("UPDATE update_announcements SET status='sent',message_id=? WHERE release_id=?",
+                (str(message.id), release))
+        return 'sent'
 
     def rows(user_id, mode):
         api.reset_due_quests()
@@ -1983,4 +2043,5 @@ def install(namespace):
                 ON CONFLICT(quest_id) DO UPDATE SET revision=revision+1;
                 END""")
     db.commit()
+    result.announce_update = announce_update
     return result

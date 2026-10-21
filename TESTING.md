@@ -45,7 +45,7 @@ While it remains stopped:
 .venv/bin/python run_tests.py --suite server --release-report /home/discordbot/sprig-release-tests.json --profile --report /home/discordbot/sprig-server-checks.json
 ```
 
-The server command compiles all eight runtime modules and runs 22 selected
+The server command compiles all eight runtime modules and runs 23 selected
 regressions using the server's Python, SQLite, and installed Discord library:
 
 | Coverage | Why it stays in the server check |
@@ -60,6 +60,7 @@ regressions using the server's Python, SQLite, and installed Discord library:
 | Moved monthly Skip and reload | Timing persistence |
 | Today's Calendar, private message flags, component limits | Installed Discord interface support |
 | Recovery permissions and actual Discord ViewStore dispatch | Safe recovery and one action per click |
+| Update notice routing, deduplication, and no mentions | One release announcement in the correct channel |
 
 The manifest reuses existing regression methods; there is no duplicate set of
 server assertions. Missing or repeated manifest entries fail. The command refuses
@@ -112,3 +113,5 @@ in both modes: 2.737s cold versus 1.135s cached. All 22 server checks passed in
 5.949s in a disposable folder with the server’s installed virtual environment;
 the live bot checkout, database, and service were not changed. These are observed
 times, not a fixed performance guarantee.
+
+The update-announcement feature adds one server check (23 total). Its delivery is mocked, so installation checks never post a real announcement. The 22-check timing above describes the original test-speed audit.

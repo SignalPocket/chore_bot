@@ -273,3 +273,31 @@ Due, unclaimed chores in **Pick up chores** have a **Claim** button beside each 
 ### Calendar starts with today
 
 Calendar on the Dashboard opens today’s dated chores in Eastern time. Use Previous day, Today, or Next day to change dates, or Week and Month to see the broader schedule. Existing saved screens still resume their selected date and page.
+
+
+## Update announcement
+
+After a new installed Git commit starts successfully, Sprig posts once in the
+configured household chores channel: **Sprig has been updated. Open /chores for
+fresh controls.** There are no mentions or mass pings. Open /chores again to get
+the updated controls; existing chores, assignments, points, and history remain.
+
+Restarts and Discord reconnects on the same release do not post again. A saved
+per-release delivery claim prevents duplicate announcements, including concurrent
+ready events. If delivery is uncertain, it is logged without automatic retry.
+Missing Git/version information or an unconfigured board produces no notice.
+Channel lookup must match the saved household and channel, and a changed
+destination cancels the attempt. Announcement failure does not stop the bot.
+Offline tests mock channel delivery; deploying the code does not itself post a
+notice until Sprig starts with the approved feature installed.
+
+
+### Claim and Details together
+
+In Pick up chores, each due, available chore has **Claim** and **Details** side by
+side beneath its description. Claim takes the current occurrence immediately;
+Details opens instructions, schedule, weekly sign-ups, and other actions without
+claiming it. Back returns to the same filtered page. Future/next-week work keeps
+Details without an early Claim, and away people can still read Details while
+Claim is disabled. The footer uses Refresh / Resume instead of a second Refresh
+button. All controls and replies stay private.
