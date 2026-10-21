@@ -4,6 +4,9 @@ import importlib.util
 import os
 from pathlib import Path
 import shutil
+import sqlite3
+from time import perf_counter
+from contextlib import closing
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -65,16 +68,38 @@ class Interaction:
 
 
 class BoardTests(unittest.IsolatedAsyncioTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._schema_temp = tempfile.TemporaryDirectory()
+        cls._schema_path = Path(cls._schema_temp.name) / 'empty-schema.db'
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._schema_temp.cleanup()
+        super().tearDownClass()
+
     async def asyncSetUp(self):
+        setup_started = perf_counter()
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
         shutil.copyfile(HERE / "sprig_bot.py", root / "sprig_bot.py")
-        os.environ["DISCORD_TOKEN"] = "offline-test-placeholder"
-        os.environ["QUEST_TIMEZONE"] = "America/New_York"
+        # Each test still gets a real, private disk DB and a fresh bot. Only
+        # the empty schema is reused; no transaction/durability setting changes.
+        cached = self._schema_path.exists() and os.getenv('SPRIG_TEST_COLD_START') != '1'
+        if cached:
+            shutil.copyfile(self._schema_path, root / 'sprig.db')
+        env = patch.dict(os.environ, DISCORD_TOKEN='offline-test-placeholder', QUEST_TIMEZONE='America/New_York')
+        env.start()
+        self.addCleanup(env.stop)
         spec = importlib.util.spec_from_file_location("sprig_offline", root / "sprig_bot.py")
         self.app = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.app)
         self.db = self.app.db
+        if not self._schema_path.exists():
+            self.db.commit()
+            with closing(sqlite3.connect(self._schema_path)) as template:
+                self.db.backup(template)
         self.ui = self.app.chore_ui
         self.dm = SimpleNamespace(send=AsyncMock())
         self.dm_patch = patch.object(self.app.bot, "get_user", return_value=self.dm)
@@ -83,12 +108,76 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.db.execute("INSERT INTO quests (name, frequency, points) VALUES ('Fill dishwasher', 'daily', 5)")
         self.db.execute("INSERT INTO quests (name, frequency, points, assigned_to) VALUES ('My bathroom', 'weekly', 10, '10')")
         self.db.commit()
+        self.setup_seconds = perf_counter() - setup_started
 
     async def asyncTearDown(self):
         self.dm_patch.stop()
         await self.app.bot.close()
         self.db.close()
         self.temp.cleanup()
+
+    async def test_bootstrap_blank_and_legacy_database_use_real_migrations(self):
+        # These paths always start without the cached schema, even in fast runs.
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy), tempfile.TemporaryDirectory() as folder:
+                path=Path(folder)/'sprig_bot.py'
+                shutil.copyfile(HERE/'sprig_bot.py',path)
+                if legacy:
+                    with closing(sqlite3.connect(Path(folder)/'sprig.db')) as db:
+                        db.executescript("CREATE TABLE users(id TEXT PRIMARY KEY,points INTEGER,streak INTEGER,last_completed TEXT);"
+                            "INSERT INTO users VALUES('10',35,2,'2026-10-19');"
+                            "CREATE TABLE quests(id INTEGER PRIMARY KEY,name TEXT,type TEXT,points INTEGER,assigned_to TEXT);"
+                            "INSERT INTO quests VALUES(7,'Old task','weekly',5,'<@10>');")
+                spec=importlib.util.spec_from_file_location('sprig_bootstrap_check',path)
+                app=importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(app)
+                try:
+                    self.assertEqual(app.db.execute('PRAGMA integrity_check').fetchone(),('ok',))
+                    tables={r[0] for r in app.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                    self.assertTrue({'quests','users','completion_log','chore_revisions','reminder_deliveries','workspace_sessions'}<=tables)
+                    self.assertEqual(app.db.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'chore_revision_%'").fetchone(),(21,))
+                    if legacy:
+                        self.assertEqual(app.db.execute('SELECT id,name,frequency,points,assigned_to FROM quests').fetchall(),[(7,'Old task','weekly',5,'10')])
+                        self.assertEqual(app.db.execute('SELECT * FROM users').fetchall(),[('10',35,2,'2026-10-19')])
+                    else:
+                        self.assertEqual(app.db.execute('SELECT COUNT(*) FROM quests').fetchone(),(0,))
+                        self.assertEqual(app.db.execute('SELECT COUNT(*) FROM users').fetchone(),(0,))
+                finally:
+                    await app.bot.close()
+                    app.db.close()
+
+    async def test_fixture_template_contains_schema_without_household_state(self):
+        with closing(sqlite3.connect(self._schema_path)) as template:
+            tables=[r[0] for r in template.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+            for table in tables:
+                with self.subTest(table=table):
+                    self.assertEqual(template.execute('SELECT COUNT(*) FROM "'+table+'"').fetchone(),(0,))
+            self.assertEqual(template.execute('PRAGMA synchronous').fetchone(),self.db.execute('PRAGMA synchronous').fetchone())
+
+    async def test_release_report_gate_rejects_stale_incomplete_and_nonrelease_runs(self):
+        import copy
+        from run_tests import validate_release
+        hashes={'source.py':'abc'};names=['test_one','test_two']
+        valid={'suite':'full','success':True,'tests_run':2,'test_names':names,'skipped':0,'source_hashes':hashes}
+        validate_release(valid,hashes,names)
+        for changes in ({'suite':'focused'},{'suite':'server'},{'success':False},
+                {'tests_run':1},{'test_names':['test_one']},{'skipped':1},
+                {'source_hashes':{'source.py':'changed'}}):
+            with self.subTest(changes=changes),self.assertRaises(ValueError):
+                validate_release(dict(copy.deepcopy(valid),**changes),hashes,names)
+        for invalid in (None,[],{},'not a report'):
+            with self.subTest(invalid=invalid),self.assertRaises(ValueError):
+                validate_release(invalid,hashes,names)
+
+    async def test_test_inventory_has_no_shadowed_names_or_identical_bodies(self):
+        import ast
+        from collections import Counter
+        tree=ast.parse((HERE/'test_chore_board.py').read_text(encoding='utf-8'))
+        cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='BoardTests')
+        methods=[n for n in cls.body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name.startswith('test_')]
+        self.assertEqual(len(methods),len({n.name for n in methods}),'Duplicate names hide tests from discovery')
+        bodies=Counter(ast.dump(ast.Module(body=n.body,type_ignores=[]),include_attributes=False) for n in methods)
+        self.assertTrue(all(count==1 for count in bodies.values()),'Identical test bodies should be consolidated')
 
     async def audit9_queue(self,*actions):
         # Queue real callbacks behind the production mutation lock, in each

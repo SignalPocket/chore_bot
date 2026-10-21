@@ -95,13 +95,13 @@ Old saved public panel buttons must be refreshed after deployment. The persisten
 
 ## Verify and deploy
 
-1. Run offline tests against a temporary database: `python test_chore_board.py -q`. They use a dummy token and mocked Discord delivery; do not start a second real bot.
+1. Run the full offline release suite: `python run_tests.py --suite full --profile --report ../sprig-release-tests.json`. It uses isolated temporary databases, a dummy token, and mocked Discord delivery. Keep the passing exact-source report for the server check; see [TESTING.md](TESTING.md). Do not start a second real bot.
 2. Compile all eight modules with `python -m py_compile sprig_bot.py chore_board.py chore_timing.py household_availability.py chore_history.py chore_workspace.py chore_planning.py chore_recovery.py`.
 3. Obtain approval for the exact commit, SignalPocket identity, main branch push, and deployment. These steps are separate from local preparation.
 4. Stop the existing sprig service interactively and verify inactive.
 5. Back up the entire server checkout and database, record the previous commit, and verify the backup database integrity before updating.
 6. Fetch and fast-forward only to the exact approved commit. Preserve the existing database, environment, and untracked historical backup.
-7. Install the approved requirements in the existing virtual environment (`.venv/bin/python -m pip install -r requirements.txt`); Components V2 requires discord.py >=2.6,<3. Compile all seven modules and rerun the complete offline suite on the server while the service remains stopped.
+7. Install the approved requirements in the existing virtual environment (`.venv/bin/python -m pip install -r requirements.txt`); Components V2 requires discord.py >=2.6,<3. Run `python run_tests.py --suite server --release-report /home/discordbot/sprig-release-tests.json --profile` using the server virtual environment while the service remains stopped. This compiles all eight modules and runs 22 installation checks, gated by the passing full local report. For major dependency, Python, migration, or deployment changes, also run the full suite on the server. See [TESTING.md](TESTING.md) for report transfer and failure handling.
 8. Start the existing sprig service interactively; verify active/running and normal startup logs.
 9. Reopen /chores. An administrator runs !refreshchoreboard once to edit the existing saved launcher rather than posting another one. No slash re-registration is needed for this upgrade.
 10. Check real Discord layout on desktop/mobile and with two household accounts: future work, one claim/Done/Undo, weekly reservation, trip preview/edit, owner inbox access, and notification opt-in. Live rendering and notification delivery are not proven by offline tests.
