@@ -3624,6 +3624,131 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         await next(c for c in confirmation.children if getattr(c,'label',None)=='Confirm').callback(event)
         self.assertEqual(self.db.execute('SELECT COUNT(*) FROM availability_exceptions').fetchone(),(2,))
 
+    async def test_manual_skip_schedule_boundaries_preserve_points_and_weekly_signup(self):
+        w=self.ui.workspace;t=self.ui.timing
+        cases=(('daily','2026-10-22T00:00:00-04:00'),
+            ('twice-daily','2026-10-21T12:00:00-04:00'),
+            ('daily-am','2026-10-22T00:00:00-04:00'),
+            ('weekly','2026-10-25T18:00:00-04:00'),
+            ('monthly','2026-11-01T00:00:00-04:00'),
+            ('wednesday','2026-10-28T00:00:00-04:00'),
+            ('days:wednesday,friday','2026-10-23T00:00:00-04:00'),
+            ('away:wednesday','2026-11-04T00:00:00-05:00'))
+        with self.clock('2026-10-21T09:00:00'):
+            for frequency,next_due in cases:
+                with self.subTest(frequency=frequency):
+                    self.ui.create_chore('Skip '+frequency,frequency,'5','Keep instructions')
+                    qid=self.db.execute('SELECT MAX(id) FROM quests').fetchone()[0]
+                    self.db.execute('INSERT INTO claims VALUES(?,?)',(qid,'10'))
+                    if frequency!='monthly':self.db.execute('INSERT INTO week_signups VALUES(?,?,?)',(qid,self.ui.week_key(),'10'))
+                    self.db.commit()
+                    before={table:self.db.execute('SELECT * FROM '+table).fetchall() for table in ('users','completion_log','week_signups')}
+                    quest=self.db.execute('SELECT * FROM quests WHERE id=?',(qid,)).fetchone()
+                    self.assertIn('Occurrence skipped',w.skip_occurrence(20,qid,self.ui.snapshot(qid)))
+                    self.assertEqual(t.state(qid),(next_due,))
+                    self.assertFalse(self.ui.ready(qid))
+                    self.assertIsNone(self.db.execute('SELECT * FROM claims WHERE quest_id=?',(qid,)).fetchone())
+                    self.assertEqual(quest,self.db.execute('SELECT * FROM quests WHERE id=?',(qid,)).fetchone())
+                    self.assertEqual(before,{table:self.db.execute('SELECT * FROM '+table).fetchall() for table in before})
+                    self.assertEqual(self.db.execute('SELECT actor,next_due FROM occurrence_skips WHERE quest_id=?',(qid,)).fetchone(),('20',next_due))
+        for stamp,frequency in (('2026-10-21T12:00:00','twice-daily'),('2026-10-22T00:00:00','daily'),('2026-10-25T18:00:00','weekly')):
+            with self.clock(stamp):
+                qid=self.db.execute('SELECT id FROM quests WHERE name=?',('Skip '+frequency,)).fetchone()[0]
+                self.assertTrue(self.ui.ready(qid))
+
+    async def test_manual_skip_confirmation_cancel_privacy_and_double_tap(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-21T09:00:00'):
+            card=w.Card(10,1);button=next(c for c in card.children if getattr(c,'label',None)=='Skip this occurrence')
+            wrong=Interaction(20);await button.callback(wrong)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM occurrence_skips').fetchone(),(0,))
+            event=Interaction();await button.callback(event);confirm=event.response.payload['view']
+            self.assertIsInstance(confirm,w.Confirm)
+            cancel=next(c for c in confirm.children if getattr(c,'label',None)=='Cancel')
+            await cancel.callback(Interaction())
+            self.assertTrue(self.ui.ready(1))
+            event=Interaction();await button.callback(event);confirm=event.response.payload['view']
+            save=next(c for c in confirm.children if getattr(c,'label',None)=='Confirm')
+            await save.callback(Interaction(20))
+            self.assertTrue(self.ui.ready(1))
+            await asyncio.gather(save.callback(Interaction()),save.callback(Interaction()))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM occurrence_skips').fetchone(),(1,))
+            self.assertFalse(self.ui.ready(1))
+            self.assertFalse(self.db.execute('SELECT * FROM completion_log').fetchall())
+            self.assertFalse(any(getattr(c,'label',None)=='Skip this occurrence' for c in w.Card(10,1).children))
+            self.assertFalse(any(getattr(c,'label',None)=='Skip this occurrence' for c in w.Card(10,2,offset=1).children))
+
+    async def test_manual_skip_stale_completed_archived_future_and_one_time_are_rejected(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-21T09:00:00'):
+            expected=self.ui.snapshot(1)
+            self.db.execute("UPDATE quests SET notes='Changed' WHERE id=1");self.db.commit()
+            self.assertIn('changed',w.skip_occurrence(10,1,expected))
+            for completed,frequency in ((1,'daily'),(0,'one-time')):
+                self.db.execute('UPDATE quests SET completed=?,frequency=? WHERE id=1',(completed,frequency));self.db.commit()
+                self.assertNotIn('Occurrence skipped',w.skip_occurrence(10,1,self.ui.snapshot(1)))
+                self.assertFalse(any(getattr(c,'label',None)=='Skip this occurrence' for c in w.Card(10,1).children))
+            self.db.execute("UPDATE quests SET frequency='daily',completed=0 WHERE id=1");self.db.commit()
+            self.db.execute("INSERT INTO occurrence_moves VALUES(1,'2026-10-22')");self.db.commit()
+            self.assertNotIn('Occurrence skipped',w.skip_occurrence(10,1,self.ui.snapshot(1)))
+            self.db.execute('DELETE FROM occurrence_moves');self.db.commit()
+            await self.app.bot.get_command('deletequest').callback(SimpleNamespace(author=SimpleNamespace(id=10),send=AsyncMock()),1)
+            self.assertIn('changed',w.skip_occurrence(10,1,self.ui.snapshot(1)))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM occurrence_skips').fetchone(),(0,))
+
+    async def test_manual_skip_moved_weekly_checklist_help_and_reminder_cycle(self):
+        w=self.ui.workspace;p=self.ui.planning;t=self.ui.timing
+        with self.clock('2026-10-21T09:00:00'):
+            self.assertIn('saved',p.save_plan(2,'10','First\nSecond',p.plan(2)).lower())
+            old_cycle=p.cycle(2)
+            self.db.execute('INSERT INTO checklist_checks VALUES(?,?,?,?)',(2,old_cycle,0,'10'))
+            self.db.execute("INSERT INTO occurrence_moves VALUES(2,'2026-10-21')");self.db.commit()
+            self.assertIn('saved',p.report_help(10,2,'Need supplies','Soap',p.help_snapshot(2)).lower())
+            self.db.execute('INSERT INTO week_signups VALUES(?,?,?)',(2,self.ui.week_key(),'10'));self.db.commit()
+            p.save_reminders(10,True,'09:00',p.settings(10))
+            self.assertIn('Occurrence skipped',w.skip_occurrence(10,2,self.ui.snapshot(2)))
+            self.assertEqual(t.state(2),('2026-10-25T18:00:00-04:00',))
+            self.assertIsNone(self.db.execute('SELECT day FROM occurrence_moves WHERE quest_id=2').fetchone())
+            self.assertFalse(p.checked(2));self.assertIsNone(p.help_record(2))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM checklist_checks').fetchone(),(1,))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM chore_help').fetchone(),(1,))
+            await p.send_due_reminders();self.dm.send.assert_not_awaited()
+            self.assertFalse(any(q[0]==2 for q,uid in p.project(t.now().date(),flexible=True)))
+
+    async def test_manual_skip_atomic_failure_and_restart_persistence(self):
+        import sqlite3
+        from chore_timing import ChoreTiming
+        w=self.ui.workspace
+        with self.clock('2026-10-21T09:00:00'):
+            self.db.execute("INSERT INTO claims VALUES(1,'10')");self.db.commit()
+            expected=self.ui.snapshot(1)
+            before=list(self.db.iterdump())
+            self.db.execute("CREATE TRIGGER fail_manual_skip BEFORE INSERT ON chore_timing BEGIN SELECT RAISE(ABORT,'test failure'); END;");self.db.commit()
+            with self.assertRaises(sqlite3.IntegrityError):w.skip_occurrence(10,1,expected)
+            self.db.execute('DROP TRIGGER fail_manual_skip');self.db.commit()
+            self.assertEqual(before,list(self.db.iterdump()))
+            self.assertIn('Occurrence skipped',w.skip_occurrence(10,1,expected))
+            with closing(sqlite3.connect(Path(self.temp.name)/'sprig.db')) as reopened:
+                restored=ChoreTiming(dict(self.app.__dict__),reopened)
+                self.assertFalse(restored.ready(1))
+                self.assertEqual(reopened.execute('SELECT COUNT(*) FROM occurrence_skips').fetchone(),(1,))
+            with self.clock('2026-10-22T00:00:00'):
+                self.assertTrue(self.ui.ready(1))
+
+    async def test_manual_skip_pm_dst_and_automatic_policy_wait_for_next_occurrence(self):
+        t=self.ui.timing;w=self.ui.workspace
+        with self.clock('2026-10-31T13:00:00'):
+            self.ui.create_chore('Skip PM DST','daily-pm','5','')
+            qid=self.db.execute('SELECT MAX(id) FROM quests').fetchone()[0]
+            t.set_policy(qid,'skip')
+            self.assertIn('Occurrence skipped',w.skip_occurrence(10,qid,self.ui.snapshot(qid)))
+            self.assertEqual(t.state(qid),('2026-11-01T12:00:00-05:00',))
+        with self.clock('2026-11-01T11:59:00'):
+            self.app.reset_due_quests();self.assertFalse(self.ui.ready(qid))
+        with self.clock('2026-11-01T12:00:00'):
+            self.app.reset_due_quests();self.assertTrue(self.ui.ready(qid))
+
+
     async def test_workspace_move_only_one_occurrence_retains_frequency(self):
         with self.clock('2026-10-20T10:00:00'):
             w=self.ui.workspace;modal=w.MoveModal(10,1,self.ui.snapshot(1),lambda:w.Card(10,1))

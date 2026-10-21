@@ -16,7 +16,8 @@ def install(ns, ui, lock):
     CREATE TABLE IF NOT EXISTS workspace_preferences(user_id TEXT PRIMARY KEY,list_size INTEGER NOT NULL CHECK(list_size BETWEEN 1 AND 10));
     CREATE TABLE IF NOT EXISTS trade_notifications(trade_id INTEGER PRIMARY KEY,status TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS chore_shift_splits(original_id INTEGER PRIMARY KEY,pm_id INTEGER UNIQUE NOT NULL);
-    CREATE TABLE IF NOT EXISTS attention_windows(quest_id INTEGER PRIMARY KEY,cycle TEXT NOT NULL,deadline TEXT NOT NULL);''')
+    CREATE TABLE IF NOT EXISTS attention_windows(quest_id INTEGER PRIMARY KEY,cycle TEXT NOT NULL,deadline TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS occurrence_skips(id INTEGER PRIMARY KEY AUTOINCREMENT,quest_id INTEGER NOT NULL,actor TEXT NOT NULL,skipped_at TEXT NOT NULL,next_due TEXT NOT NULL,previous_state TEXT NOT NULL);''')
     db.commit()
     def page_size(owner):
         row=db.execute('SELECT list_size FROM workspace_preferences WHERE user_id=?',(str(owner),)).fetchone()
@@ -906,6 +907,32 @@ def install(ns, ui, lock):
             db.execute('INSERT INTO chore_shift_splits VALUES(?,?)',(qid,pm_id))
         return 'Split into separate AM and PM chores. Existing weekly/ongoing ownership stays on AM; PM is open except for a current PM single claim. Earned points and old history are unchanged.'
 
+    def skip_occurrence(actor,qid,expected):
+        # Call under the shared mutation lock; validation and all writes are one transaction.
+        ns['reset_due_quests']()
+        q=chore(qid)
+        if not q or ui.is_archived(qid) or ui.snapshot(qid)!=expected:
+            return 'This chore changed. Review the refreshed card. Nothing skipped.'
+        if q[5] or not ready(qid):return 'There is no due occurrence to skip.'
+        if q[2]=='one-time':return 'This chore does not repeat. Archive it instead if it is no longer needed.'
+        now=timing.now()
+        next_due=timing.calculate_reset(now,q[2])
+        if not next_due:return 'No next scheduled occurrence was found. Nothing skipped.'
+        import json
+        previous=json.dumps(dict(chore=q,timing=timing.state(qid),
+            claim=db.execute('SELECT user_id FROM claims WHERE quest_id=?',(qid,)).fetchone(),
+            move=db.execute('SELECT day FROM occurrence_moves WHERE quest_id=?',(qid,)).fetchone()))
+        with db:
+            db.execute('INSERT INTO occurrence_skips(quest_id,actor,skipped_at,next_due,previous_state) VALUES(?,?,?,?,?)',
+                (qid,str(actor),now.isoformat(),next_due,previous))
+            db.execute('DELETE FROM claims WHERE quest_id=?',(qid,))
+            db.execute('DELETE FROM occurrence_moves WHERE quest_id=?',(qid,))
+            db.execute('INSERT OR REPLACE INTO chore_timing VALUES(?,?)',(qid,next_due))
+            if timing.policy(qid)=='skip':
+                db.execute('UPDATE missed_chore_policy SET deadline=? WHERE quest_id=?',(timing.deadline(qid,q[2]),qid))
+        return ('Occurrence skipped. No points awarded; weekly sign-ups and ongoing assignments stay saved. '
+                +'Next due '+datetime.fromisoformat(next_due).strftime('%a %b %d, %I:%M %p %Z')+'.')
+
     class Card(View):
         def __init__(self, owner, qid, back=None, guild=None, offset=0, notice=None):
             super().__init__(owner)
@@ -950,6 +977,17 @@ def install(ns, ui, lock):
                 self.button('Done', lambda i: mutate(i, 'done'), row=0, primary=True, disabled=not ui.available(owner))
             if not uid and not q[5] and ready(qid) and offset == 0:
                 self.button('Just this time', lambda i: mutate(i, 'claim'), row=0, primary=True, disabled=not ui.available(owner))
+            if not q[5] and ready(qid) and offset==0 and q[2]!='one-time':
+                async def skip(i):
+                    if not await self.interaction_check(i):return
+                    async def save(event):
+                        if not await self.interaction_check(event):return
+                        await event.response.defer()
+                        async with lock:text=skip_occurrence(event.user.id,qid,self.expected)
+                        await present(event,card(),text)
+                    await present(i,Confirm(owner,'Skip this occurrence?',
+                        'Skip only the due occurrence, with no points or completion credit. The next regular occurrence, weekly sign-ups, and ongoing assignment stay saved. A single-occurrence claim is released. This cannot currently be undone.',save,card))
+                self.button('Skip this occurrence',skip,row=2)
             last_completion=db.execute('SELECT id,quest_id FROM completion_log WHERE user_id=? AND undone_at IS NULL ORDER BY id DESC LIMIT 1',(str(owner),)).fetchone()
             if q[5] and last_completion and last_completion[1]==qid:
                 async def undo(i):
@@ -1577,7 +1615,7 @@ def install(ns, ui, lock):
             self.add_item(picker)
             self.nav()
 
-    result = SimpleNamespace(UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
+    result = SimpleNamespace(skip_occurrence=skip_occurrence,UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
 
     from chore_recovery import install as install_recovery
     recovery = install_recovery(ns, ui, result)

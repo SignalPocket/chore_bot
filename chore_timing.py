@@ -112,7 +112,7 @@ class ChoreTiming:
             return (ready+timedelta(days=1)).isoformat()
         when=self.now()
         state=self.state(quest_id)
-        if frequency in ('weekly','monthly') and state:
+        if state:
             when=max(when,datetime.fromisoformat(state[0]))
         return self.calculate_reset(when,frequency)
 
@@ -160,7 +160,7 @@ class ChoreTiming:
     def ready(self, quest_id):
         from datetime import datetime
         row=self.db.execute('SELECT frequency FROM quests WHERE id=?',(quest_id,)).fetchone()
-        if row and row[0] in ('weekly','monthly'):
+        if row and row[0] in ('daily','twice-daily','weekly','monthly'):
             state=self.state(quest_id)
             return not state or self.now() >= datetime.fromisoformat(state[0])
         if not row or row[0] not in SCHEDULED | DAILY_SHIFTS:
