@@ -148,7 +148,12 @@ def install(ns, ui, w, lock):
             self.recovery_context={'screen':'reminders'}
             self.embed=discord.Embed(title='Your chore reminders',description='**'+('On' if expected[0] else 'Off')+'** · '+', '.join(json.loads(expected[1]))+' Eastern\nPrivate DMs for chores you own that are due and unfinished. No reminder when you are away or have nothing due. Turning this on authorizes Sprig to DM your own account.\nChoose up to 10 times per day. Change times or turn off whenever you like. Missed reminders are not replayed after downtime.',color=0x6B9B77)
             last=db.execute('SELECT slot,status FROM reminder_deliveries WHERE user_id=? ORDER BY slot DESC LIMIT 1',(str(owner),)).fetchone()
-            if last:self.embed.add_field(name='Last reminder attempt',value=last[0]+' · '+('Sent' if last[1]=='sent' else 'Delivery uncertain or blocked; check Discord DM privacy. No automatic retry.' if last[1]=='failed_uncertain' else last[1]),inline=False)
+            if last:
+                labels={'sent':'Sent','canceled':'Not sent: chores, preferences, location, or reminder time changed.',
+                    'skipped_empty':'Not sent: no due chores at that time.','skipped_away':'Not sent: you were away at that time.',
+                    'skipped_week':'Not sent: that reminder time belonged to the previous household week.',
+                    'failed_uncertain':'Delivery uncertain or blocked; check Discord DM privacy. No automatic retry.'}
+                self.embed.add_field(name='Last reminder attempt',value=last[0]+' · '+labels.get(last[1],last[1]),inline=False)
             async def toggle(i):
                 if not await self.interaction_check(i):return
                 async with lock:text=save_reminders(owner,not expected[0],','.join(json.loads(expected[1])),expected)
@@ -157,32 +162,45 @@ def install(ns, ui, w, lock):
             self.button('Change times',lambda i:i.response.send_modal(ReminderTimes(owner)),row=0)
             self.nav()
 
+    def reminder_records(uid):
+        # Re-read the full set, including newly assigned/due work, after lookup.
+        ns['reset_due_quests']()
+        return [(qid,name) for qid,name in db.execute('SELECT id,name FROM quests WHERE completed=0 ORDER BY name COLLATE NOCASE,id').fetchall()
+            if not ui.is_archived(qid) and timing.ready(qid) and w.ownership(qid)[0]==str(uid)]
+
     async def send_due_reminders():
         ns['reset_due_quests']()
         now=timing.now()
         location=db.execute('SELECT guild_id,channel_id FROM chore_board WHERE singleton=1').fetchone()
         if not location:return
         for uid,enabled,times,revision in db.execute('SELECT user_id,enabled,times,revision FROM reminder_settings WHERE enabled=1').fetchall():
-            if not ui.available(uid):continue
             expected=(enabled,times,revision)
+            if settings(uid)!=expected:continue
             for value in json.loads(times):
                 hour,minute=map(int,value.split(':'))
                 due=now.replace(hour=hour,minute=minute,second=0,microsecond=0)
                 if datetime.fromtimestamp(due.timestamp(),ns['QUEST_TIMEZONE']).strftime('%H:%M')!=value:continue
-                elapsed=now.timestamp()-due.timestamp()
+                elapsed=timing.now().timestamp()-due.timestamp()
                 if not 0<=elapsed<900:continue
                 slot=now.date().isoformat()+' '+value
                 if db.execute('SELECT 1 FROM reminder_deliveries WHERE user_id=? AND slot=?',(uid,slot)).fetchone():continue
-                records=[q for q in db.execute('SELECT id,name FROM quests WHERE completed=0 ORDER BY name').fetchall() if not ui.is_archived(q[0]) and timing.ready(q[0]) and w.ownership(q[0])[0]==uid]
-                if not records:continue
+                available=ui.available(uid)
+                records=reminder_records(uid) if available else []
+                skipped=('skipped_week' if due<ui.week_start() else 'skipped_away' if not available else 'skipped_empty' if not records else None)
+                # Record empty/away slots too: later ownership changes must not
+                # backfill an earlier reminder and duplicate the next chosen time.
                 # Claim delivery before network I/O; uncertain sends never get retried.
                 with db:
-                    claimed=db.execute('INSERT OR IGNORE INTO reminder_deliveries VALUES(?,?,?)',(uid,slot,'sending')).rowcount
-                if not claimed:continue
+                    claimed=db.execute('INSERT OR IGNORE INTO reminder_deliveries VALUES(?,?,?)',(uid,slot,skipped or 'sending')).rowcount
+                if not claimed or skipped:continue
                 try:
                     user=bot.get_user(int(uid)) or await asyncio.wait_for(bot.fetch_user(int(uid)),timeout=5)
-                    records=[q for q in records if chore(q[0]) and not chore(q[0])[5] and not ui.is_archived(q[0]) and timing.ready(q[0]) and w.ownership(q[0])[0]==uid]
-                    if settings(uid)!=expected or not ui.available(uid) or not records:status='canceled'
+                    records=reminder_records(uid)
+                    current_location=db.execute('SELECT guild_id,channel_id FROM chore_board WHERE singleton=1').fetchone()
+                    # No await between this validation and handing the DM to Discord.
+                    # An already handed-off message cannot be recalled by later edits.
+                    if (settings(uid)!=expected or not ui.available(uid) or not records
+                            or current_location!=location or due<ui.week_start() or not 0<=timing.now().timestamp()-due.timestamp()<900):status='canceled'
                     else:
                         text='Your due chores:\n'+'\n'.join('• '+w.clean(name,80)+summary(qid) for qid,name in records[:12])
                         if len(records)>12:text+=f'\n…and {len(records)-12} more.'
@@ -282,6 +300,8 @@ def install(ns, ui, w, lock):
             self.button('Previous day',lambda i:w.present(i,Day(owner,day-timedelta(days=1),mine,i.guild,0,flexible,mode)),row=1)
             self.button('Today',lambda i:w.present(i,Day(owner,timing.now().date(),mine,i.guild,0,flexible,mode)),row=1)
             self.button('Next day',lambda i:w.present(i,Day(owner,day+timedelta(days=1),mine,i.guild,0,flexible,mode)),row=1)
+            self.button('Week',lambda i:w.present(i,Calendar(owner,i.guild,day,mode='week',mine=mine)),row=2)
+            self.button('Month',lambda i:w.present(i,Calendar(owner,i.guild,day,mode='month',mine=mine)),row=2)
             self.nav(lambda:Calendar(owner,guild,day,mode=mode,mine=mine))
     def occurrence(qid):
         q=chore(qid)

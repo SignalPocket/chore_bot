@@ -110,7 +110,11 @@ class ChoreTiming:
             state=self.state(quest_id)
             ready=datetime.fromisoformat(state[0]) if state else self.next_due(self.now(),frequency)
             return (ready+timedelta(days=1)).isoformat()
-        return self.calculate_reset(self.now(),frequency)
+        when=self.now()
+        state=self.state(quest_id)
+        if frequency in ('weekly','monthly') and state:
+            when=max(when,datetime.fromisoformat(state[0]))
+        return self.calculate_reset(when,frequency)
 
     def set_policy(self, quest_id, policy):
         row=self.db.execute('SELECT frequency FROM quests WHERE id=?',(quest_id,)).fetchone()
@@ -135,7 +139,13 @@ class ChoreTiming:
                     continue
                 if now < datetime.fromisoformat(deadline):
                     continue
+                moved=self.db.execute('SELECT day FROM occurrence_moves WHERE quest_id=?',(qid,)).fetchone()
                 self.db.execute('DELETE FROM occurrence_moves WHERE quest_id=?',(qid,))
+                if moved and not completed and frequency in ('weekly','monthly'):
+                    # A moved deadline can end before the regular period does.
+                    # Skipping that occurrence must not immediately recreate it.
+                    next_start=self.calculate_reset(datetime.fromisoformat(deadline)-timedelta(microseconds=1),frequency)
+                    self.db.execute('INSERT OR REPLACE INTO chore_timing VALUES(?,?)',(qid,next_start))
                 if not completed:
                     self.db.execute('DELETE FROM claims WHERE quest_id=?',(qid,))
                 if frequency in DAILY_SHIFTS:
@@ -150,6 +160,9 @@ class ChoreTiming:
     def ready(self, quest_id):
         from datetime import datetime
         row=self.db.execute('SELECT frequency FROM quests WHERE id=?',(quest_id,)).fetchone()
+        if row and row[0] in ('weekly','monthly'):
+            state=self.state(quest_id)
+            return not state or self.now() >= datetime.fromisoformat(state[0])
         if not row or row[0] not in SCHEDULED | DAILY_SHIFTS:
             return True
         state=self.state(quest_id)

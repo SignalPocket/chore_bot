@@ -252,3 +252,24 @@ If two people try to take the same chore or weekly responsibility, one succeeds 
 Old actions require fresh review after a chore changes, even if its owner or settings later return to the original values, or its completion is undone. Reopen the chore and choose again deliberately. An old weekly Release cannot remove a new reservation. A stored trade becomes outdated if either chore changes; propose a fresh trade instead. Pending trades created before this protection was installed may also require a fresh proposal.
 
 If Discord fails after an action saves, check the current card or Refresh / Resume before trying again. Sprig does not automatically repeat uncertain actions. When Done competes with Drop, Reassign, accepting a Trade, or changing the regular day, the first valid action saves and the outdated action asks for review. Earned points and recorded completions remain attached to the completing person.
+
+## How reminders follow changes
+
+Reminder times belong to your Discord account, not individual chores. Reminders are personal opt-in, with up to ten Eastern times. A chore edit or reassignment does not turn on another person's reminders.
+
+Before handing a reminder to Discord, Sprig refreshes the current names and full list of due responsibilities, applies occurrence resets and Skip if missed, and rechecks your preferences, home/away status, household location, and reminder time. Completed, dropped, reassigned-away, archived, moved-to-future, and future scheduled work is excluded. Newly assigned, restored, or newly due work can be included if it arrives while that reminder is being prepared. Trades and the Sunday 6 p.m. handoff use current ownership; trip exceptions and alternating weeks use current availability.
+
+An empty or away reminder time is recorded as skipped. Taking work afterward does not backfill that skipped reminder; it can appear at your next chosen time. Prior-week reminder times are not sent after Sunday handoff. Slots more than 15 minutes old are not sent, and a slot that expires during recipient lookup is canceled. The Reminders screen explains skipped and canceled results.
+
+Each account/time slot is handled once. Opting out or changing times while a reminder is being prepared cancels the old attempt. Failed or uncertain sends are not automatically retried. A message already handed to Discord cannot be recalled when chores change afterward; open /chores for current information.
+
+A moved weekly or monthly occurrence that is skipped waits until its next regular period before becoming due again. The saved next-period date survives restart and changes between Keep and Skip. A late check after that regular period has already begun does not skip the current period. Points, assignments, and completion history are preserved.
+
+## Claim directly from Pick up chores
+
+Due, unclaimed chores in **Pick up chores** have a **Claim** button beside each row. This takes just the current occurrence and keeps you in the same filtered list; it does not complete the chore, check steps, award points, or reserve a whole week. The list refreshes and adjusts the page if needed. For weekly or ongoing responsibility, open the chore card. Future work and Next week keep Details so you can review the appropriate sign-up. Claims are disabled while away, and competing or stale clicks cannot overwrite another person’s responsibility. Expired controls refresh first without claiming.
+
+
+### Calendar starts with today
+
+Calendar on the Dashboard opens today’s dated chores in Eastern time. Use Previous day, Today, or Next day to change dates, or Week and Month to see the broader schedule. Existing saved screens still resume their selected date and page.

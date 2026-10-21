@@ -147,3 +147,22 @@ The single bot process serializes button mutations with the shared asyncio mutat
 Chore snapshots now include a durable `chore_revisions` counter. SQLite triggers increment it transactionally for actual quest, claim, weekly ownership, timing, missed-policy, occurrence-move, and archive changes. No-op normalization updates do not increment it, and a rollback also rolls back its counter changes. Returning a chore to earlier values cannot revive an old button or stored trade. Weekly sign-up/release callbacks now compare their saved snapshot inside the mutation lock after reset. Old pending trade snapshots from before this release fail conservatively and require a fresh proposal; history and earned points are preserved.
 
 Regression coverage queues actual callbacks behind the production lock in both orders: competing occurrence/week claims, inline/card Done, different chore awards, Done versus Drop/Reassign/Trade/day changes, trade acceptance versus cancellation, and response loss after a saved completion. It also covers completion/undo and ownership/schedule round trips, old Release against a new reservation, persistent counters/no-op updates, and rollback of points/history/ownership/counters. Tests use temporary SQLite databases and mocked Discord delivery. This does not claim support for multiple bot processes writing the same database.
+
+## Reminder accuracy audit (#10)
+
+The dispatcher now rebuilds the entire due-chores query after recipient lookup, rather than filtering an earlier list. It runs resets again and reads current names, ownership, schedules, moved dates, archive state, estimates, and checklist progress. It rechecks account preference revision, current availability, canonical household location, the 15-minute window, and Sunday handoff immediately before message handoff. Slow earlier recipients cannot make later recipients use a stale batch clock.
+
+The existing unique account/date/time delivery key still commits before network I/O. Empty and away slots are now persisted as skipped so later claims or ownership changes cannot backfill them. Prior-week slots are skipped after the household handoff. Canceled, skipped, sent, and uncertain attempts are not replayed; private reminder controls explain the new skipped outcomes. There is no network await between final validation and the send call. Changes after that handoff cannot recall a message Discord is already processing. No per-chore reminder scheduling is introduced (#12 remains later).
+
+Tests cover completion, Drop, Reassign, accepted trades, archive/restore, moved and chosen dates, AM/PM resets, Keep versus Skip, alternating person/chore weeks, trip overrides, Sunday ownership, preference changes, opt-in, concurrency and deduplication, lookup delays, stale names, skipped slots, and existing DST/failure behavior using temporary databases and mocked delivery. No real test DMs or production preference changes are needed.
+
+A moved weekly or monthly occurrence that is skipped waits until its next regular period before becoming due again. The saved next-period date survives restart and changes between Keep and Skip. A late check after that regular period has already begun does not skip the current period. Points, assignments, and completion history are preserved.
+
+## Claim directly from Pick up chores
+
+Due, unclaimed chores in **Pick up chores** have a **Claim** button beside each row. This takes just the current occurrence and keeps you in the same filtered list; it does not complete the chore, check steps, award points, or reserve a whole week. The list refreshes and adjusts the page if needed. For weekly or ongoing responsibility, open the chore card. Future work and Next week keep Details so you can review the appropriate sign-up. Claims are disabled while away, and competing or stale clicks cannot overwrite another person’s responsibility. Expired controls refresh first without claiming.
+
+
+### Calendar starts with today
+
+Calendar on the Dashboard opens today’s dated chores in Eastern time. Use Previous day, Today, or Next day to change dates, or Week and Month to see the broader schedule. Existing saved screens still resume their selected date and page.

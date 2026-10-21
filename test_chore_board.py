@@ -100,6 +100,413 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                 for _ in range(3):await asyncio.sleep(0)
         await asyncio.gather(*tasks)
 
+    async def test_inline_claim_button_claims_matching_chore_without_points_or_checklist_completion(self):
+        w=self.ui.workspace;p=self.ui.planning
+        with self.clock('2026-10-20T10:00:00'):
+            p.save_plan(1,'5','Load cups',p.plan(1))
+            panel=w.render(w.Browse(10,'pickup'))
+            row=next(c for c in panel.children if isinstance(c,discord.ui.Section) and 'Fill dishwasher' in c.children[0].content)
+            self.assertEqual(row.accessory.label,'Claim')
+            event=Interaction();await row.accessory.callback(event)
+            self.assertEqual(self.ui.owned_scope(1),('10','occurrence'))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM users').fetchone(),(0,))
+            self.assertEqual(p.checked(1),set())
+            view=event.response.payload['view'];self.assertEqual(view.state['area'],'pickup')
+            self.assertNotIn(1,[q[0] for q in view.entries])
+
+    async def test_inline_claim_double_tap_and_competing_people_only_one_owner(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            buttons=[next(c.accessory for c in w.render(w.Browse(uid,'pickup')).children if isinstance(c,discord.ui.Section) and c.accessory.label=='Claim') for uid in (10,20)]
+            await asyncio.gather(buttons[0].callback(Interaction()),buttons[0].callback(Interaction()),buttons[1].callback(Interaction(20)))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM claims WHERE quest_id=1').fetchone(),(1,))
+            self.assertIn(self.ui.owned_scope(1)[0],('10','20'))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+
+    async def test_inline_claim_stale_assignment_wrong_user_and_away_are_safe(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            button=next(c.accessory for c in w.render(w.Browse(10,'pickup')).children if isinstance(c,discord.ui.Section) and c.accessory.label=='Claim')
+            event=Interaction(20);await button.callback(event)
+            self.assertTrue(event.response.wire_payload[1]['ephemeral']);self.assertIsNone(self.ui.owned_scope(1)[0])
+            self.ui.reassign(1,20,'assignment',self.ui.reassign_snapshot(1))
+            await button.callback(Interaction());self.assertEqual(self.ui.owned_scope(1)[0],'20')
+            self.ui.create_chore('Away claim','daily','5','')
+            self.ui.attendance.add(10,'2026-10-20','2026-10-20','away')
+            panel=w.render(w.Browse(10,'pickup'))
+            buttons=[c.accessory for c in panel.children if isinstance(c,discord.ui.Section) and c.accessory.label=='Claim']
+            self.assertTrue(buttons);self.assertTrue(all(b.disabled for b in buttons))
+            await buttons[0].callback(Interaction())
+            self.assertIsNone(self.ui.owned_scope(self.db.execute('SELECT MAX(id) FROM quests').fetchone()[0])[0])
+
+    async def test_inline_claim_future_chore_and_next_week_keep_details(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.create_chore('Friday task','friday','5','')
+            panel=w.render(w.Browse(10,'pickup',tab='week'))
+            future=next(c for c in panel.children if isinstance(c,discord.ui.Section) and 'Friday task' in c.children[0].content)
+            self.assertEqual(future.accessory.label,'Details')
+            panel=w.render(w.Browse(10,'pickup',tab='next'))
+            self.assertTrue(all(c.accessory.label=='Details' for c in panel.children if isinstance(c,discord.ui.Section)))
+
+    async def test_inline_claim_keeps_filters_and_clamps_last_page(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            for n in range(6):self.ui.create_chore(f'Pickup {n}','one-time','5','')
+            panel=w.render(w.Browse(10,'pickup',tab='all',query='Pickup',page=1))
+            button=next(c.accessory for c in panel.children if isinstance(c,discord.ui.Section) and c.accessory.label=='Claim')
+            event=Interaction();await button.callback(event)
+            view=event.response.payload['view']
+            self.assertEqual(view.state['query'],'Pickup');self.assertEqual(view.state['tab'],'all');self.assertEqual(view.state['page'],0)
+            self.assertEqual(len(view.entries),5)
+
+    async def test_inline_claim_expired_screen_restores_without_claiming(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            panel=w.render(w.Browse(10,'pickup'));token=panel.recovery_token
+            button=next(c.accessory for c in panel.children if isinstance(c,discord.ui.Section) and c.accessory.label=='Claim')
+            w.recovery.live.clear();event=Interaction();await button.callback(event)
+            self.assertIsNone(self.ui.owned_scope(1)[0]);self.assertEqual(event.response.payload['view'].state['area'],'pickup')
+            self.assertIn('Nothing was repeated',event.response.payload['content'])
+
+    async def test_audit10_completion_drop_archive_and_move_during_lookup_cancel(self):
+        p=self.ui.planning
+        with self.clock('2026-10-20T09:00:00'):
+            for index,action in enumerate(('done','drop','archive','move','choose_day','away')):
+                with self.subTest(action=action):
+                    self.db.execute('UPDATE quests SET completed=1,reset_after=NULL');self.db.commit()
+                    self.ui.create_chore('Lookup cancellation '+action,'weekly','5','')
+                    qid=self.db.execute('SELECT MAX(id) FROM quests').fetchone()[0]
+                    self.ui.reassign(qid,10,'assignment',self.ui.reassign_snapshot(qid))
+                    value=f'09:{index:02d}';self.app.now_local.return_value=datetime(2026,10,20,9,index,tzinfo=self.app.QUEST_TIMEZONE)
+                    p.save_reminders(10,True,value,p.settings(10));self.dm.send.reset_mock()
+                    async def fetch(uid):
+                        if action=='done':await self.ui.PersonalView(10,'mine',selected=qid).act(Interaction(),'done')
+                        elif action=='drop':self.ui.drop_chore(10,qid,self.ui.snapshot(qid))
+                        elif action=='archive':
+                            self.db.execute("INSERT INTO archived_chores VALUES(?,'10','test')",(qid,));self.db.commit()
+                        elif action=='move':
+                            self.db.execute("INSERT INTO occurrence_moves VALUES(?,'2026-10-21')",(qid,));self.db.commit()
+                        elif action=='choose_day':self.ui.update_chore(qid,'Lookup cancellation '+action,'wednesday','5','',self.ui.snapshot(qid))
+                        else:self.ui.attendance.add(10,'2026-10-20','2026-10-20','away','Trip')
+                        return self.dm
+                    with patch.object(self.app.bot,'get_user',return_value=None),patch.object(self.app.bot,'fetch_user',side_effect=fetch):await p.send_due_reminders()
+                    self.dm.send.assert_not_awaited()
+                    self.assertEqual(self.db.execute('SELECT status FROM reminder_deliveries WHERE user_id=? AND slot=?',('10','2026-10-20 '+value)).fetchone(),('canceled',))
+            self.assertEqual(self.db.execute('SELECT points FROM completion_log').fetchall(),[(5,)])
+
+    async def test_audit10_reassignment_during_lookup_follows_recipient_optin(self):
+        p=self.ui.planning;dms={uid:SimpleNamespace(send=AsyncMock()) for uid in (10,20)}
+        with self.clock('2026-10-20T09:00:00'):
+            for uid in (10,20):p.save_reminders(uid,True,'09:00',p.settings(uid))
+            async def fetch(uid):
+                if uid==10:self.ui.reassign(2,20,'assignment',self.ui.reassign_snapshot(2))
+                return dms[uid]
+            with patch.object(self.app.bot,'get_user',return_value=None),patch.object(self.app.bot,'fetch_user',side_effect=fetch):await p.send_due_reminders()
+        dms[10].send.assert_not_awaited();dms[20].send.assert_awaited_once()
+        self.assertIn('My bathroom',dms[20].send.call_args.args[0])
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+
+    async def test_audit10_trade_during_lookup_rebuilds_both_people_lists(self):
+        p=self.ui.planning;dms={uid:SimpleNamespace(send=AsyncMock()) for uid in (10,20)}
+        with self.clock('2026-10-20T09:00:00'):
+            self.ui.reassign(1,20,'assignment',self.ui.reassign_snapshot(1))
+            self.ui.propose_trade(10,2,1,self.ui.trade_snapshot(2),self.ui.trade_snapshot(1))
+            for uid in (10,20):p.save_reminders(uid,True,'09:00',p.settings(uid))
+            async def fetch(uid):
+                if uid==10:self.assertIn('accepted',self.ui.respond_trade(20,1,'accept'))
+                return dms[uid]
+            with patch.object(self.app.bot,'get_user',return_value=None),patch.object(self.app.bot,'fetch_user',side_effect=fetch):await p.send_due_reminders()
+        for uid,yes,no in ((10,'Fill dishwasher','My bathroom'),(20,'My bathroom','Fill dishwasher')):
+            dms[uid].send.assert_awaited_once();text=dms[uid].send.call_args.args[0]
+            self.assertIn(yes,text);self.assertNotIn(no,text)
+
+    async def test_audit10_restored_work_during_lookup_is_included(self):
+        p=self.ui.planning
+        with self.clock('2026-10-20T09:00:00'):
+            self.ui.reassign(1,10,'assignment',self.ui.reassign_snapshot(1))
+            self.db.execute("INSERT INTO archived_chores VALUES(2,'10','test')");self.db.commit()
+            p.save_reminders(10,True,'09:00',p.settings(10))
+            async def fetch(uid):
+                self.db.execute('DELETE FROM archived_chores WHERE quest_id=2');self.db.commit()
+                return self.dm
+            with patch.object(self.app.bot,'get_user',return_value=None),patch.object(self.app.bot,'fetch_user',side_effect=fetch):await p.send_due_reminders()
+        text=self.dm.send.call_args.args[0];self.assertIn('Fill dishwasher',text);self.assertIn('My bathroom',text)
+
+    async def test_audit10_skip_and_keep_overdue_are_distinguished(self):
+        p=self.ui.planning
+        with self.clock('2026-10-19T09:00:00'):
+            self.db.execute('UPDATE quests SET completed=1,reset_after=NULL');self.db.commit()
+            for policy in ('keep','skip'):
+                self.ui.create_chore('Monday '+policy,'monday','5','')
+                qid=self.db.execute('SELECT MAX(id) FROM quests').fetchone()[0]
+                self.ui.reassign(qid,10,'assignment',self.ui.reassign_snapshot(qid));self.ui.timing.set_policy(qid,policy)
+            p.save_reminders(10,True,'09:00',p.settings(10))
+        with self.clock('2026-10-21T09:00:00'):await p.send_due_reminders()
+        text=self.dm.send.call_args.args[0];self.assertIn('Monday keep',text);self.assertNotIn('Monday skip',text)
+
+    async def test_audit10_separate_am_pm_completion_and_owners(self):
+        p=self.ui.planning;dms={uid:SimpleNamespace(send=AsyncMock()) for uid in (10,20)}
+        with self.clock('2026-10-20T09:00:00'):
+            self.db.execute('UPDATE quests SET completed=1,reset_after=NULL');self.db.commit()
+            ids={}
+            for uid,freq,name in ((10,'daily-am','Morning dishes'),(20,'daily-pm','Evening dishes')):
+                self.ui.create_chore(name,freq,'5','');qid=self.db.execute('SELECT MAX(id) FROM quests').fetchone()[0];ids[uid]=qid
+                self.ui.reassign(qid,uid,'assignment',self.ui.reassign_snapshot(qid))
+                p.save_reminders(uid,True,'09:00,13:00',p.settings(uid))
+            with patch.object(self.app.bot,'get_user',side_effect=lambda uid:dms[uid]):await p.send_due_reminders()
+            dms[10].send.assert_awaited_once();dms[20].send.assert_not_awaited()
+            await self.ui.PersonalView(10,'mine',selected=ids[10]).act(Interaction(),'done')
+            dms[10].send.reset_mock()
+        with self.clock('2026-10-20T13:00:00'):
+            with patch.object(self.app.bot,'get_user',side_effect=lambda uid:dms[uid]):await p.send_due_reminders()
+        dms[10].send.assert_not_awaited();dms[20].send.assert_awaited_once()
+        self.assertIn('Evening dishes',dms[20].send.call_args.args[0])
+
+    async def test_audit10_week_handoff_uses_new_weekly_owner(self):
+        p=self.ui.planning;dms={uid:SimpleNamespace(send=AsyncMock()) for uid in (10,20)}
+        with self.clock('2026-10-20T09:00:00'):
+            self.db.execute('UPDATE quests SET completed=1,reset_after=NULL WHERE id=2');self.db.commit()
+            self.ui.signup(10,1,self.ui.week_key());self.ui.signup(20,1,self.ui.week_key(1))
+            for uid in (10,20):p.save_reminders(uid,True,'17:59,18:00',p.settings(uid))
+        with patch.object(self.app.bot,'get_user',side_effect=lambda uid:dms[uid]):
+            with self.clock('2026-10-25T17:59:00'):await p.send_due_reminders()
+            dms[10].send.assert_awaited_once();dms[20].send.assert_not_awaited();dms[10].send.reset_mock()
+            with self.clock('2026-10-25T18:00:00'):await p.send_due_reminders()
+        dms[10].send.assert_not_awaited();dms[20].send.assert_awaited_once()
+
+    async def test_audit10_rotation_and_trip_exceptions_follow_actual_day(self):
+        p=self.ui.planning
+        with self.clock('2026-10-21T09:00:00'):
+            self.db.execute("UPDATE quests SET assigned_to='20' WHERE id=2")
+            self.db.execute("INSERT INTO alternating_members VALUES('20')");self.db.commit()
+            p.save_reminders(20,True,'09:00,10:00,11:00',p.settings(20))
+            await p.send_due_reminders();self.dm.send.assert_not_awaited()
+            self.ui.attendance.add(20,'2026-10-21','2026-10-21','home','Traded day')
+        with self.clock('2026-10-21T10:00:00'):
+            await p.send_due_reminders();self.dm.send.assert_awaited_once();self.dm.send.reset_mock()
+            self.db.execute('UPDATE availability_exceptions SET active=0');self.db.commit()
+        with self.clock('2026-10-21T11:00:00'):
+            await p.send_due_reminders();self.dm.send.assert_not_awaited()
+        with self.clock('2026-10-28T09:00:00'):
+            self.ui.attendance.add(20,'2026-10-28','2026-10-28','away','Trip')
+            await p.send_due_reminders();self.dm.send.assert_not_awaited()
+        with self.clock('2026-10-29T09:00:00'):
+            await p.send_due_reminders();self.dm.send.assert_awaited_once()
+
+    async def test_audit10_chosen_and_alternating_chore_days_are_respected(self):
+        p=self.ui.planning
+        with self.clock('2026-10-19T09:00:00'):
+            self.db.execute('UPDATE quests SET completed=1,reset_after=NULL');self.db.commit()
+            for name,freq in (('Away Monday','away:monday'),('Home Monday','home:monday'),('Wednesday chore','wednesday')):
+                self.ui.create_chore(name,freq,'5','');qid=self.db.execute('SELECT MAX(id) FROM quests').fetchone()[0]
+                self.ui.reassign(qid,10,'assignment',self.ui.reassign_snapshot(qid));self.ui.timing.set_policy(qid,'skip')
+            p.save_reminders(10,True,'09:00',p.settings(10));await p.send_due_reminders()
+            text=self.dm.send.call_args.args[0];self.assertIn('Away Monday',text);self.assertNotIn('Home Monday',text);self.assertNotIn('Wednesday chore',text)
+            self.dm.send.reset_mock()
+        with self.clock('2026-10-21T09:00:00'):
+            await p.send_due_reminders();text=self.dm.send.call_args.args[0];self.assertIn('Wednesday chore',text);self.assertNotIn('Away Monday',text)
+            self.dm.send.reset_mock()
+        with self.clock('2026-10-26T09:00:00'):
+            await p.send_due_reminders();text=self.dm.send.call_args.args[0];self.assertIn('Home Monday',text);self.assertNotIn('Away Monday',text)
+
+    async def test_audit10_changed_times_cancel_old_slot_and_new_slot_sends_once(self):
+        p=self.ui.planning;p.save_reminders(10,True,'09:00',p.settings(10))
+        async def fetch(uid):
+            p.save_reminders(10,True,'09:01',p.settings(10));return self.dm
+        with self.clock('2026-10-20T09:00:00'):
+            with patch.object(self.app.bot,'get_user',return_value=None),patch.object(self.app.bot,'fetch_user',side_effect=fetch):await p.send_due_reminders()
+            self.dm.send.assert_not_awaited()
+        with self.clock('2026-10-20T09:01:00'):
+            await p.send_due_reminders();await p.send_due_reminders()
+        self.dm.send.assert_awaited_once()
+        self.assertEqual(self.db.execute('SELECT slot,status FROM reminder_deliveries ORDER BY slot').fetchall(),[('2026-10-20 09:00','canceled'),('2026-10-20 09:01','sent')])
+
+    async def test_audit10_slow_first_recipient_cannot_send_late_second_reminder(self):
+        p=self.ui.planning
+        with self.clock('2026-10-20T09:14:59'):
+            self.ui.reassign(1,20,'assignment',self.ui.reassign_snapshot(1))
+            for uid in (10,20):p.save_reminders(uid,True,'09:00',p.settings(uid))
+            async def fetch(uid):
+                self.app.now_local.return_value=datetime(2026,10,20,9,15,1,tzinfo=self.app.QUEST_TIMEZONE)
+                return self.dm
+            with patch.object(self.app.bot,'get_user',return_value=None),patch.object(self.app.bot,'fetch_user',side_effect=fetch) as calls:await p.send_due_reminders()
+        self.dm.send.assert_not_awaited();self.assertEqual(calls.await_count,1)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM reminder_deliveries WHERE user_id='20'").fetchone(),(0,))
+
+    async def test_audit10_concurrent_dispatch_with_transfer_delivers_only_to_new_owner(self):
+        p=self.ui.planning;dms={uid:SimpleNamespace(send=AsyncMock()) for uid in (10,20)}
+        started=asyncio.Event();release=asyncio.Event()
+        async def fetch(uid):
+            if uid==10:started.set();await release.wait()
+            return dms[uid]
+        with self.clock('2026-10-20T09:00:00'):
+            for uid in (10,20):p.save_reminders(uid,True,'09:00',p.settings(uid))
+            with patch.object(self.app.bot,'get_user',return_value=None),patch.object(self.app.bot,'fetch_user',side_effect=fetch):
+                task=asyncio.create_task(p.send_due_reminders())
+                try:
+                    await asyncio.wait_for(started.wait(),timeout=1)
+                    self.ui.reassign(2,20,'assignment',self.ui.reassign_snapshot(2))
+                    await p.send_due_reminders()
+                finally:release.set();await task
+        dms[10].send.assert_not_awaited();dms[20].send.assert_awaited_once()
+        self.assertEqual(self.db.execute('SELECT user_id,status FROM reminder_deliveries ORDER BY user_id').fetchall(),[('10','canceled'),('20','sent')])
+
+    async def test_audit10_empty_slot_is_not_backfilled_after_new_claim(self):
+        p=self.ui.planning
+        with self.clock('2026-10-20T09:00:00'):
+            self.ui.drop_chore(10,2,self.ui.snapshot(2))
+            p.save_reminders(10,True,'09:00,09:01',p.settings(10))
+            await p.send_due_reminders();self.dm.send.assert_not_awaited()
+            self.assertEqual(self.db.execute('SELECT status FROM reminder_deliveries').fetchone(),('skipped_empty',))
+            self.ui.reassign(1,10,'occurrence',self.ui.reassign_snapshot(1))
+        with self.clock('2026-10-20T09:01:00'):
+            await p.send_due_reminders();await p.send_due_reminders()
+        self.dm.send.assert_awaited_once()
+        self.assertEqual(self.db.execute('SELECT status FROM reminder_deliveries ORDER BY slot').fetchall(),[('skipped_empty',),('sent',)])
+
+    async def test_audit10_first_tick_after_handoff_does_not_send_previous_week_slot(self):
+        p=self.ui.planning
+        with self.clock('2026-10-25T18:00:00'):
+            p.save_reminders(10,True,'17:59,18:00',p.settings(10))
+            await p.send_due_reminders()
+            self.dm.send.assert_awaited_once()
+            self.assertEqual(self.db.execute('SELECT status FROM reminder_deliveries ORDER BY slot').fetchall(),[('skipped_week',),('sent',)])
+
+    async def test_audit10_skip_statuses_are_explained_in_private_reminder_controls(self):
+        p=self.ui.planning
+        for status,text in (('skipped_empty','no due chores'),('skipped_away','away'),('skipped_week','previous household week'),('canceled','changed')):
+            self.db.execute("INSERT OR REPLACE INTO reminder_deliveries VALUES('10','2026-10-20 09:00',?)",(status,));self.db.commit()
+            self.assertIn(text,p.Reminders(10).embed.fields[0].value)
+
+    async def test_audit10_reassignment_does_not_enable_recipient_reminders(self):
+        p=self.ui.planning
+        with self.clock('2026-10-20T09:00:00'):
+            p.save_reminders(10,True,'09:00',p.settings(10))
+            self.ui.reassign(2,20,'assignment',self.ui.reassign_snapshot(2))
+            before={t:self.db.execute('SELECT * FROM '+t).fetchall() for t in ('quests','users','claims','week_signups','completion_log')}
+            await p.send_due_reminders()
+            self.dm.send.assert_not_awaited();self.assertEqual(p.settings(20)[0],0)
+            self.assertEqual(before,{t:self.db.execute('SELECT * FROM '+t).fetchall() for t in before})
+
+    async def test_audit10_moved_skip_occurrence_waits_for_chosen_day(self):
+        p=self.ui.planning;w=self.ui.workspace
+        with self.clock('2026-10-20T09:00:00'):
+            p.save_reminders(10,True,'09:00',p.settings(10))
+            self.ui.timing.set_policy(2,'skip')
+            modal=w.MoveModal(10,2,self.ui.snapshot(2),lambda:w.Card(10,2))
+            modal.day._value='2026-10-21';event=Interaction();await modal.on_submit(event)
+            confirm=next(c for c in event.response.payload['view'].children if getattr(c,'label',None)=='Confirm')
+            await confirm.callback(event)
+            await p.send_due_reminders();self.dm.send.assert_not_awaited()
+        with self.clock('2026-10-21T09:00:00'):
+            await p.send_due_reminders();self.dm.send.assert_awaited_once()
+            self.assertIn('My bathroom',self.dm.send.call_args.args[0]);self.dm.send.reset_mock()
+        with self.clock('2026-10-22T09:00:00'):
+            await p.send_due_reminders();self.dm.send.assert_not_awaited()
+            self.assertFalse(self.ui.ready(2))
+            self.assertTrue(self.ui.timing.state(2)[0].startswith('2026-10-25T18:00:00'))
+        with self.clock('2026-10-26T09:00:00'):
+            await p.send_due_reminders();self.dm.send.assert_awaited_once()
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+
+    async def test_audit10_moved_monthly_skip_waits_until_next_month_and_survives_reload(self):
+        from chore_timing import ChoreTiming
+        p=self.ui.planning;w=self.ui.workspace
+        with self.clock('2026-10-20T09:00:00'):
+            self.ui.update_chore(2,'My bathroom','monthly','10','',self.ui.snapshot(2))
+            self.ui.timing.set_policy(2,'skip')
+            p.save_reminders(10,True,'09:00',p.settings(10))
+            modal=w.MoveModal(10,2,self.ui.snapshot(2),lambda:w.Card(10,2));modal.day._value='2026-10-21'
+            event=Interaction();await modal.on_submit(event)
+            await next(c for c in event.response.payload['view'].children if getattr(c,'label',None)=='Confirm').callback(event)
+        with self.clock('2026-10-22T09:00:00'):
+            await p.send_due_reminders();self.dm.send.assert_not_awaited()
+            self.assertFalse(self.ui.ready(2))
+            self.assertFalse(ChoreTiming(vars(self.app),self.db).ready(2))
+            self.ui.timing.set_policy(2,'keep');self.ui.timing.set_policy(2,'skip')
+            self.assertTrue(self.ui.timing.policy_state(2)[1].startswith('2026-12-01T00:00:00'))
+        with self.clock('2026-11-01T09:00:00'):
+            await p.send_due_reminders();self.dm.send.assert_awaited_once()
+            self.assertIn('My bathroom',self.dm.send.call_args.args[0])
+
+    async def test_audit10_delayed_skip_check_does_not_skip_current_regular_week(self):
+        p=self.ui.planning;w=self.ui.workspace
+        with self.clock('2026-10-20T09:00:00'):
+            self.ui.timing.set_policy(2,'skip');p.save_reminders(10,True,'09:00',p.settings(10))
+            modal=w.MoveModal(10,2,self.ui.snapshot(2),lambda:w.Card(10,2));modal.day._value='2026-10-21'
+            event=Interaction();await modal.on_submit(event)
+            await next(c for c in event.response.payload['view'].children if getattr(c,'label',None)=='Confirm').callback(event)
+        with self.clock('2026-10-26T09:00:00'):
+            await p.send_due_reminders();self.dm.send.assert_awaited_once()
+            self.assertTrue(self.ui.ready(2));self.assertIn('My bathroom',self.dm.send.call_args.args[0])
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+
+    async def test_audit10_rename_during_recipient_lookup_uses_current_name(self):
+        p=self.ui.planning;p.save_reminders(10,True,'09:00',p.settings(10))
+        async def fetch(uid):
+            self.ui.update_chore(2,'Renamed bathroom','weekly','10','',self.ui.snapshot(2))
+            return self.dm
+        with patch.object(self.app.bot,'get_user',return_value=None),patch.object(self.app.bot,'fetch_user',side_effect=fetch):
+            with self.clock('2026-10-20T09:00:00'):await p.send_due_reminders()
+        self.assertIn('Renamed bathroom',self.dm.send.call_args.args[0])
+        self.assertNotIn('My bathroom',self.dm.send.call_args.args[0])
+
+    async def test_audit10_new_assignment_during_lookup_is_included(self):
+        p=self.ui.planning;p.save_reminders(10,True,'09:00',p.settings(10))
+        async def fetch(uid):
+            self.ui.reassign(1,10,'occurrence',self.ui.reassign_snapshot(1))
+            return self.dm
+        with patch.object(self.app.bot,'get_user',return_value=None),patch.object(self.app.bot,'fetch_user',side_effect=fetch):
+            with self.clock('2026-10-20T09:00:00'):await p.send_due_reminders()
+        text=self.dm.send.call_args.args[0]
+        self.assertIn('Fill dishwasher',text);self.assertIn('My bathroom',text)
+
+    async def test_audit10_skip_deadline_crossed_during_lookup_does_not_send_old_work(self):
+        p=self.ui.planning;p.save_reminders(10,True,'23:59',p.settings(10))
+        with self.clock('2026-10-19T23:59:59'):
+            self.db.execute("UPDATE quests SET completed=1,reset_after=NULL");self.db.commit()
+            self.ui.create_chore('Monday skip','monday','5','')
+            qid=self.db.execute('SELECT MAX(id) FROM quests').fetchone()[0]
+            self.ui.reassign(qid,10,'assignment',self.ui.reassign_snapshot(qid));self.ui.timing.set_policy(qid,'skip')
+            later=datetime(2026,10,20,0,0,1,tzinfo=self.app.QUEST_TIMEZONE)
+            async def fetch(uid):
+                self.app.now_local.return_value=later
+                return self.dm
+            with patch.object(self.app.bot,'get_user',return_value=None),patch.object(self.app.bot,'fetch_user',side_effect=fetch):await p.send_due_reminders()
+        self.dm.send.assert_not_awaited()
+        self.assertEqual(self.db.execute('SELECT status FROM reminder_deliveries').fetchone(),('canceled',))
+
+    async def test_audit10_slot_expiring_during_lookup_is_not_sent_late(self):
+        p=self.ui.planning;p.save_reminders(10,True,'09:00',p.settings(10))
+        with self.clock('2026-10-20T09:14:59'):
+            async def fetch(uid):
+                self.app.now_local.return_value=datetime(2026,10,20,9,15,1,tzinfo=self.app.QUEST_TIMEZONE)
+                return self.dm
+            with patch.object(self.app.bot,'get_user',return_value=None),patch.object(self.app.bot,'fetch_user',side_effect=fetch):await p.send_due_reminders()
+        self.dm.send.assert_not_awaited()
+        self.assertEqual(self.db.execute('SELECT status FROM reminder_deliveries').fetchone(),('canceled',))
+
+    async def test_audit10_noon_reset_during_lookup_includes_new_due_slot(self):
+        p=self.ui.planning;p.save_reminders(10,True,'11:59',p.settings(10))
+        with self.clock('2026-10-20T11:59:59'):
+            self.db.execute("UPDATE quests SET frequency='twice-daily',assigned_to='10',completed=1,last_completed='2026-10-20T10:00:00-04:00',reset_after='2026-10-20T12:00:00-04:00' WHERE id=1");self.db.commit()
+            async def fetch(uid):
+                self.app.now_local.return_value=datetime(2026,10,20,12,0,1,tzinfo=self.app.QUEST_TIMEZONE)
+                return self.dm
+            with patch.object(self.app.bot,'get_user',return_value=None),patch.object(self.app.bot,'fetch_user',side_effect=fetch):await p.send_due_reminders()
+        self.assertIn('Fill dishwasher',self.dm.send.call_args.args[0])
+
+    async def test_audit10_household_channel_changed_during_lookup_cancels(self):
+        p=self.ui.planning;p.save_reminders(10,True,'09:00',p.settings(10))
+        async def fetch(uid):
+            self.db.execute("UPDATE chore_board SET channel_id='999'");self.db.commit()
+            return self.dm
+        with patch.object(self.app.bot,'get_user',return_value=None),patch.object(self.app.bot,'fetch_user',side_effect=fetch):
+            with self.clock('2026-10-20T09:00:00'):await p.send_due_reminders()
+        self.dm.send.assert_not_awaited()
+
     async def test_audit9_competing_card_claims_in_both_orders(self):
         w=self.ui.workspace
         with self.clock('2026-10-20T10:00:00'):
@@ -1129,6 +1536,34 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.db.execute("UPDATE quests SET assigned_to='10' WHERE id=1")
         self.db.executemany("INSERT INTO quests(name,frequency,points,assigned_to) VALUES(?,'daily',5,'10')",[(f'Daily {i:02}',) for i in range(10)])
         self.db.commit()
+
+    async def test_calendar_navigation_dashboard_defaults_to_today_at_click_time(self):
+        w=self.ui.workspace;p=self.ui.planning
+        with self.clock('2026-10-20T23:59:00'):
+            dashboard=w.Dashboard(10)
+        with self.clock('2026-10-21T00:01:00'):
+            i=Interaction()
+            await next(c for c in dashboard.children if getattr(c,'label',None)=='Calendar').callback(i)
+            view=i.response.payload['view']
+            self.assertIsInstance(view,p.Day)
+            self.assertEqual(view.day,datetime(2026,10,21).date())
+            self.assertEqual(view.page,0)
+            self.assertFalse(view.mine)
+            self.assertFalse(view.flexible)
+            self.assert_screen_limits(view)
+            self.assertTrue(w.render(view).to_components())
+
+    async def test_calendar_navigation_day_week_month_keep_selected_date_and_scope(self):
+        p=self.ui.planning;day=datetime(2026,10,21).date()
+        for mode in ('week','month'):
+            view=p.Day(10,day,mine=True)
+            i=Interaction()
+            await next(c for c in view.children if getattr(c,'label',None)==mode.title()).callback(i)
+            result=i.response.payload['view']
+            self.assertEqual(result.recovery_context['day'],day.isoformat())
+            self.assertEqual(result.recovery_context['mode'],mode)
+            self.assertTrue(result.recovery_context['mine'])
+            self.assert_screen_limits(result)
 
     async def test_calendar_navigation_day_paging_counts_and_boundaries(self):
         p=self.ui.planning;self.calendar_navigation_rows();day=datetime(2026,10,20).date()
