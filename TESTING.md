@@ -45,7 +45,7 @@ While it remains stopped:
 .venv/bin/python run_tests.py --suite server --release-report /home/discordbot/sprig-release-tests.json --profile --report /home/discordbot/sprig-server-checks.json
 ```
 
-The server command compiles all eleven runtime modules and runs 40 selected
+The server command compiles all twelve runtime modules and runs 42 selected
 regressions using the server's Python, SQLite, and installed Discord library:
 
 | Coverage | Why it stays in the server check |
@@ -122,7 +122,7 @@ Owner announcement permissions and quiet defaults add another server check (24 t
 Personal list lengths add two installation checks (26 total): ten-item pages fit without hidden chores, and preferences save only for the correct account and persist. Older five-item regression cases explicitly select five; separate tests exercise the actual default of ten, dense navigation, and calendar recovery when lengths change.
 
 
-Workload & pace adds chore_insights.py (also deploy repeating_signups.py; eleven runtime modules total) and one arithmetic installation check (the current runner selects 40 installation checks). Projection tests cover daily/AM/PM, flexible weekly/monthly budgets, signup expiry and Sunday handoff, DST and trips, moves, unplaced work, Undo/reset history, private recovery, and display limits. The report never writes chore or points data.
+Workload & pace adds chore_insights.py (also deploy repeating_signups.py; twelve runtime modules total) and one arithmetic installation check (the current runner selects 42 installation checks). Projection tests cover daily/AM/PM, flexible weekly/monthly budgets, signup expiry and Sunday handoff, DST and trips, moves, unplaced work, Undo/reset history, private recovery, and display limits. The report never writes chore or points data.
 
 
 Adjustable usual schedules add one installation check (28 total). Tests preserve the old fallback with no custom rows, verify per-person weekdays/rotation, day-override priority, full-day trips, DST/Sunday handoff, bulk atomicity, audit revisions, stale edits, private confirmation/recovery, reminder rechecks, and workload integration. Existing weekly signup/trade snapshots remain compatible until a custom default actually changes.
@@ -137,3 +137,7 @@ Dated occurrence regression coverage includes future-only claims, independent AM
 Shorter-flow regression checks exercise direct Claim and retained Done access, inline choice paging/drafts, exact recurring-grid replacement, direct checklist toggles through 12 steps, atomic Home/Away today with surrounding trip preservation, one-save usual schedules, and direct prefilled schedule edits. Existing race/permission/Undo tests remain in the full suite.
 
 Page-help checks cover named headings, one contextual ? per screen, private access, return position, restart recovery, and Discord component limits.
+
+Manage-list regression checks cover active/completed inclusion, archived exclusion, direct prefilled editing, saved search/page recovery, empty results, private access, stale submissions, unchanged earned points, and Discord layout limits.
+
+Shared page-template contracts cover top-right contextual help, ordered slots, native dropdown callbacks and expiry, complete preflight validation, and dense lists with current and dated Undo together. The server manifest currently selects 42 checks; all twelve runtime modules, including chore_pages.py, must match the full release report.

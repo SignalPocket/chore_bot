@@ -289,7 +289,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             source=w.Browse(10,'pickup',tab='week');panel=w.render(source)
             button=next(row.children[0] for row in self.chore_button_rows(panel) if 'Fill dishwasher' in row.children[0].label)
             event=Interaction();await button.callback(event)
-            self.assertIsInstance(event.response.wire_payload['view'].source,w.OccurrenceDates)
+            self.assertIsInstance(event.response.wire_payload['view'].source,w.Card)
             self.assertLessEqual(event.response.wire_payload['view'].total_children_count,40)
 
     async def test_dated_workload_counts_exact_claims_and_excludes_only_skipped_slots(self):
@@ -406,11 +406,26 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         wire=list(panel.walk_children())
         for item in original:
             if isinstance(item,discord.ui.Button):
-                if item not in wire:return False
+                if item not in wire and not any(item in getattr(control,'_sprig_menu_actions',()) for control in wire):return False
             elif isinstance(item,(discord.ui.Select,discord.ui.UserSelect)):
+                if item in wire:continue
                 if item.placeholder=='Choose a chore' and (getattr(source,'qid',None) is not None or getattr(source,'selected',None) is not None):continue
                 if not any(getattr(c,'label',None)==(item.placeholder or 'Choose an option').rstrip('… .') or getattr(c,'_sprig_choice_source',None)==item.custom_id for c in wire):return False
         return True
+
+    def wire_actions(self,panel):
+        return [item for item in panel.walk_children() if isinstance(item,discord.ui.Button)]+[action for item in panel.walk_children() for action in getattr(item,'_sprig_menu_actions',())]
+
+    async def activate(self,panel,label,event):
+        button=next((item for item in panel.walk_children() if isinstance(item,discord.ui.Button) and item.label==label),None)
+        if button is not None:return await button.callback(event)
+        for picker in panel.walk_children():
+            for index,action in enumerate(getattr(picker,'_sprig_menu_actions',())):
+                if action.label==label:
+                    event.data={'component_type':3,'values':[str(index)]}
+                    picker._values=[str(index)]
+                    return await picker.callback(event)
+        self.fail('Action missing: '+label)
 
     def rendered(self,event):
         value=getattr(event,'wire_result',None) or event.response.wire_payload
@@ -425,7 +440,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(row.children[1].callback(first),row.children[1].callback(second))
             self.assertEqual(w.ownership(1),('10','occurrence'))
             panel=self.rendered(first);self.assertIsInstance(panel.source,w.Card)
-            self.assertTrue(any(getattr(c,'label',None)=='Signup options' for c in panel.walk_children()))
+            self.assertTrue(any(getattr(c,'label',None)=='Signup options' for c in self.wire_actions(panel)))
             self.assertFalse(any(getattr(c,'label',None)=='Just this occurrence' for c in panel.walk_children()))
             done=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Done')
             await done.callback(Interaction())
@@ -440,11 +455,12 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         await next(c for c in panel.walk_children() if getattr(c,'label',None)=='3 items').callback(Interaction())
         self.assertEqual(w.page_size(10),3)
         event=Interaction();await w.present(event,w.Guide(10));panel=self.rendered(event)
-        self.assertNotIn('What would you like to do?',[getattr(c,'label',None) for c in panel.walk_children()])
-        next_page=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Next' and not c.disabled)
-        event=Interaction();await next_page.callback(event);panel=self.rendered(event)
+        picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select))
+        self.assertEqual(picker.placeholder,'What would you like to do?')
+        event=Interaction();event.data={'component_type':3,'values':['Finish a chore']};picker._values=['Finish a chore']
+        await picker.callback(event);panel=self.rendered(event)
         self.assertIsInstance(panel.source,w.Guide)
-        self.assertTrue(panel.source._choice_pages)
+        self.assertEqual(panel.source.recovery_context['topic'],'Finish a chore')
         self.assertLessEqual(panel.total_children_count,40)
 
     async def test_shorter_repeating_grid_preselects_exact_cells_and_saves_replacement_once(self):
@@ -529,7 +545,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         w=self.ui.workspace
         with self.clock('2026-10-21T09:00:00'):
             panel=w.render(w.Card(10,2));event=Interaction()
-            await next(c for c in panel.walk_children() if getattr(c,'label',None)=='Change schedule').callback(event)
+            await self.activate(panel,'Change schedule',event)
             panel=self.rendered(event)
             self.assertTrue(any(getattr(c,'label',None)=='Daily' for c in panel.walk_children()))
             event=Interaction();await next(c for c in panel.walk_children() if getattr(c,'label',None)=='Daily').callback(event)
@@ -569,7 +585,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'1.3.1')
+        self.assertEqual(chore_board.APP_VERSION,'1.3.2')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -579,7 +595,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 1.3.1. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 1.3.2. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -893,8 +909,8 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(all(c.disabled for c in panel.walk_children() if getattr(c,'label',None)=='Claim'))
                 event=Interaction();await rows[0].children[0].callback(event)
                 card=event.response.payload['view']
-                self.assertIsInstance(card,w.OccurrenceDates)
-                self.assertEqual(card.recovery_context['week'],int(tab=='next'))
+                self.assertIsInstance(card,w.Card)
+                self.assertEqual(card.recovery_context['offset'],int(tab=='next'))
             self.assertEqual(self.db.execute('SELECT COUNT(*) FROM claims').fetchone(),(0,))
 
 
@@ -2062,7 +2078,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_planning_dashboard_entries_and_large_checklist_limits(self):
         p=self.ui.planning;w=self.ui.workspace
         labels=[getattr(c,'label',None) for c in w.Dashboard(10).children]
-        self.assertIn('Calendar',labels);self.assertIn('Reminders',labels)
+        self.assertIn('Calendar',labels);self.assertIn('Chore reminders',labels)
         p.save_plan(2,1440,'\n'.join(f'{i}: '+'x'*70 for i in range(12)),p.plan(2))
         for view in (p.Checklist(10,2),p.Reminders(10),w.Card(10,2),w.Dashboard(301104023405199361)):
             self.assert_screen_limits(view);wire=w.render(view);self.assertTrue(wire.to_components())
@@ -4110,7 +4126,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(self.db.execute('SELECT * FROM claims').fetchall())
             event=Interaction();await row.children[1].callback(event)
             menu=event.response.wire_payload['view']
-            self.assertFalse(any(isinstance(c,(discord.ui.Select,discord.ui.UserSelect)) for c in menu.walk_children()))
+            self.assertTrue(all(menu.page_spec.native_choices or hasattr(c,'_sprig_menu_actions') for c in menu.walk_children() if isinstance(c,(discord.ui.Select,discord.ui.UserSelect))))
             self.assertIsInstance(menu.source,w.Card)
             self.assertEqual(w.ownership(1),('10','occurrence'))
             panel=w.render(w.Browse(10,'mine'));row=next(row for row in self.chore_button_rows(panel) if 'Fill dishwasher' in row.children[0].label)
@@ -4122,7 +4138,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         w=self.ui.workspace
         with self.clock('2026-10-19T09:00:00'):
             panel=w.render(w.Card(10,1));event=Interaction()
-            await next(c for c in panel.walk_children() if getattr(c,'label',None)=='Sign-up schedule').callback(event)
+            await self.activate(panel,'Sign-up schedule',event)
             view=event.response.wire_payload['view']
             for label in ('Mon',):
                 button=next(c for c in view.walk_children() if getattr(c,'label',None)==label)
@@ -4193,10 +4209,10 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             for source in sources:
                 with self.subTest(screen=type(source).__name__):
                     panel=w.render(source);panel.to_components()
-                    self.assertFalse(any(isinstance(c,(discord.ui.Select,discord.ui.UserSelect)) for c in panel.walk_children()))
+                    self.assertTrue(all(panel.page_spec.native_choices or hasattr(c,'_sprig_menu_actions') for c in panel.walk_children() if isinstance(c,(discord.ui.Select,discord.ui.UserSelect))))
                     self.assertLessEqual(len(list(panel.walk_children())),40)
                     self.assertEqual(sum(getattr(c,'label',None)=='Refresh' for c in panel.walk_children()),1)
-            panel=w.render(w.Card(10,1));labels=[getattr(c,'label',None) for c in panel.walk_children()]
+            panel=w.render(w.Card(10,1));labels=[getattr(c,'label',None) for c in self.wire_actions(panel)]
             for label in ('Reassign','Edit chore','Duplicate chore','Give feedback','Sign-up schedule'):
                 self.assertIn(label,labels)
 
@@ -4339,7 +4355,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         w=self.ui.workspace;r=self.ui.repeating
         with self.clock('2026-10-19T09:00:00'):
             source=w.Repeating(10,1,days=[0],selected_shifts=['day'])
-            panel=w.render(source);self.assertFalse(any(isinstance(c,(discord.ui.Select,discord.ui.UserSelect)) for c in panel.walk_children()))
+            panel=w.render(source);self.assertTrue(all(panel.page_spec.native_choices or hasattr(c,'_sprig_menu_actions') for c in panel.walk_children() if isinstance(c,(discord.ui.Select,discord.ui.UserSelect))))
             save=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Save repeating days')
             wrong=Interaction(20);await save.callback(wrong);self.assertFalse(r.slots(1))
             event=Interaction();await next(c for c in panel.walk_children() if getattr(c,'label',None)=='Back').callback(event)
@@ -4736,7 +4752,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(rows),2)
             self.assertTrue(all([b.label for b in row.children[1:]]==['Done','Skip'] for row in rows))
             self.assertIn('5 points',rows[0].children[0].label)
-            self.assertFalse(any(isinstance(c,(discord.ui.Select,discord.ui.UserSelect)) for c in panel.walk_children()))
+            self.assertTrue(all(panel.page_spec.native_choices or hasattr(c,'_sprig_menu_actions') for c in panel.walk_children() if isinstance(c,(discord.ui.Select,discord.ui.UserSelect))))
 
     async def test_v2_inline_done_credits_only_the_matching_chore_once(self):
         with self.clock('2026-10-20T10:00:00'):
@@ -4911,7 +4927,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         with self.clock('2026-10-20T10:00:00'):
             self.db.execute("INSERT INTO users(id,points) VALUES('10',40)");self.db.commit()
             w=self.ui.workspace;panel=w.render(w.Browse(10,'mine'))
-            self.assertIn('40 points',panel.children[0].content)
+            self.assertIn('40 points',panel.children[0].children[0].content)
             event=Interaction();await self.row_action(panel,'My bathroom').callback(event)
             self.assertIn('50 points',event.response.payload['embed'].description)
             self.assertIn('undone',self.ui.undo_completion(10,1))
@@ -4954,7 +4970,10 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_paging_buttons_immediately_follow_page_numbers_on_all_list_pages(self):
         with self.clock('2026-10-20T10:00:00'):
             for n in range(12):self.ui.create_chore(f'Paged chore {n}','daily','5','')
-            for page,disabled in [(0,[True,False]),(1,[False,False]),(2,[False,True])]:
+            sample=self.ui.workspace.Browse(10,'household',tab='all')
+            last=(len(sample.entries)-1)//sample.list_page_size
+            for page in (0,1,last):
+                disabled=[page==0,page==last]
                 panel=self.ui.workspace.render(self.ui.workspace.Browse(10,'household',tab='all',page=page))
                 footer=next(i for i,c in enumerate(panel.children) if isinstance(c,discord.ui.TextDisplay) and 'Page ' in c.content)
                 paging=panel.children[footer+1]
@@ -4984,7 +5003,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('!points',guide.embed.description)
             self.assertNotIn('!help',guide.embed.description)
             self.assert_screen_limits(guide)
-        self.assertIn('My settings → Reminders',w.Guide(10,'Set reminders').embed.description)
+        self.assertIn('My settings → Chore reminders',w.Guide(10,'Set reminders').embed.description)
         self.assertIn('not to an individual chore',w.Guide(10,'Set reminders').embed.description)
         self.assertIn('Give feedback',w.Guide(10,'Suggest a chore change').embed.description)
 
@@ -5024,7 +5043,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(sum(c.label=='Refresh' for c in buttons),1)
                     self.assertFalse(any(c.label=='Refresh / Resume' for c in buttons))
                     calendar_week=getattr(source,'recovery_context',{}).get('screen')=='calendar' and source.recovery_context['mode']=='week'
-                    self.assertTrue(all(c in buttons or (calendar_week and c.row in (1,2)) for c in original))
+                    self.assertTrue(self.controls_preserved(source,panel,original))
                     text=' '.join(c.content for c in panel.walk_children() if isinstance(c,discord.ui.TextDisplay))
                     self.assertNotIn('keeps your place if controls expire',text)
                     nav=next(c for c in panel.walk_children() if isinstance(c,discord.ui.ActionRow) and any(getattr(b,'label',None)=='Refresh' for b in c.children))
@@ -5058,7 +5077,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             rows=[c for c in panel.children if isinstance(c,discord.ui.ActionRow)]
             expected=[['Previous','Next']]
             if owner==301104023405199361:expected.append(['Reset points','Reset history / Undo'])
-            expected.append(['?','Refresh','Dashboard'])
+            expected.append(['Refresh','Dashboard'])
             self.assertEqual([[b.label for b in r.children] for r in rows],expected)
             self.assertTrue(rows[0].children[0].disabled)
             self.assertTrue(rows[0].children[1].disabled)
@@ -5092,13 +5111,13 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                 source=w.Browse(10,'household',tab='week',group=group,page=1,guild=Interaction().guild)
                 panel=w.render(source)
                 sections=self.chore_button_rows(panel)
-                self.assertEqual(len(sections),5)
+                self.assertEqual(len(sections),source.list_page_size)
                 self.assertTrue(all(not c.children[0].disabled for c in sections))
                 self.assertTrue(all('points' in c.children[0].label for c in sections))
                 rows=[c for c in panel.children if isinstance(c,discord.ui.ActionRow)]
                 self.assertEqual([[b.label for b in r.children] for r in rows],
                     [['Previous','Next'],['Due now','This week','Next week','All chores'],
-                     ['View: '+group,'Unclaimed only'],['Search','Filters','?','Refresh','Dashboard']])
+                     ['Search','Filters','View: '+group,'Unclaimed only'],['Refresh','Dashboard']])
                 self.assertFalse(any(isinstance(c,discord.ui.Select) for c in panel.walk_children()))
                 panel.to_components();self.assertLessEqual(len(list(panel.walk_children())),40)
                 event=Interaction();await sections[0].children[0].callback(event)
@@ -5115,7 +5134,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         source=w.Browse(10,'household',tab='all',group='chore',query='bathroom',unclaimed=True)
         panel=w.render(source)
         rows=[c for c in panel.children if isinstance(c,discord.ui.ActionRow)]
-        self.assertEqual([c.label for c in rows[2].children],['View: chore','All'])
+        self.assertEqual([c.label for c in rows[2].children],['Search','Filters','View: chore','All'])
         refresh=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Refresh')
         wrong=Interaction(20);await refresh.callback(wrong)
         self.assertTrue(wrong.response.payload[1]['ephemeral'])
@@ -5136,7 +5155,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(all(not c.accessory.disabled for c in sections))
             rows=[c for c in panel.children if isinstance(c,discord.ui.ActionRow)]
             self.assertEqual([[b.label for b in r.children] for r in rows],
-                [['Previous page','Next page'],['Previous day','Today','Next day','?'],['Week','Month','Back','Refresh','Dashboard']])
+                [['Previous page','Next page'],['Previous day','Today','Next day'],['Week','Month'],['Back','Refresh','Dashboard']])
             self.assertFalse(any(isinstance(c,discord.ui.Select) for c in panel.walk_children()))
             footer=next(c for c in panel.children if isinstance(c,discord.ui.TextDisplay) and 'Page ' in c.content)
             self.assertIn('Chores 1–5 of',footer.content);self.assertNotIn('Refresh / Resume',footer.content)
@@ -5475,7 +5494,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                     original=[c for c in source.children if not isinstance(c,discord.ui.Button) or c.label not in ('Refresh','Refresh / Resume')]
                     panel=w.render(source);wire=list(panel.walk_children())
                     self.assertTrue(self.controls_preserved(source,panel,original))
-                    self.assertFalse(any(isinstance(c,(discord.ui.Select,discord.ui.UserSelect)) for c in wire))
+                    self.assertTrue(all(panel.page_spec.native_choices or hasattr(c,'_sprig_menu_actions') for c in wire if isinstance(c,(discord.ui.Select,discord.ui.UserSelect))))
                     self.assertEqual(sum(getattr(c,'label',None)=='Refresh' for c in wire),1)
                     self.assertLessEqual(len(wire),40)
                     panel.to_components()
@@ -5539,12 +5558,13 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             for area in ('pickup','household','mine'):
                 if area=='mine':self.db.execute("UPDATE quests SET assigned_to='10'");self.db.commit()
                 seen=[]
-                for page in range(5):
+                sample=w.Browse(10,area,tab='all',group='chore')
+                for page in range((len(sample.entries)-1)//sample.list_page_size+1):
                     source=w.Browse(10,area,tab='all',page=page,group='chore')
                     panel=w.render(source)
                     sections=self.chore_button_rows(panel)
                     self.assertEqual(len(sections),len(source.quick_rows))
-                    self.assertEqual(len(sections),min(5,len(source.entries)-page*5))
+                    self.assertEqual(len(sections),min(source.list_page_size,len(source.entries)-page*source.list_page_size))
                     seen.extend(qid for qid,expected,done in source.quick_rows)
                     self.assertLessEqual(len(list(panel.walk_children())),40)
                     panel.to_components()
@@ -5555,6 +5575,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(any(getattr(c,'placeholder',None)=='View & tools…' for c in panel.walk_children()))
                     self.assertEqual(labels.count('Refresh'),1)
                 self.assertEqual(len(seen),len(set(seen)))
+                self.assertEqual(len(seen),len(sample.entries))
 
 
     async def test_list_length_save_is_personal_validated_and_durable(self):
@@ -5694,7 +5715,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                 panel=w.render(w.Browse(10,'pickup',tab=tab))
                 rows=[c for c in panel.children if isinstance(c,discord.ui.ActionRow)]
                 self.assertEqual([[b.label for b in r.children] for r in rows],
-                    [['Previous','Next'],['Due now','This week','Next week','All chores'],['Search','Filters','?','Refresh','Dashboard']])
+                    [['Previous','Next'],['Due now','This week','Next week','All chores'],['Search','Filters'],['Refresh','Dashboard']])
                 controls=list(panel.walk_children())
                 self.assertEqual(sum(getattr(c,'label',None)=='Refresh' for c in controls),1)
                 self.assertNotIn('Refresh / Resume',[getattr(c,'label',None) for c in controls])
@@ -6208,8 +6229,9 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                 original=[b for b in source.children if isinstance(b,discord.ui.Button)]
                 panel=w.render(source)
                 headings=[item.content for item in panel.children if isinstance(item,discord.ui.TextDisplay) and item.content.startswith('### ')]
-                self.assertEqual(headings,['### This occurrence','### Responsibility','### Schedule & details'])
-                buttons=[b for b in panel.walk_children() if isinstance(b,discord.ui.Button)]
+                self.assertEqual(headings,['### This occurrence'])
+                self.assertEqual([item.placeholder for item in panel.walk_children() if isinstance(item,discord.ui.Select)],['Responsibility','Schedule & details'])
+                buttons=self.wire_actions(panel)
                 self.assertTrue(all(sum(button is original_button for button in buttons)==1 for original_button in original))
                 self.assertLessEqual(len(list(panel.walk_children())),40)
                 body=next(c for c in panel.children if isinstance(c,discord.ui.Container))
@@ -6223,6 +6245,382 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             event=Interaction();await claim.callback(event)
             self.assertIsInstance(event.response.payload['view'],w.Card)
             self.assertEqual(self.db.execute('SELECT user_id FROM claims WHERE quest_id=1').fetchone(),('10',))
+
+
+    def manage_sections(self,panel):
+        return [item for item in panel.walk_children() if isinstance(item,discord.ui.Section) and getattr(item.accessory,'label',None)=='Edit']
+
+    async def test_manage_lands_on_all_active_chores_with_direct_edit_and_search_recovery(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-21T10:00:00'):
+            for n in range(12):self.ui.create_chore(f'Catalog {n:02d}','daily','5','Wipe the shelf','Kitchen')
+            self.db.execute("UPDATE quests SET completed=1 WHERE id=2")
+            self.db.commit()
+            source=w.Manage(10,Interaction().guild,page=1,query='Catalog')
+            panel=w.render(source)
+            self.assertEqual(len(self.manage_sections(panel)),5)
+            self.assertEqual([b.label for b in panel.children[1].children],['Add chore','Archive chore','Archived chores'])
+            self.assertLessEqual(len(list(panel.walk_children())),40)
+            panel.to_components()
+            self.assertEqual(w.recovery.restore(10,w.recovery.bookmark(source),Interaction().guild).query,'Catalog')
+            self.assertEqual(w.recovery.restore(10,w.recovery.bookmark(source),Interaction().guild).page,1)
+            clear=next(b for b in panel.walk_children() if getattr(b,'label',None)=='Clear search')
+            event=Interaction();await clear.callback(event)
+            self.assertEqual(event.response.payload['view'].query,'')
+            all_names=[q[0] for q in w.Manage(10,query='bathroom').manage_details]
+            self.assertIn(2,all_names)
+            search=next(b for b in panel.walk_children() if getattr(b,'label',None)=='Search')
+            event=Interaction();await search.callback(event)
+            modal=event.response.payload;modal.term._value='Kitchen'
+            event=Interaction();await modal.on_submit(event)
+            self.assertEqual(event.response.payload['view'].query,'Kitchen')
+            self.assertEqual(event.response.payload['view'].page,0)
+            page_source=w.Manage(10,Interaction().guild,page=1,query='Catalog')
+            page_panel=w.render(page_source)
+            event=Interaction();await self.manage_sections(page_panel)[0].accessory.callback(event)
+            modal=event.response.payload
+            event=Interaction();await modal.on_submit(event)
+            self.assertEqual((event.response.payload['view'].page,event.response.payload['view'].query),(1,'Catalog'))
+            self.db.execute("INSERT INTO archived_chores VALUES(2,'10','2026-10-21')");self.db.commit()
+            self.assertFalse(w.Manage(10,query='bathroom').manage_details)
+            missing=w.Manage(10,query='definitely absent');self.assertEqual(missing.manage_details,[])
+            self.assertIn('No matching chores',missing.embed.fields[0].name)
+            w.render(missing).to_components()
+
+    async def test_manage_direct_edit_prefills_saves_privately_and_rejects_stale_retry(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-21T10:00:00'):
+            source=w.Manage(10,query='bathroom');panel=w.render(source)
+            edit=self.manage_sections(panel)[0].accessory
+            wrong=Interaction(20);await edit.callback(wrong)
+            self.assertTrue(wrong.response.payload[1]['ephemeral'])
+            event=Interaction();await edit.callback(event);modal=event.response.payload
+            self.assertIsInstance(modal,self.ui.EditChoreModal)
+            self.assertEqual(modal.name.default,'My bathroom')
+            modal.name._value='My bathroom';modal.notes._value='Use the blue cloth';modal.points._value='15';modal.room._value='Upstairs'
+            before=self.db.execute('SELECT * FROM users ORDER BY id').fetchall()
+            wrong=Interaction(20);await modal.on_submit(wrong)
+            self.assertEqual(self.db.execute('SELECT points FROM quests WHERE id=2').fetchone(),(10,))
+            event=Interaction();await modal.on_submit(event)
+            self.assertIsInstance(event.response.payload['view'],w.Manage)
+            self.assertEqual(event.response.payload['view'].query,'bathroom')
+            self.assertEqual(self.db.execute('SELECT points,notes,category,assigned_to FROM quests WHERE id=2').fetchone(),(15,'Use the blue cloth','Upstairs','10'))
+            self.assertEqual(self.db.execute('SELECT * FROM users ORDER BY id').fetchall(),before)
+            self.db.execute("UPDATE quests SET points=20 WHERE id=2");self.db.commit()
+            event=Interaction();await modal.on_submit(event)
+            self.assertEqual(self.db.execute('SELECT points FROM quests WHERE id=2').fetchone(),(20,))
+            self.assertIn('changed',event.response.payload['content'].lower())
+
+
+    async def test_undo_dense_household_list_fits_and_remains_usable(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-21T09:00:00'):
+            for n in range(24):
+                self.ui.create_chore(f'Overflow chore {n:02}','daily','5','')
+                if n%2==0:self.db.execute("UPDATE quests SET assigned_to='10' WHERE name=?",(f'Overflow chore {n:02}',))
+            self.db.commit()
+            self.assertEqual(w.browse_page_size(10),5)
+            w.skip_occurrence(10,1,self.ui.snapshot(1))
+            for undo_count in (1,2):
+                if undo_count==2:
+                    d=self.ui.dated;day=self.ui.timing.now().date()+timedelta(days=1)
+                    d.change(10,3,day,'day','skip',d.snapshot(3,day,'day'))
+                for area in ('mine','pickup','household'):
+                    for tab in ('due','week','all'):
+                        for group in ('person','chore','day'):
+                            with self.subTest(area=area,tab=tab,group=group,undos=undo_count):
+                                panel=w.render(w.Browse(10,area,tab=tab,group=group,page=1))
+                                self.assertLessEqual(panel.total_children_count,40)
+                                undos=[b for b in panel.walk_children() if str(getattr(b,'label','')).startswith('Undo skip:')]
+                                self.assertEqual(len(undos),undo_count)
+                                self.assertEqual(len(self.chore_button_rows(panel)),4)
+                                self.assertTrue(any(isinstance(item,discord.ui.TextDisplay) and item.content.startswith('-# Page ') for item in panel.children))
+                                self.assertTrue(all(button in [b for row in panel.layout_plan.slots['undo'] for b in row.children] for button in undos))
+                                panel.to_components()
+                w.render(w.Card(10,2)).to_components()
+            panel=w.render(w.Browse(10,'household',tab='all',group='chore',page=1))
+            saved=w.recovery.bookmark(panel.source)
+            undo=next(b for b in panel.walk_children() if str(getattr(b,'label','')).startswith('Undo skip:'))
+            event=Interaction();await undo.callback(event)
+            restored=w.recovery.restore(10,saved,event.guild)
+            self.assertIsInstance(restored,w.Browse)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+
+
+    async def test_page_templates_preflight_counts_slots_and_no_partial_render(self):
+        from chore_pages import PageKind,PageSpec,PagePlan,PageLayoutError,component_count
+        with self.assertRaises(ValueError):PageSpec(PageKind.LIST,'')
+        plan=PagePlan(PageSpec(PageKind.LIST,'Example list'))
+        plan.add_item(discord.ui.ActionRow(discord.ui.Button(label='Undo')),slot='undo')
+        plan.add_item(discord.ui.TextDisplay('Page 1 of 1'),slot='footer')
+        plan.add_item(discord.ui.TextDisplay('# Example list'),slot='header')
+        plan.add_item(discord.ui.TextDisplay('One chore'),slot='content')
+        plan.paging(('Previous','Next'),[])
+        panel=discord.ui.LayoutView();plan.commit(panel)
+        self.assertEqual(panel.children[0].content,'# Example list')
+        self.assertEqual(panel.children[-1].children[0].label,'Undo')
+        self.assertEqual(component_count(panel.children),panel.total_children_count)
+        over=PagePlan(PageSpec(PageKind.LIST,'Too many controls'))
+        for n in range(14):over.add_item(discord.ui.Section(discord.ui.TextDisplay(str(n)),accessory=discord.ui.Button(label='Details')))
+        self.assertEqual(over.component_count,42)
+        target=discord.ui.LayoutView()
+        with self.assertRaises(PageLayoutError):over.commit(target)
+        self.assertFalse(target.children)
+        with self.assertRaises(ValueError):over.add_item(discord.ui.Button(label='Keep me'),optional=True)
+
+    async def test_page_templates_named_profiles_common_navigation_and_context_help(self):
+        from chore_pages import PageKind
+        w=self.ui.workspace;p=self.ui.planning
+        sources=[(w.Browse(10,'pickup'),PageKind.LIST),(w.Manage(10),PageKind.LIST),
+                 (w.Card(10,1),PageKind.DETAIL),(p.Day(10,self.ui.timing.now().date()),PageKind.CALENDAR),
+                 (p.Reminders(10),PageKind.FORM),(w.Guide(10),PageKind.HELP),
+                 (w.Confirm(10,'Confirm example','Nothing saved',AsyncMock(),lambda:w.Dashboard(10)),PageKind.CONFIRM)]
+        for source,kind in sources:
+            panel=w.render(source)
+            self.assertEqual(panel.page_spec.kind,kind)
+            self.assertTrue(panel.page_spec.title)
+            nav=panel.layout_plan.slots['navigation']
+            self.assertEqual(len(nav),1)
+            labels=[button.label for button in nav[0].children]
+            self.assertIn(labels,(['Refresh','Dashboard'],['Back','Refresh','Dashboard']))
+            self.assertEqual(sum(getattr(button,'label',None)=='?' for button in panel.walk_children()),1)
+            self.assertIsInstance(panel.children[0],discord.ui.Section)
+            self.assertEqual(panel.children[0].accessory.label,'?')
+            self.assertLessEqual(panel.total_children_count,40)
+            self.assertEqual(panel.total_children_count,panel.layout_plan.component_count)
+            self.assertFalse(await panel.interaction_check(Interaction(20)))
+            panel.to_components()
+
+    async def test_page_templates_dropdowns_keep_protected_actions_and_expired_recovery(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-21T09:00:00'):
+            panel=w.render(w.Card(10,2))
+            menus=[item for item in panel.walk_children() if isinstance(item,discord.ui.Select)]
+            self.assertEqual([item.placeholder for item in menus],['Responsibility','Schedule & details'])
+            event=Interaction(20);await self.activate(panel,'Completion history',event)
+            self.assertTrue(event.response.payload[1]['ephemeral'])
+            invalid=Interaction();invalid.data={'component_type':3,'values':['-1']};menus[0]._values=['-1']
+            await menus[0].callback(invalid)
+            self.assertTrue(invalid.response.payload[1]['ephemeral'])
+            event=Interaction();await self.activate(panel,'Completion history',event)
+            self.assertIsInstance(event.response.payload['view'],w.History)
+            panel=w.render(w.Card(10,2));w.recovery.live.clear()
+            event=Interaction();await self.activate(panel,'Edit chore',event)
+            self.assertIsInstance(event.response.payload['view'],w.Card)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+            panel=w.render(w.Card(10,1));event=Interaction()
+            await self.activate(panel,'Edit chore',event)
+            self.assertIsInstance(event.response.payload['view'],self.ui.EditChoreView)
+
+    async def test_page_templates_chore_name_always_details_future_date_is_explicit(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            for tab in ('due','week','next','upcoming','all'):
+                panel=w.render(w.Browse(10,'pickup',tab=tab))
+                rows=self.chore_button_rows(panel)
+                if not rows:continue
+                event=Interaction();await rows[0].children[0].callback(event)
+                self.assertIsInstance(event.response.payload['view'],w.Card)
+                self.assertEqual(event.response.payload['view'].recovery_context['offset'],int(tab=='next'))
+                self.assertFalse(self.db.execute('SELECT * FROM claims').fetchall())
+            panel=w.render(w.Browse(10,'pickup',tab='next'))
+            choose=next(button for button in panel.walk_children() if getattr(button,'label',None)=='Choose date')
+            event=Interaction();await choose.callback(event)
+            self.assertIsInstance(event.response.payload['view'],w.OccurrenceDates)
+
+
+
+    async def test_home_overview_statuses_paging_change_and_back(self):
+        w=self.ui.workspace;a=self.ui.attendance;guild=Interaction().guild
+        with self.clock('2026-10-22T10:00:00'):
+            now=self.ui.timing.now()
+            a.set_defaults(10,['20'],'away',[],a.defaults_snapshot(['20']),now)
+            a.set_defaults(10,['30'],'home',[],a.defaults_snapshot(['30']),now)
+            a.add(30,'2026-10-22','2026-10-22','away')
+            for uid in ('40','50','60','70'):
+                a.set_defaults(10,[uid],'home',[],a.defaults_snapshot([uid]),now)
+            before=self.db.total_changes
+            source=w.Trips(10,guild);panel=w.render(source)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+            self.assertIn('5 Home · 2 Away',source.embed.description)
+            statuses={uid:field.value for uid,field in zip(source.people_details,source.embed.fields)}
+            self.assertIn('🟢 Home',statuses['10'])
+            self.assertIn('🔴 Away',statuses['20'])
+            self.assertIn('Date override: away',statuses['30'])
+            self.assertEqual(len(source.people_details),5)
+            event=Interaction();await self.activate(panel,'Next',event)
+            next_panel=self.rendered(event);self.assertEqual(next_panel.source.recovery_context['page'],1)
+            self.assertEqual(set(source.people_details+next_panel.source.people_details),{'10','20','30','40','50','60','70'})
+            self.assertLessEqual(len(list(next_panel.walk_children())),40)
+            denied=Interaction(99);await self.activate(next_panel,'Change',denied)
+            self.assertIsNone(denied.result)
+            event=Interaction();await self.activate(next_panel,'Change',event)
+            selected=self.rendered(event)
+            self.assertEqual(selected.source.people,[next_panel.source.people_details[0]])
+            self.assertEqual(selected.source.recovery_context['roster_page'],1)
+            event=Interaction();await self.activate(selected,'Back',event)
+            self.assertEqual(self.rendered(event).source.recovery_context['page'],1)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+            self.assertFalse(a.at(20,now));self.assertFalse(a.at(30,now))
+
+    async def test_home_overview_includes_assigned_person_and_viewer_without_points(self):
+        w=self.ui.workspace
+        self.db.execute("UPDATE quests SET assigned_to='20' WHERE id=2");self.db.commit()
+        with self.clock('2026-10-22T10:00:00'):
+            view=w.Trips(10,Interaction().guild)
+            self.assertEqual(set(view.people_details),{'10','20'})
+            self.assertTrue(all('Home' in field.value for field in view.embed.fields))
+            self.assertEqual({field.name for field in view.embed.fields},{'Person 10','Person 20'})
+            self.assertEqual(w.Trips(10,page=999).recovery_context['page'],0)
+
+
+
+    async def test_attention_inline_details_replace_bottom_chore_buttons(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-22T10:00:00'):
+            for n in range(8):self.ui.create_chore(f'Attention row {n}','one-time','5','')
+            source=w.Attention(10,Interaction().guild,page=1);panel=w.render(source)
+            sections=[item for item in panel.walk_children() if isinstance(item,discord.ui.Section) and getattr(item.accessory,'label',None)=='Details']
+            self.assertEqual(len(sections),len(source.attention_details))
+            self.assertEqual(len(sections),len(source.embed.fields))
+            self.assertLessEqual(len(list(panel.walk_children())),40)
+            names={r[0][1] for r in source.entries}
+            self.assertFalse(any(getattr(item,'label',None) in names for item in panel.walk_children()))
+            event=Interaction(99);await sections[0].accessory.callback(event)
+            self.assertIsNone(event.result)
+            event=Interaction();await sections[0].accessory.callback(event)
+            card=self.rendered(event)
+            self.assertIsInstance(card.source,w.Card)
+            self.assertEqual(card.source.qid,source.attention_details[0])
+            event=Interaction();await self.activate(card,'Back',event)
+            self.assertEqual(self.rendered(event).source.page,1)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+
+
+    async def test_removed_chores_readable_list_native_restore_dropdown(self):
+        w=self.ui.workspace
+        await self.ui.RemoveChoreView(10,selected=1).act(Interaction())
+        source=w.adapt(self.ui.RemoveChoreView(10,removed=True),10,lambda:w.Manage(10))
+        panel=w.render(source)
+        self.assertIn('Fill dishwasher',source.embed.fields[0].value)
+        pickers=[c for c in panel.walk_children() if isinstance(c,discord.ui.Select)]
+        self.assertEqual(len(pickers),1)
+        self.assertEqual(pickers[0].placeholder,'Choose a chore to restore…')
+        self.assertFalse(any(getattr(c,'label',None)=='Fill dishwasher' for c in panel.walk_children()))
+        event=Interaction();pickers[0]._values=['1'];await pickers[0].callback(event)
+        selected=self.rendered(event)
+        self.assertTrue(self.ui.is_archived(1))
+        self.assertTrue(any(getattr(c,'label',None)=='Restore' for c in selected.walk_children()))
+        await self.activate(selected,'Restore',Interaction())
+        self.assertFalse(self.ui.is_archived(1))
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+
+
+    async def test_bottom_undo_done_immediate_private_atomic_and_repeat_safe(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-22T10:00:00'):
+            await self.ui.PersonalView(10,selected=1).act(Interaction(),'claim')
+            before=self.db.execute("SELECT points,streak,last_completed FROM users WHERE id='10'").fetchone()
+            await self.ui.PersonalView(10,'mine',selected=1).act(Interaction(),'done')
+            card=w.render(w.Card(10,1))
+            self.assertFalse(any(getattr(c,'label',None)=='Undo completion' for c in card.walk_children()))
+            self.assertEqual(sum(str(getattr(c,'label','')).startswith('Undo Done:') for c in card.walk_children()),1)
+            panel=w.render(w.Browse(10,'mine'))
+            undo=next(c for c in panel.walk_children() if str(getattr(c,'label','')).startswith('Undo Done:'))
+            denied=Interaction(20);await undo.callback(denied)
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=1').fetchone(),(1,))
+            event=Interaction();await asyncio.gather(undo.callback(event),undo.callback(Interaction()))
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=1').fetchone(),(0,))
+            self.assertEqual(self.db.execute("SELECT points,streak,last_completed FROM users WHERE id='10'").fetchone(),before or (0,0,None))
+            self.assertIsNotNone(self.db.execute('SELECT undone_at FROM completion_log WHERE id=1').fetchone()[0])
+            self.assertIsInstance(self.rendered(event).source,w.Browse)
+            self.assertFalse(any(str(getattr(c,'label','')).startswith('Undo Done:') for c in self.rendered(event).walk_children()))
+
+    async def test_bottom_undo_done_revalidates_after_points_change(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-22T10:00:00'):
+            await self.ui.PersonalView(10,selected=1).act(Interaction(),'claim')
+            await self.ui.PersonalView(10,'mine',selected=1).act(Interaction(),'done')
+            panel=w.render(w.Card(10,1))
+            undo=next(c for c in panel.walk_children() if str(getattr(c,'label','')).startswith('Undo Done:'))
+            self.db.execute("UPDATE users SET points=points+10 WHERE id='10'");self.db.commit()
+            event=Interaction();await undo.callback(event)
+            self.assertIn('changed',self.rendered(event).notice)
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(15,))
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=1').fetchone(),(1,))
+            self.assertIsNone(self.ui.undoable_completion(10))
+
+    async def test_clear_reminder_trade_labels_and_independent_preferences(self):
+        w=self.ui.workspace;p=self.ui.planning
+        with self.clock('2026-10-22T10:00:00'):
+            labels={getattr(c,'label',None) for c in w.render(w.Dashboard(10)).walk_children()}
+            self.assertIn('Chore reminders',labels);self.assertIn('Trade alerts',labels)
+            self.assertNotIn('Notifications',labels);self.assertNotIn('Reminders',labels)
+            original=p.settings(10)
+            panel=w.render(w.Notifications(10));await self.activate(panel,'Turn trade DMs on',Interaction())
+            self.assertEqual(p.settings(10),original)
+            self.assertEqual(w.PAGE_TOPICS['Notifications'],'Trade alerts')
+            self.assertIn('separate switch',p.Reminders(10).embed.description)
+            self.assertIn('not scheduled chore reminders',w.Notifications(10).embed.description)
+            self.assertIn('Trade alerts',w.Guide(10,'Trade alerts').embed.title)
+
+    async def test_archive_labels_consistent_on_active_archived_and_dashboard(self):
+        w=self.ui.workspace
+        for removed,title in ((False,'Archive chore'),(True,'Archived chores')):
+            source=self.ui.RemoveChoreView(10,removed=removed)
+            self.assertEqual(source.embed.title,title)
+            labels={getattr(c,'label',None) for c in source.children}
+            self.assertNotIn('Removed chores',labels);self.assertNotIn('Remove chore',labels)
+            w.render(w.adapt(source,10))
+        selected=self.ui.RemoveChoreView(10,selected=1)
+        self.assertTrue(any(getattr(c,'label',None)=='Confirm archive' for c in selected.children))
+
+
+    async def test_attendance_complete_edit_task_keeps_roster_parent_on_save_and_recovery(self):
+        w=self.ui.workspace;a=self.ui.attendance
+        with self.clock('2026-10-22T10:00:00'):
+            now=self.ui.timing.now()
+            for uid in ('20','30','40','50','60','70'):
+                a.set_defaults(10,[uid],'home',[],a.defaults_snapshot([uid]),now)
+            panel=w.render(w.Trips(10,Interaction().guild,page=1))
+            event=Interaction();await self.activate(panel,'Change',event)
+            selected=self.rendered(event);uid=selected.source.people[0]
+            event=Interaction();await self.activate(selected,'Usual schedule',event)
+            editor=self.rendered(event)
+            self.assertEqual(editor.source.recovery_context['roster_page'],1)
+            token=editor.recovery_token;w.recovery.live.clear()
+            event=Interaction();await w.recovery.route(event,token,'r')
+            recovered=self.rendered(event)
+            self.assertEqual(recovered.source.recovery_context['roster_page'],1)
+            event=Interaction();await self.activate(recovered,'Away every day',event)
+            changed=self.rendered(event)
+            event=Interaction();await self.activate(changed,'Save usual schedule',event)
+            saved=self.rendered(event)
+            self.assertFalse(a.at(uid,now))
+            self.assertEqual(saved.source.recovery_context['roster_page'],1)
+            event=Interaction();await self.activate(saved,'Back',event)
+            roster=self.rendered(event)
+            self.assertEqual(roster.source.recovery_context['page'],1)
+            states={uid:f.value for uid,f in zip(roster.source.people_details,roster.source.embed.fields)}
+            self.assertIn('Away',states[uid])
+
+
+    async def test_final_polish_help_matches_visible_card_and_attention_controls(self):
+        w=self.ui.workspace
+        for source,words in ((w.Card(10,1),('Responsibility','Schedule & details','Undo')), (w.Attention(10),('Overdue','Needs someone','Blocked','Details'))):
+            panel=w.render(source);help_button=panel.children[0].accessory
+            event=Interaction();await help_button.callback(event)
+            help_view=self.rendered(event).source
+            for word in words:self.assertIn(word,help_view.embed.description)
+            event=Interaction();await self.activate(w.render(help_view),'Back',event)
+            self.assertIsInstance(self.rendered(event).source,type(source))
+        card=w.render(w.Card(10,1))
+        labels=[getattr(c,'label',None) for c in card.walk_children()]
+        self.assertLess(labels.index('Claim'),labels.index('Skip this occurrence'))
+        self.assertLess(labels.index('Skip this occurrence'),labels.index('Stuck / need help'))
+        self.assertNotIn('Claim → Just this occurrence',w.Guide(10,'Pick up a chore').embed.description)
+        self.assertIn('Undo Done',w.Guide(10,'Undo a mistake').embed.description)
+        self.assertNotIn('More actions',w.Guide(10,'Schedules and missed chores').embed.description)
 
 
 if __name__ == "__main__":

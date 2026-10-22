@@ -64,6 +64,13 @@ def install(ns, ui):
         row=db.execute('SELECT user_id FROM completion_log WHERE id=?',(event_id,)).fetchone()
         return undo(row[0],event_id,actor=actor) if row else 'This completion no longer exists.'
 
+    def undoable(uid):
+        row=db.execute('SELECT id,quest_id,chore_name,after_state FROM completion_log WHERE user_id=? AND undone_at IS NULL ORDER BY id DESC LIMIT 1',(str(uid),)).fetchone()
+        if not row or ui.is_archived(row[1]):return None
+        after=json.loads(row[3]);after.setdefault('reset_epoch',0);after.setdefault('planning',None)
+        return row[:3] if json.loads(capture(row[1],uid))==after else None
+
+    ui.undoable_completion=undoable
     ui.owner_undo_completion=owner_undo
     ui.capture_completion=capture
     ui.record_completion=record

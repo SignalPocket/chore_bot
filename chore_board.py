@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '1.3.1'
+APP_VERSION = '1.3.2'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'Restored the readable calendar, grouped chore-card actions, and kept help beside navigation.'
+RELEASE_SUMMARY = 'Consistent page layouts, easier chore editing, direct chore details, and a Home/Away household overview.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 
@@ -1056,7 +1056,7 @@ def install(namespace):
             chosen=next((r for r in chunk if r[0]==selected),None)
             def name(qid):
                 row=db.execute('SELECT name FROM quests WHERE id=?',(qid,)).fetchone()
-                return row[0] if row else 'Removed chore'
+                return row[0] if row else 'Archived chore'
             if chunk:
                 picker=discord.ui.Select(placeholder='Choose a proposal',options=[discord.SelectOption(label=(f'#{r[0]} '+('Incoming: ' if r[2]==str(owner) else 'Outgoing: ')+name(r[3]))[:100],value=str(r[0])) for r in chunk])
                 async def choose(interaction):
@@ -1249,18 +1249,22 @@ def install(namespace):
             chunk = entries[self.page*PAGE_SIZE:(self.page+1)*PAGE_SIZE]
             self.selected = next((r for r in chunk if r[0] == selected), None)
             self.expected = snapshot(selected) if self.selected else None
-            self.embed = discord.Embed(title='Removed chores' if removed else 'Remove chore', description=notice or 'Choose a chore. Removal hides it from the board and weekly sign-ups; history and points stay saved. You can restore it here.')
+            self.embed = discord.Embed(title='Archived chores' if removed else 'Archive chore', description=notice or 'Choose a chore. Archiving hides it from the board and weekly sign-ups; history and points stay saved. You can restore it here.')
             if self.selected:
-                self.embed.add_field(name=self.selected[1][:256], value='Tap Restore to put it back.' if removed else 'Remove this chore from everyone’s board? Existing history is retained; current ownership and completion state are kept for restoration.', inline=False)
+                self.embed.add_field(name=self.selected[1][:256], value='Tap Restore to put it back.' if removed else 'Archive this chore from everyone’s board? Existing history is retained; current ownership and completion state are kept for restoration.', inline=False)
+            if not self.selected:
+                for start in range(0,len(chunk),5):
+                    self.embed.add_field(name=('Archived chores' if removed else 'Active chores') if start==0 else 'Continued',value='\n'.join('• '+name[:160] for _,name in chunk[start:start+5]),inline=False)
+                if not chunk:self.embed.add_field(name='No archived chores' if removed else 'No active chores',value='There are no chores in this list.')
             if chunk:
-                select = discord.ui.Select(placeholder='Choose a chore…', options=[chore_option(qid,name,selected=bool(self.selected and qid==self.selected[0])) for qid,name in chunk])
+                select = discord.ui.Select(placeholder='Choose a chore to restore…' if removed else 'Choose a chore to archive…', options=[chore_option(qid,name,selected=bool(self.selected and qid==self.selected[0])) for qid,name in chunk])
                 async def choose(interaction):
                     await self.show(interaction, selected=int(select.values[0]))
                 select.callback = choose
                 self.add_item(select)
             if self.selected:
-                self.button('Restore' if removed else 'Confirm removal', self.act, discord.ButtonStyle.success if removed else discord.ButtonStyle.danger)
-            self.button('Active chores' if removed else 'Removed chores', lambda i: self.show(i, removed=not removed, page=0))
+                self.button('Restore' if removed else 'Confirm archive', self.act, discord.ButtonStyle.success if removed else discord.ButtonStyle.danger)
+            self.button('Active chores' if removed else 'Archived chores', lambda i: self.show(i, removed=not removed, page=0))
             if self.page:
                 self.button('Previous', lambda i: self.show(i, page=self.page-1))
             if (self.page+1)*PAGE_SIZE < len(entries):
@@ -1297,7 +1301,7 @@ def install(namespace):
                         db.execute('DELETE FROM archived_chores WHERE quest_id = ?', (self.selected[0],))
                     else:
                         db.execute('INSERT OR IGNORE INTO archived_chores VALUES (?, ?, ?)', (self.selected[0],str(self.owner),namespace['now_local']().isoformat()))
-                notice='Restored.' if self.removed else 'Removed from the board. Find it under Removed chores if you want to restore it.'
+                notice='Restored.' if self.removed else 'Archived from the board. Find it under Archived chores if you want to restore it.'
             view=RemoveChoreView(self.owner,self.removed,notice=notice)
             await interaction.response.edit_message(embed=view.embed,view=view)
 
@@ -1863,7 +1867,7 @@ def install(namespace):
         'overview':('Start here',[
             ('Today','Open chores → Claim. My chores → choose a chore → Done. Drop releases it; Reassign gives it to someone; Trade waits for the other person’s acceptance.'),
             ('Plan the week','Weekly sign-ups reserves this or next week. Release week gives it up. Weeks end Sunday at 6 p.m. The overview switches By person / By chore / By day.'),
-            ('Change chores','Add / Edit / Remove are shared household tools. Removed chores → Restore brings a chore back. Points already earned stay saved.'),
+            ('Change chores','Add / Edit / Archive are shared household tools. Archived chores → Restore brings a chore back. Points already earned stay saved.'),
             ('Private controls','Use /chores for a private dashboard. Button replies are private. Dashboard takes you back; reopen /chores after a restart or 10 minutes. !help lists older commands.'),
             ('Day colors',DAY_LEGEND)]),
         'daily':('Doing & changing your chores',[
@@ -1881,7 +1885,7 @@ def install(namespace):
         'manage':('Chore settings',[
             ('Add or edit','Choose a schedule and fill in the form. New chores start at 5 points; explicit zero is allowed.'),
             ('Keep or skip','Edit chore → Missed chores. Keep overdue leaves work due. Skip if missed drops an expired occurrence without points and releases only its single claim. Weekly sign-ups stay saved. One-time work has no deadline.'),
-            ('Remove or restore','Remove hides a chore after confirmation. Removed chores → Restore brings it back with history and points retained.')]),
+            ('Archive or restore','Archive hides a chore after confirmation. Archived chores → Restore brings it back with history and points retained.')]),
         'feedback':('Review effort & points',[('Give feedback','Choose a chore → Chore review. Add a comment, a better day/time, or an effort score. Common scores are 0, 1, 2, 3, 5, 8, 13, 21, but other whole numbers are allowed.'),('Owner inbox','New feedback is sent privately to ginaria. Ginaria can use Dashboard → Review inbox to see open feedback across all chores, even if DMs are blocked.'),('Review together','See each person’s latest point suggestion. Suggestions never change actual points automatically; use Edit chore if the household agrees. Owner resolution keeps the feedback in All feedback.')]),
         'timing':('Schedules & day colors',[
             ('Reset times','Daily: midnight. Twice daily: midnight and noon. Weekly: Sunday 6 p.m. Monthly: first day of the month. All times are Eastern.'),
@@ -1991,7 +1995,7 @@ def install(namespace):
             view=workspace.Manage(interaction.user.id,interaction.guild)
             await interaction.response.send_message(**workspace.payload(view),ephemeral=True)
 
-        @discord.ui.button(label="Remove chore", style=discord.ButtonStyle.secondary, custom_id="sprig:remove:v1", row=1)
+        @discord.ui.button(label="Archive chore", style=discord.ButtonStyle.secondary, custom_id="sprig:remove:v1", row=1)
         async def remove_button(self, interaction, button):
             view=RemoveChoreView(interaction.user.id)
             await interaction.response.send_message(embed=view.embed,view=view,ephemeral=True)

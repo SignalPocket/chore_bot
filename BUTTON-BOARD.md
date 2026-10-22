@@ -4,7 +4,7 @@
 
 Each chore row has a **chore-name button**, **Claim / Done**, and **Skip**. Click the name to open instructions, checklist, estimate, responsibility, and actions. The colored day/period marker, AM/PM slot where relevant, and points appear on the name button. Taken work shows the responsible person; future rows offer Choose date for their one-time actions, while completed occurrences have disabled completion buttons. Previous and Next keep their fixed positions, and pages stay at five chores by default.
 
-**Claim** immediately takes just the current occurrence and leaves its card open with Done available. **Signup options** on the card offers **This week**, **Next week**, and **Repeating weekdays / shifts**. Whole-week signups retain the existing Sunday 6 p.m. handoff. Buttons replace dropdown controls throughout the workspace. Longer option lists have Previous/Next; multi-choice screens use toggle buttons followed by **Apply selection**. **Find a person** can search the household server by the beginning of a Discord name or nickname, then display matching people as buttons. Text forms remain for names, instructions, dates, and feedback.
+**Claim** immediately takes just the current occurrence and leaves its card open with Done available. **Responsibility → Signup options** on the card offers **This week**, **Next week**, and **Repeating weekdays / shifts**. Whole-week signups retain the existing Sunday 6 p.m. handoff. Common actions stay as buttons. Less-used responsibility and schedule/detail actions use named dropdowns; Help topics and list filters also use dropdowns. Longer option lists have Previous/Next; multi-choice screens use toggle buttons followed by **Apply selection**. **Find a person** can search the household server by the beginning of a Discord name or nickname, then display matching people as buttons. Text forms remain for names, instructions, dates, and feedback.
 
 To take particular days: open a daily chore → **Sign-up schedule** (or **Signup options → Repeating weekdays / shifts**), use the weekday/shift grid, where your saved slots are already selected, then **Save repeating days** once. A daily task stays daily: Kas can take Mondays/Wednesdays, Zel Tuesdays/Thursdays, and other days remain open. A twice-daily chore can give AM and PM to different people. A separate Daily AM or Daily PM chore offers only its own shift. The recurring grid saves only when you press Save; toggling or leaving it changes nothing.
 
@@ -31,7 +31,7 @@ Restore is a separate deliberate maintenance action: stop Sprig, preserve the cu
 
 ## Runtime files
 
-Deploy all eleven runtime modules together:
+Deploy all twelve runtime modules together:
 
 - sprig_bot.py. Discord bot, shared command mutations, and service entry point.
 - chore_board.py. Existing chore rules, specialized forms, permissions, and persistent panel registration.
@@ -40,6 +40,7 @@ Deploy all eleven runtime modules together:
 - chore_history.py. Append-only completion ledger and atomic conservative Undo.
 - chore_planning.py. Personal opt-in reminders, estimates, occurrence checklists, and private calendar and dated occurrences.
 - chore_recovery.py. Durable owner/guild-bound navigation, expired-control recovery, and stale-action guards.
+- chore_pages.py. Reusable named page types, slot order, dropdown groups, and complete-layout validation.
 - chore_workspace.py. Private dashboards, searchable lists, common chore cards, trip editor, and owner review queue.
 - chore_insights.py. Read-only earned/projected points and attendance-normalized comparisons.
 - dated_occurrences.py. Exact local-date/slot reservations, skips, history, and guarded Undo.
@@ -316,7 +317,7 @@ The next occurrence opens at the next regular boundary: midnight for daily work,
 
 ## Claim or skip a future occurrence
 
-In **This week**, **Next week**, or **Upcoming**, click the chore name, then choose its date and **AM**, **PM**, or **All day** slot. You can also open **Calendar → a day → a chore**. The exact date, slot, and Eastern time appear above the actions.
+A chore name always opens **Chore details**, including in **This week**, **Next week**, and **Upcoming**. Use **Choose date** beside the name or **Choose occurrence** on the card to select **AM**, **PM**, or **All day** for an exact date. You can also open **Calendar → a day → a chore**. The exact date, slot, and Eastern time appear above the actions.
 
 - **Claim just this time** reserves only that occurrence. You must be home for it, and it cannot already belong to someone else who is home.
 - **Skip just this time** skips only the selected date and slot, immediately and without points. Later repeats and weekly/repeating signups stay saved.
@@ -342,3 +343,7 @@ Who’s home? shows Home today and Away today for the selected people. These sav
 ### Screen names and page help
 
 Every private screen has a heading and a small **?** button. It opens help for that screen; **Back** returns to your place, including unsaved choices while the screen is still active. **All help topics** opens the full guide. After a restart, Refresh restores the saved screen location; unsaved confirmation actions are never replayed. Pop-up forms have their own titles; use **?** on the screen that opens the form for instructions.
+
+### Consistent page layouts
+
+Every screen uses a shared page type: dashboard, list, detail, calendar, form/settings, help, or confirmation. Titles and contextual ? help identify the page. Page counts stay directly above fixed Previous/Next controls. Search/filter controls stay together; The ? stays at the top right beside the title; Back, Refresh, and Dashboard have a separate navigation row. Undo stays last. The calendar keeps readable text with Details on the right. Dropdowns hold occasional choices; Claim, Done, Skip, Checklist, paging, and navigation remain visible buttons.

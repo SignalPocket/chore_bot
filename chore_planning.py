@@ -157,7 +157,7 @@ def install(ns, ui, w, lock):
             super().__init__(owner)
             expected=settings(owner)
             self.recovery_context={'screen':'reminders'}
-            self.embed=discord.Embed(title='Your chore reminders',description='**'+('On' if expected[0] else 'Off')+'** · '+', '.join(json.loads(expected[1]))+' Eastern\nUp to 10 daily times for your due, unfinished chores. No reminders while away or when nothing is due.\nTurn on allows private DMs to your account; change times or turn off anytime. Missed reminders are not replayed.',color=0x6B9B77)
+            self.embed=discord.Embed(title='Chore reminders',description='**'+('On' if expected[0] else 'Off')+'** · '+', '.join(json.loads(expected[1]))+' Eastern\nScheduled due-chore DMs at up to 10 daily times. These settings apply to your account, not each task. No reminders while away or when nothing is due.\nTurn on allows private DMs to your account; change times or turn off anytime. Missed reminders are not replayed. Trade proposal DMs have a separate switch under Dashboard → Trade alerts.',color=0x6B9B77)
             last=db.execute('SELECT slot,status FROM reminder_deliveries WHERE user_id=? ORDER BY slot DESC LIMIT 1',(str(owner),)).fetchone()
             if last:
                 labels={'sent':'Sent','canceled':'Not sent: chores, preferences, location, or reminder time changed.',

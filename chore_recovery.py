@@ -69,7 +69,7 @@ def install(ns, ui, w):
         if kind == 'repeating_signup':
             return w.Repeating(owner,int(context['qid']),guild,cells=context.get('cells'))
         if kind == 'usual_schedule':
-            return w.UsualSchedule(owner,context.get('people',[]),guild,context.get('mode'),context.get('days',[]))
+            return w.UsualSchedule(owner,context.get('people',[]),guild,context.get('mode'),context.get('days',[]),roster_page=context.get('roster_page',0))
         if kind == 'insights_help':
             return ui.insights.methods(owner,guild,context.get('days',28),context.get('page',0),context.get('order','planned'))
         if kind == 'insights':
@@ -80,7 +80,7 @@ def install(ns, ui, w):
             return w.Announcements(owner,guild)
         if kind == 'browse':
             state=dict(context['state'])
-            state['page']=state.get('page',0)*context.get('list_size',w.page_size(owner))//w.page_size(owner)
+            state['page']=state.get('page',0)*context.get('list_size',w.browse_page_size(owner,state.get('area','mine')))//w.browse_page_size(owner,state.get('area','mine'))
             return w.Browse(owner, guild=guild, **state)
         if kind == 'card':
             return w.Card(owner, int(context['qid']), parent, guild, int(context.get('offset', 0)))
@@ -96,13 +96,14 @@ def install(ns, ui, w):
         if kind == 'history':
             return w.History(owner, int(context['qid']), parent, context.get('page', 0))
         if kind == 'trips':
-            return w.Trips(owner, guild, context.get('people', []), context.get('page', 0))
+            return w.Trips(owner,guild,context.get('people',[]),context.get('page',0),context.get('roster_page',0))
         if kind == 'inbox':
             return w.Inbox(owner, guild, context.get('page', 0), context.get('resolved', False))
         if kind == 'guide':
             return w.Guide(owner, context['topic'])
         if kind == 'manage':
-            return w.Manage(owner, guild)
+            page=context.get('page',0)*context.get('list_size',w.page_size(owner))//w.page_size(owner)
+            return w.Manage(owner,guild,page,context.get('query',''))
         if kind == 'reminders':
             return ui.planning.Reminders(owner)
         if kind == 'attention':
@@ -189,7 +190,7 @@ def install(ns, ui, w):
 
     bot.add_dynamic_items(RecoveryControl)
 
-    def attach(panel, source, resume_row=None):
+    def attach(panel, source, resume_row=None, resume=None):
         now = monotonic()
         for key, value in list(live.items()):
             if now-value['created'] >= 600:
@@ -205,7 +206,7 @@ def install(ns, ui, w):
                 db.execute('INSERT OR REPLACE INTO workspace_places VALUES(?,?,?)', (str(source.owner), guild, encoded))
         controls = {}
         for index, item in enumerate(list(panel.walk_children())):
-            if not isinstance(item, (discord.ui.Button, discord.ui.Select, discord.ui.UserSelect)) or not item.is_dispatchable():
+            if item is resume or not isinstance(item, (discord.ui.Button, discord.ui.Select, discord.ui.UserSelect)) or not item.is_dispatchable():
                 continue
             action = str(index)
             callback = getattr(item, '_sprig_recovery_callback', item.callback)
@@ -215,11 +216,15 @@ def install(ns, ui, w):
             async def callback(i, action=action):
                 await route(i, token, action)
             item.callback = callback
-        resume = discord.ui.Button(label='Refresh' if resume_row is not None else 'Refresh / Resume', custom_id=f'sprig:recover:v1:{token}:r')
+        supplied_resume=resume is not None
+        resume=resume or discord.ui.Button(label='Refresh' if resume_row is not None else 'Refresh / Resume')
+        resume.custom_id=f'sprig:recover:v1:{token}:r'
         async def refresh(i):
             await route(i, token, 'r')
         resume.callback = refresh
-        if resume_row is None:
+        if supplied_resume:
+            pass  # The shared page template already budgeted and placed it.
+        elif resume_row is None:
             panel.add_item(discord.ui.ActionRow(resume))
         else:
             # Existing controls have already been registered for recovery;

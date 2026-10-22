@@ -1,10 +1,16 @@
 # Sprig household chore guide
 
+See [user-task audit findings](TASK-AUDIT-FINDINGS.md) for supported, awkward, missing and restricted goals.
+
+For screen purposes, control behavior and task acceptance criteria, see [Interface specification](INTERFACE-SPEC.md).
+For the page-by-page navigation map, see [Page and interaction map](PAGE-MAP.md).
+
+
 ## Button controls and repeating weekday signups
 
 Each chore row has a **chore-name button**, **Claim / Done**, and **Skip**. Click the name to open instructions, checklist, estimate, responsibility, and actions. The colored day/period marker, AM/PM slot where relevant, and points appear on the name button. Taken work shows the responsible person; future rows offer Choose date for their one-time actions, while completed occurrences have disabled completion buttons. Previous and Next keep their fixed positions, and pages stay at five chores by default.
 
-**Claim** immediately takes just the current occurrence and leaves its card open with Done available. **Signup options** on the card offers **This week**, **Next week**, and **Repeating weekdays / shifts**. Whole-week signups retain the existing Sunday 6 p.m. handoff. Buttons replace dropdown controls throughout the workspace. Longer option lists have Previous/Next; multi-choice screens use toggle buttons followed by **Apply selection**. **Find a person** can search the household server by the beginning of a Discord name or nickname, then display matching people as buttons. Text forms remain for names, instructions, dates, and feedback.
+**Claim** immediately takes just the current occurrence and leaves its card open with Done available. **Responsibility → Signup options** on the card offers **This week**, **Next week**, and **Repeating weekdays / shifts**. Whole-week signups retain the existing Sunday 6 p.m. handoff. Common actions stay as buttons. Less-used responsibility and schedule/detail actions use named dropdowns; Help topics and list filters also use dropdowns. Longer option lists have Previous/Next; multi-choice screens use toggle buttons followed by **Apply selection**. **Find a person** can search the household server by the beginning of a Discord name or nickname, then display matching people as buttons. Text forms remain for names, instructions, dates, and feedback.
 
 To take particular days: open a daily chore → **Sign-up schedule** (or **Signup options → Repeating weekdays / shifts**), use the weekday/shift grid, where your saved slots are already selected, then **Save repeating days** once. A daily task stays daily: Kas can take Mondays/Wednesdays, Zel Tuesdays/Thursdays, and other days remain open. A twice-daily chore can give AM and PM to different people. A separate Daily AM or Daily PM chore offers only its own shift. The recurring grid saves only when you press Save; toggling or leaving it changes nothing.
 
@@ -179,7 +185,7 @@ Notes such as “afternoon” or “Wednesday night” are instructions. They do
 
 ## Trips and traded days
 
-Open **Who’s home?** and choose one or more people. Select Mark home, Mark away, or a quick date shortcut. Dates accept YYYY-MM-DD, MM/DD/YYYY, MM/DD in the current year, today, or tomorrow. The last day is included. Check the readable preview before confirming.
+Open **Who’s home?** to see known household members and their scheduled Home/Away status now. This uses saved schedules and date overrides, not Discord online status. Choose **Change** beside a person, or select one or more people below. Select Mark home, Mark away, or a quick date shortcut. Dates accept YYYY-MM-DD, MM/DD/YYYY, MM/DD in the current year, today, or tomorrow. The last day is included. Check the readable preview before confirming.
 
 Select a saved exception to **Edit dates** directly or **Cancel exception**. Editing retains the old record as inactive history. An overlap with a different exception is rejected; open the existing exception to revise it. A group trip is saved for all selected people together or none if any conflicts remain.
 
@@ -414,7 +420,7 @@ The next occurrence opens at the next regular boundary: midnight for daily work,
 
 ## Claim or skip a future occurrence
 
-In **This week**, **Next week**, or **Upcoming**, click the chore name, then choose its date and **AM**, **PM**, or **All day** slot. You can also open **Calendar → a day → a chore**. The exact date, slot, and Eastern time appear above the actions.
+A chore name always opens **Chore details**, including in **This week**, **Next week**, and **Upcoming**. Use **Choose date** beside the name or **Choose occurrence** on the card to select **AM**, **PM**, or **All day** for an exact date. You can also open **Calendar → a day → a chore**. The exact date, slot, and Eastern time appear above the actions.
 
 - **Claim just this time** reserves only that occurrence. You must be home for it, and it cannot already belong to someone else who is home.
 - **Skip just this time** skips only the selected date and slot, immediately and without points. Later repeats and weekly/repeating signups stay saved.
@@ -448,6 +454,24 @@ Typical clicks from an open dashboard, with the person/item on the first page: c
 
 Every private screen has a heading and a small **?** button. It opens help for that screen; **Back** returns to your place, including unsaved choices while the screen is still active. **All help topics** opens the full guide. After a restart, Refresh restores the saved screen location; unsaved confirmation actions are never replayed. Pop-up forms have their own titles; use **?** on the screen that opens the form for instructions.
 
-Calendar day rows show the chore name, owner, and points as readable text. Press Details on the right for the chore card. The page **?** stays with calendar navigation, outside the chore list.
+Calendar day rows show the chore name, owner, and points as readable text. Press Details on the right for the chore card. The page **?** stays at the top right beside its title, outside the chore list.
 
-Chore-card buttons are grouped under **This occurrence**, **Responsibility**, and **Schedule & details**. Back, ?, Refresh, and Dashboard stay together; available Skip Undo stays at the bottom.
+Chore cards keep common **This occurrence** actions as buttons. Less-used actions are in the **Responsibility** and **Schedule & details** dropdowns. The ? is beside the title; Back, Refresh, and Dashboard stay together; available Skip Undo stays at the bottom.
+
+### Manage chores starts with the list
+
+Open **Manage chores** to see all active chores, including completed ones. **Edit** beside a chore opens its prefilled name, instructions, points, and room form directly. Saving keeps your search and page where possible. **Search** matches names, instructions, or rooms; **Clear search** returns to all active chores. Fixed Previous/Next buttons page through the list. **Add chore**, **Archive chore**, and **Archived chores** remain at the top. Archived chores stay outside the active list. Use a chore card for its schedule, checklist, feedback, or responsibility controls.
+
+Your list length is a maximum. The shared template plans each page against Discord’s component limit: a dense household list or a list with Undo can use four rows while your saved preference remains five. All chores remain available through Previous/Next; titles, help, page counts, and actions are never removed to squeeze in a row.
+
+### Consistent page layouts
+
+Every screen uses a shared page type: dashboard, list, detail, calendar, form/settings, help, or confirmation. Titles and contextual ? help identify the page. Page counts stay directly above fixed Previous/Next controls. Search/filter controls stay together; The ? stays at the top right beside the title; Back, Refresh, and Dashboard have a separate navigation row. Undo stays last. The calendar keeps readable text with Details on the right. Dropdowns hold occasional choices; Claim, Done, Skip, Checklist, paging, and navigation remain visible buttons.
+
+Needs attention shows a Details button beside each chore. Open it to review or act, then Back returns to the same list page.
+
+## Undo and message settings
+
+After Done, the bottom **Undo Done: chore name** reverses your latest unchanged completion immediately, with no confirmation page. It restores responsibility, points, and streak state. If later changes make reversal unsafe, the bot refuses it. Skip has its own immediate Undo; completion history retains the audit record.
+
+**Chore reminders** sends scheduled private messages for your due unfinished work, at up to ten chosen daily times. **Trade alerts** sends a private message when someone proposes a trade; it has a separate on/off switch. Changing either preference leaves the other unchanged. Owner feedback messages are separate.

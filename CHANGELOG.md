@@ -1,6 +1,26 @@
 # Sprig release notes
 
-## 1.3.1 - Prepared; not pushed or deployed
+## 1.3.2
+
+- Final screen polish: concise card/attention help matches visible menus, old help paths corrected, and duplicate card Undo removed in favor of bottom Undo Done.
+
+- Immediate bottom Undo Done reverses the latest unchanged completion while preserving atomic history/points safeguards.
+- Use Archive consistently; distinguish Chore reminders from Trade alerts with separate help and preferences.
+
+- Archived chores show a readable list and native restore dropdown instead of chore-name buttons.
+
+- Needs attention places Details beside each chore, replacing the duplicate chore buttons underneath.
+
+- Who’s home opens a paged household roster with current Home/Away status, schedule explanations, and inline Change controls.
+
+- Reusable page templates plan titles with top-right ? help, toolbars, content, paging, actions, navigation, and Undo before rendering; shared limits validate the entire page.
+- Keep common buttons visible; use named dropdowns for occasional card actions, Help topics, and filters. Chore-name buttons always open details; date selection is explicit.
+
+- Reserve room for current and future Skip Undo controls on full lists, preventing Discord component-limit errors without losing chores or navigation.
+
+- Manage chores opens all active chores directly, with inline Edit buttons, search, fixed paging, and return to the same search/page after saving.
+
+## 1.3.1 - Installed
 
 - Group chore-card actions by occurrence, responsibility, and schedule/details; keep navigation together and retain every existing action.
 
