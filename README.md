@@ -7,7 +7,7 @@ Start with **/chores** in the household server.
 - [Household user guide](USER-GUIDE.md).
 - [Implementation, tests, and deployment](BUTTON-BOARD.md).
 
-Run the offline regression suite with `python test_chore_board.py -q`. It uses temporary databases and mocked Discord delivery. Deploy all eight runtime modules together (including chore_recovery.py), preserving the existing server database and environment.
+Run the offline regression suite with `python test_chore_board.py -q`. It uses temporary databases and mocked Discord delivery. Deploy all ten runtime modules together (including chore_recovery.py, chore_insights.py, and repeating_signups.py), preserving the existing server database and environment.
 
 Daily server database backups run independently of Sprig at 03:15 Eastern, with catch-up checks and integrity manifests. See BUTTON-BOARD.md for paths, verification, and the standalone backup helper.
 

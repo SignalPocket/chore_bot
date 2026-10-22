@@ -16,7 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '1.1.0'
+APP_VERSION = '1.2.0'
+# Keep this to one short sentence describing changes since the previous release.
+RELEASE_SUMMARY = 'Button-only controls and repeating weekday or AM/PM signups, only when home.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 
@@ -30,7 +32,7 @@ def update_notice(at=None):
     local = at.astimezone(eastern)
     stamp = (f'{local:%B} {local.day}, {local.year} at '
              f'{local.hour % 12 or 12}:{local:%M} {local:%p %Z}')
-    return f'{UPDATE_NOTICE}\nAnnounced {stamp} (Eastern time).'
+    return f'{UPDATE_NOTICE}\nWhat’s new: {RELEASE_SUMMARY}\nAnnounced {stamp} (Eastern time).'
 
 
 
@@ -160,6 +162,8 @@ def install(namespace):
                 and (offset != 0 or not r[5] or r[5] == str(user_id))]
 
     def signup(user_id, quest_id, key):
+        if hasattr(namespace.get('chore_ui'),'repeating') and namespace['chore_ui'].repeating.slots(quest_id):
+            return 'This chore has repeating weekday signups. Manage those days instead of taking the whole week.'
         offsets = {week_key(0): 0, week_key(1): 1}
         offset = offsets.get(key)
         if offset is None:
@@ -263,9 +267,10 @@ def install(namespace):
         result = [r for r in result if not is_archived(r[0]) and timing.ready(r[0])]
         if not available(user_id):
             return []
+        def responsible(qid):return namespace['chore_ui'].workspace.ownership(qid)[0]
         if mode == "mine":
-            return [r for r in result if str(r[4] or weekly_owner(r[0]) or r[5]) == str(user_id)]
-        return [r for r in result if not r[4] and not r[5] and not weekly_owner(r[0])]
+            return [r for r in result if responsible(r[0]) == str(user_id)]
+        return [r for r in result if not responsible(r[0])]
 
     def snapshot(quest_id):
         row = db.execute("""SELECT q.completed, q.last_completed, q.assigned_to, c.user_id
@@ -487,6 +492,16 @@ def install(namespace):
                 # Monthly chores reappear in the week containing their reset.
                 if not reset or datetime.fromisoformat(reset)>=end or (offset and datetime.fromisoformat(reset)<start):
                     continue
+            repeating=namespace['chore_ui'].repeating
+            if repeating.slots(qid) and not assigned and not weekly_owner(qid,offset):
+                for when in repeating.occurrences(qid,start,end):
+                    saved=repeating.reserved(qid,when)
+                    if not saved:continue
+                    active=repeating.owner(qid,when)
+                    shift='Whole day' if repeating.shifts(qid)==('day',) else 'AM' if when.hour<12 else 'PM'
+                    result.append((active,qid,name+' · '+when.strftime('%a')+' '+shift,frequency,'Repeating · only when home',
+                        'Scheduled' if active else 'Away · needs coverage'))
+                continue
             owner=assigned or weekly_owner(qid,offset) or (claim if offset==0 else None)
             kind='Assigned' if assigned else ('Weekly sign-up' if weekly_owner(qid,offset) else ('Single claim' if claim and offset==0 else 'Nobody signed up'))
             status=('Done for this occurrence' if completed else ('Due now' if timing.ready(qid) else 'Upcoming')) if offset==0 else 'Scheduled / outstanding next week'
@@ -713,6 +728,8 @@ def install(namespace):
         row=db.execute('SELECT frequency,assigned_to,completed FROM quests WHERE id=?',(qid,)).fetchone()
         if not row or scope not in ('occurrence','week0','week1','assignment'):
             return 'Choose a valid chore and assignment scope.'
+        if scope in ('week0','week1','assignment') and namespace['chore_ui'].repeating.slots(qid):
+            return 'Release repeating days before assigning a whole week or ongoing responsibility.'
         offset=1 if scope=='week1' else 0
         if (scope.startswith('week') and not can_take_week(target,qid,offset)) or (not scope.startswith('week') and not available(target)):
             return 'That person is away that week. Choose someone who is home.'
@@ -839,11 +856,12 @@ def install(namespace):
             return None,None
         if row[0]:
             return row[0],'assignment'
+        recurring=namespace['chore_ui'].repeating.owner(qid)
         owner=weekly_owner(qid)
         if owner:
             return owner,'week0'
         row=db.execute('SELECT user_id FROM claims WHERE quest_id=?',(qid,)).fetchone()
-        return (row[0],'occurrence') if row else (None,None)
+        return (row[0],'occurrence') if row else ((recurring,'repeating') if recurring else (None,None))
 
     def drop_chore(owner,qid,expected):
         api.reset_due_quests()
@@ -852,6 +870,7 @@ def install(namespace):
         current,scope=owned_scope(qid)
         if current!=str(owner):
             return 'This chore is no longer yours. Nothing changed.'
+        if scope=='repeating':return 'Use Sign-up schedule → Release selected days to release repeating responsibility, or Skip this occurrence for just today.'
         with db:
             if scope=='assignment':
                 db.execute('UPDATE quests SET assigned_to=NULL WHERE id=?',(qid,))
@@ -895,6 +914,8 @@ def install(namespace):
         recipient,other_scope=owned_scope(requested)
         if giver!=str(owner) or not recipient or recipient==str(owner) or offered==requested:
             return 'Choose your chore and a chore owned by someone else.'
+        if scope=='repeating' and not timing.ready(offered) or other_scope=='repeating' and not timing.ready(requested):
+            return 'Wait until both occurrences are due to trade repeating responsibilities for just this time.'
         if trade_snapshot(offered)!=expected_offer or trade_snapshot(requested)!=expected_request:
             return 'A chore or week changed. Review the trade again.'
         if not available(owner) or not available(recipient):
@@ -923,7 +944,7 @@ def install(namespace):
             return 'A chore, availability, or week changed. Trade expired; propose a fresh one.'
         for qid,kind in [(offered,scope),(requested,other_scope)]:
             completed=db.execute('SELECT completed FROM quests WHERE id=?',(qid,)).fetchone()[0]
-            if kind=='occurrence' and (completed or not timing.ready(qid)):
+            if kind in ('occurrence','repeating') and (completed or not timing.ready(qid)):
                 return 'An occurrence is no longer open. Nothing exchanged.'
             if kind=='assignment' and db.execute('SELECT 1 FROM week_signups WHERE quest_id=? AND week_start>=?',(qid,week_key())).fetchone():
                 return 'An ongoing assignment has weekly reservations. Resolve those before trading.'
@@ -935,6 +956,8 @@ def install(namespace):
                 elif kind=='week0':
                     db.execute('UPDATE week_signups SET user_id=? WHERE quest_id=? AND week_start=?',(new_owner,qid,week_key()))
                     db.execute('DELETE FROM claims WHERE quest_id=?',(qid,))
+                elif kind=='repeating':
+                    db.execute('INSERT OR REPLACE INTO claims(quest_id,user_id) VALUES(?,?)',(qid,new_owner))
                 else:
                     db.execute('UPDATE claims SET user_id=? WHERE quest_id=?',(new_owner,qid))
             db.execute("UPDATE chore_trades SET status='accepted' WHERE id=?",(trade_id,))
@@ -948,7 +971,7 @@ def install(namespace):
             entries=[(qid,name) for qid,name in db.execute('SELECT id,name FROM quests ORDER BY name COLLATE NOCASE,id') if owned_scope(qid)[0] not in (None,str(owner))]
             page=min(max(page,0),max((len(entries)-1)//PAGE_SIZE,0))
             name=db.execute('SELECT name FROM quests WHERE id=?',(offered,)).fetchone()[0]
-            descriptions={'occurrence':'this occurrence','week0':'this whole week','assignment':'ongoing assignment'}
+            descriptions={'occurrence':'this occurrence','week0':'this whole week','assignment':'ongoing assignment','repeating':'this occurrence only; repeating signup stays saved'}
             self.embed=discord.Embed(title='Propose a trade',description=f'You offer **{discord.utils.escape_markdown(name)}** ({descriptions.get(owned_scope(offered)[1],"ownership changed")}). Choose another person’s chore. They must accept in Trade requests.')
             chunk=entries[page*PAGE_SIZE:(page+1)*PAGE_SIZE]
             if chunk:
@@ -1388,6 +1411,9 @@ def install(namespace):
             return True
 
     def update_chore(quest_id,name,frequency,points,notes,expected,room=None):
+        existing=db.execute('SELECT frequency FROM quests WHERE id=?',(quest_id,)).fetchone()
+        if existing and frequency!=existing[0] and namespace['chore_ui'].repeating.slots(quest_id):
+            return 'Release repeating weekday signups before changing the repeat schedule.'
         api.reset_due_quests()
         if snapshot(quest_id)!=expected or is_archived(quest_id):
             return 'This chore changed. Reopen Edit chore before saving.'
@@ -2057,6 +2083,9 @@ def install(namespace):
 
     bot.setup_hook = setup_hook
     result = SimpleNamespace(mutation_lock=lock,allowed=allowed, week_start=week_start, chore_option=chore_option, Context=Context, ReviewInbox=ReviewInbox, notify_feedback=notify_feedback, FeedbackView=FeedbackView, FeedbackModal=FeedbackModal, save_feedback=save_feedback, feedback_votes=feedback_votes, feedback_context=feedback_context, HelpView=HelpView, ReturnView=ReturnView, attendance=attendance, week_status=week_status, can_take_week=can_take_week, coverage_warning=coverage_warning, AttendanceView=AttendanceView, AttendanceModal=AttendanceModal, ChooseDayView=ChooseDayView, owned_scope=owned_scope, drop_chore=drop_chore, trade_snapshot=trade_snapshot, propose_trade=propose_trade, respond_trade=respond_trade, TradeOfferView=TradeOfferView, TradeInboxView=TradeInboxView, DropChoreView=DropChoreView, MissedChoreView=MissedChoreView, ReassignView=ReassignView, reassign=reassign, reassign_snapshot=reassign_snapshot, responsibility_view=responsibility_view, responsibility_rows=responsibility_rows, ResponsibilityView=ResponsibilityView, Launcher=Launcher, PersonalView=PersonalView, WeeklyView=WeeklyView, HouseholdSetup=HouseholdSetup, AddChoreModal=AddChoreModal, AddChoreMenu=AddChoreMenu, RemoveChoreView=RemoveChoreView, EditChoreView=EditChoreView, EditChoreModal=EditChoreModal, RepeatMenu=RepeatMenu, WeekdayMenu=WeekdayMenu, update_chore=update_chore, ready=timing.ready, completion_reset=timing.completion_reset, timing=timing, is_archived=is_archived, create_chore=create_chore, snapshot=snapshot, rows=rows, week_key=week_key, available=available, weekly_owner=weekly_owner, signup=signup)
+
+    from repeating_signups import install as install_repeating
+    result.repeating=install_repeating(namespace,result)
 
     from chore_history import install as install_history
     install_history(namespace,result)

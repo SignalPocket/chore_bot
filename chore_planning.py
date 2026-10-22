@@ -219,7 +219,8 @@ def install(ns, ui, w, lock):
         if day==timing.now().date():
             claim=db.execute('SELECT user_id FROM claims WHERE quest_id=?',(q[0],)).fetchone()
             if claim:return claim[0]
-        return None
+        when=datetime.combine(day,datetime.min.time(),tzinfo=ns['QUEST_TIMEZONE'])
+        return ui.repeating.owner(q[0],when) or ui.repeating.owner(q[0],when.replace(hour=12))
     def dated(q,day):
         move=db.execute('SELECT day FROM occurrence_moves WHERE quest_id=?',(q[0],)).fetchone()
         if move and move[0]==day.isoformat():return True
@@ -237,7 +238,7 @@ def install(ns, ui, w, lock):
                 if q[2]=='one-time' and q[5]:continue
             elif not dated(q,day):continue
             uid=owner_on(q,day)
-            if owner is not None and uid!=str(owner):continue
+            if owner is not None and uid!=str(owner) and not any(ui.repeating.owner(q[0],datetime.combine(day,datetime.min.time(),tzinfo=ns['QUEST_TIMEZONE']).replace(hour=h))==str(owner) for h in (0,12)):continue
             result.append((q,uid))
         return result
     class Calendar(w.View):
@@ -281,13 +282,15 @@ def install(ns, ui, w, lock):
             self.list_page_size=size
             rows=project(day,owner if mine else None,flexible);page=min(max(page,0),max((len(rows)-1)//size,0));chunk=rows[page*size:(page+1)*size]
             self.day,self.page,self.mine,self.flexible,self.mode=day,page,mine,flexible,mode
+            self.name_ids=[uid for q,uid in chunk if uid]+[uid for q,_ in chunk for _,_,uid in ui.repeating.slots(q[0])]
+            self.rebuild=lambda:Day(owner,day,mine,guild,page,flexible,mode)
             self.recovery_context={'screen':'day','day':day.isoformat(),'page':page,'mine':mine,'flexible':flexible,'mode':mode,'list_size':size}
             self.paging_labels=('Previous page','Next page')
             self.embed=discord.Embed(title=('No fixed day · '+day.strftime('%b %d')) if flexible else day_badge(WEEKDAYS[day.weekday()])+' '+day.strftime('%b %d, %Y'),description='Schedule preview · Details opens a chore; choosing a date does not reserve or reschedule it.'+(' Weekly/monthly chores are flexible until given a day. Owners are shown for this date’s household week.' if flexible else ''),color=0x6B9B77)
             for q,uid in chunk:
                 when=datetime.combine(day,datetime.min.time(),tzinfo=ns['QUEST_TIMEZONE']).replace(hour=12)
                 away=uid and not ui.attendance.at(uid,when)
-                self.embed.add_field(name=w.clean(q[1],100),value=w.clean(w.person(uid,guild),100)+f' · {q[3]} points'+summary(q[0])+(' · ⚠ Away' if away else ''),inline=False)
+                self.embed.add_field(name=w.clean(q[1],100),value=((' · '.join(s.upper()+': '+w.clean(w.person(ui.repeating.owner(q[0],when.replace(hour=12 if s=='pm' else 0)),guild),65) for s in ui.repeating.shifts(q[0]))) if ui.repeating.slots(q[0]) and not q[4] else w.clean(w.person(uid,guild),100))+f' · {q[3]} points'+summary(q[0])+(' · ⚠ Away' if away else ''),inline=False)
             self.embed.set_footer(text=f'Page {page+1} of {max((len(rows)-1)//size+1,1)} · '+(f'Chores {page*size+1}–{page*size+len(chunk)} of {len(rows)}' if rows else '0 chores')+' · Eastern time')
             if chunk:
                 picker=discord.ui.Select(placeholder='Choose chore',row=0,options=[discord.SelectOption(label=q[1][:100],value=str(q[0])) for q,uid in chunk])

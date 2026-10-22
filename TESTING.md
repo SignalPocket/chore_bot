@@ -45,7 +45,7 @@ While it remains stopped:
 .venv/bin/python run_tests.py --suite server --release-report /home/discordbot/sprig-release-tests.json --profile --report /home/discordbot/sprig-server-checks.json
 ```
 
-The server command compiles all nine runtime modules and runs 28 selected
+The server command compiles all ten runtime modules and runs 31 selected
 regressions using the server's Python, SQLite, and installed Discord library:
 
 | Coverage | Why it stays in the server check |
@@ -122,7 +122,10 @@ Owner announcement permissions and quiet defaults add another server check (24 t
 Personal list lengths add two installation checks (26 total): ten-item pages fit without hidden chores, and preferences save only for the correct account and persist. Older five-item regression cases explicitly select five; separate tests exercise the actual default of ten, dense navigation, and calendar recovery when lengths change.
 
 
-Workload & pace adds chore_insights.py (nine runtime modules total) and one arithmetic installation check (27 checks total). Projection tests cover daily/AM/PM, flexible weekly/monthly budgets, signup expiry and Sunday handoff, DST and trips, moves, unplaced work, Undo/reset history, private recovery, and display limits. The report never writes chore or points data.
+Workload & pace adds chore_insights.py (also deploy repeating_signups.py; ten runtime modules total) and one arithmetic installation check (the current runner selects 31 installation checks). Projection tests cover daily/AM/PM, flexible weekly/monthly budgets, signup expiry and Sunday handoff, DST and trips, moves, unplaced work, Undo/reset history, private recovery, and display limits. The report never writes chore or points data.
 
 
 Adjustable usual schedules add one installation check (28 total). Tests preserve the old fallback with no custom rows, verify per-person weekdays/rotation, day-override priority, full-day trips, DST/Sunday handoff, bulk atomicity, audit revisions, stale edits, private confirmation/recovery, reminder rechecks, and workload integration. Existing weekly signup/trade snapshots remain compatible until a custom default actually changes.
+
+
+Buttons-only controls and repeating signup regressions cover name-button navigation, actual button choice/search flows (including two separately searched people), action/label limits, private recovery, weekdays and AM/PM ownership, opposite home weeks and later attendance conflicts, reminders, projected points, single-occurrence coverage/trades/Skip/Undo, schedule-edit guards, and AM/PM split preservation. Deployment source hashes include repeating_signups.py. The existing mutation/safety tests were adapted to name/button rows rather than removed.

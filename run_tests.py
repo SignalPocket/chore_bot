@@ -12,12 +12,15 @@ from unittest.mock import patch
 HERE = Path(__file__).resolve().parent
 RUNTIME = ('sprig_bot.py', 'chore_board.py', 'chore_timing.py',
            'household_availability.py', 'chore_history.py', 'chore_workspace.py',
-           'chore_planning.py', 'chore_recovery.py', 'chore_insights.py')
+           'chore_planning.py', 'chore_recovery.py', 'chore_insights.py', 'repeating_signups.py')
 SOURCES = RUNTIME + ('requirements.txt', 'test_chore_board.py', 'run_tests.py')
 
 # Reuse regression tests, rather than maintaining a second set of assertions.
 # These cover host-dependent loading, SQLite, async callbacks, and serialization.
 SERVER_CHECKS = {
+    'button-only chore navigation': 'test_buttons_only_real_claim_name_skip_flow_and_private_actions',
+    'recurring weekday home coverage': 'test_repeating_weekdays_shared_daily_ownership_home_and_release',
+    'recurring AM PM completion and Skip': 'test_repeating_am_pm_complete_skip_and_undo_preserve_patterns',
     'announcement owner permission and quiet default': 'test_announcement_controls_are_owner_only_including_forged_callbacks',
     'update notice routing and deduplication': 'test_update_notice_once_per_release_concurrent_and_no_mentions',
     'schema, legacy upgrade, saved data': 'test_bootstrap_blank_and_legacy_database_use_real_migrations',

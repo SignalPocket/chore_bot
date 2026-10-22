@@ -62,6 +62,8 @@ def install(ns, ui, w):
         kind = context.get('screen')
         parent_context = context.get('parent', {'screen': 'dashboard'})
         parent = lambda: restore(owner, parent_context, guild, depth+1)
+        if kind == 'repeating_signup':
+            return w.Repeating(owner,int(context['qid']),guild,context.get('days',[]),context.get('shifts',[]))
         if kind == 'usual_schedule':
             return w.UsualSchedule(owner,context.get('people',[]),guild,context.get('mode'),context.get('days',[]))
         if kind == 'insights_help':
@@ -158,7 +160,7 @@ def install(ns, ui, w):
             'Week', 'Month', 'My calendar', 'Household', 'No fixed day'}
         # Navigation renders current data itself. Changes elsewhere must not force
         # an extra click just to change page/date or open a fresh checklist.
-        safe_navigation = isinstance(source, w.Dashboard) or (
+        safe_navigation = getattr(item,'_sprig_navigation',False) or isinstance(source, w.Dashboard) or (
             isinstance(item, discord.ui.Button) and item.label in navigation)
         if not safe_navigation and fingerprint() != entry['fingerprint']:
             return await open_saved(i, json.loads(row[2]),

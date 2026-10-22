@@ -45,6 +45,7 @@ def install(ns, ui, w):
         ids.update(str(uid) for uid, in db.execute('SELECT user_id FROM alternating_members'))
         ids.update(str(uid) for uid, in db.execute('SELECT user_id FROM availability_defaults'))
         ids.update(str(uid) for uid, in db.execute('SELECT DISTINCT user_id FROM availability_exceptions'))
+        ids.update(str(uid) for uid, in db.execute('SELECT DISTINCT user_id FROM repeating_signups'))
         stats = {uid: dict(earned=0, today=0, planned=0.0, away=0.0, backlog=0, past_home=0.0, future_home=0.0) for uid in ids}
         home_cache = {}
 
@@ -73,7 +74,7 @@ def install(ns, ui, w):
                 stats[uid]['today'] += points
 
         def owner(q, when, single=False):
-            return str(q[4]) if q[4] else signups.get((q[0], week_at(when).date().isoformat())) or (claims.get(q[0]) if single else None)
+            return str(q[4]) if q[4] else signups.get((q[0], week_at(when).date().isoformat())) or (claims.get(q[0]) if single else None) or ui.repeating.owner(q[0],when)
 
         unclaimed, unplaced, unclaimed_due = 0.0, 0, 0
 

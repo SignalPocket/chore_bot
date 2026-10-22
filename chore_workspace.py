@@ -37,6 +37,9 @@ def install(ns, ui, lock):
     def person(uid, guild=None):
         member = guild.get_member(int(uid)) if guild and uid else None
         cached=name_cache.get((getattr(guild,'id',None),str(uid)))
+        if cached is None and guild is None:
+            saved=db.execute('SELECT guild_id FROM chore_board WHERE singleton=1').fetchone()
+            if saved:cached=name_cache.get((int(saved[0]),str(uid)))
         return member.display_name if member else (cached[1] if cached else f'<@{uid}>' if uid else 'Needs someone')
 
     async def prime_names(i,ids):
@@ -65,7 +68,9 @@ def install(ns, ui, lock):
         weekly = ui.weekly_owner(qid, offset)
         if weekly: return str(weekly), 'week1' if offset else 'week0'
         claim = db.execute('SELECT user_id FROM claims WHERE quest_id=?', (qid,)).fetchone() if offset == 0 else None
-        return (claim[0], 'occurrence') if claim else (None, None)
+        if claim:return claim[0],'occurrence'
+        recurring=ui.repeating.owner(qid,ui.week_start(offset)+timedelta(days=1) if offset else None)
+        return (recurring,'repeating') if recurring else (None,None)
 
     def due_text(q):
         move = db.execute('SELECT day FROM occurrence_moves WHERE quest_id=?', (q[0],)).fetchone()
@@ -90,7 +95,7 @@ def install(ns, ui, lock):
                 return False
             return True
         def button(self, label, callback, row=1, primary=False, disabled=False):
-            b = discord.ui.Button(label=label, row=row, style=discord.ButtonStyle.primary if primary else discord.ButtonStyle.secondary, disabled=disabled)
+            b = discord.ui.Button(label=str(label)[:80], row=row, style=discord.ButtonStyle.primary if primary else discord.ButtonStyle.secondary, disabled=disabled)
             b.callback = callback
             self.add_item(b)
             return b
@@ -474,6 +479,7 @@ def install(ns, ui, lock):
             super().__init__(owner)
             size=page_size(owner)
             self.list_page_size=size
+            self.guild=guild
             ns['reset_due_quests']()
             tab = tab or ('due' if area in ('mine', 'pickup') else 'week')
             self.state = dict(area=area, tab=tab, page=page, query=query, person_id=person_id, room=room, unclaimed=unclaimed, group=group, date_filter=date_filter)
@@ -485,13 +491,13 @@ def install(ns, ui, lock):
                 own, due = uid == str(owner), not q[5] and ready(q[0])
                 inweek = q[2] not in WEEKLY_FREQUENCIES or timing.in_week(q[2], ui.week_start(offset)) or (offset == 0 and due)
                 if area == 'mine':
-                    future_own = ownership(q[0], 1)[0] == str(owner)
+                    future_own = ownership(q[0], 1)[0] == str(owner) or ui.repeating.in_week(owner,q[0],1) or ui.repeating.in_week(owner,q[0],0)
                     if tab == 'done':
                         if not db.execute('SELECT 1 FROM completion_log WHERE quest_id=? AND user_id=? AND undone_at IS NULL', (q[0], str(owner))).fetchone(): continue
                     elif tab == 'upcoming':
                         if q[5] and not q[7]: continue
                         if not (own or future_own) or (due and own and not future_own): continue
-                    elif not own or (tab == 'due' and not due) or (tab == 'week' and not inweek): continue
+                    elif not (own or (tab in ('week','next') and ui.repeating.in_week(owner,q[0],offset))) or (tab == 'due' and not due) or (tab == 'week' and not inweek): continue
                 elif area == 'pickup':
                     if uid or q[4]: continue
                     if tab == 'due' and not due: continue
@@ -603,6 +609,96 @@ def install(ns, ui, lock):
             self.nav()
             self.embed.set_footer(text=f'Page {page+1} of {max((len(rendered)-1)//size+1,1)} · Eastern time · Weeks change Sunday 6 p.m.')
 
+    class ButtonChoices(View):
+        """Button counterpart of an existing selector; keep its validated callback."""
+        def __init__(self,source,picker,guild=None,page=0,selected=None,members=()):
+            super().__init__(source.owner)
+            self.recovery_context=getattr(source,'recovery_context',{'screen':'dashboard'})
+            title=(picker.placeholder or 'Choose an option').rstrip('… .')
+            self.embed=discord.Embed(title=title,description='Choose an option.' if picker.max_values==1 else 'Choose items, then Apply. Changes are not saved until Apply.',color=0x6B9B77)
+            if isinstance(picker,discord.ui.UserSelect):
+                people={str(getattr(member,'id','')):member for member in list(getattr(guild,'members',[]))+list(members) if not getattr(member,'bot',False)}
+                ids={str(uid) for uid, in db.execute('SELECT id FROM users')}
+                ids.update(str(uid) for uid, in db.execute('SELECT user_id FROM alternating_members'))
+                ids.add(str(source.owner))
+                for uid in ids:
+                    member=guild.get_member(int(uid)) if guild else None
+                    if member and not getattr(member,'bot',False):people.setdefault(uid,member if hasattr(member,'id') else SimpleNamespace(id=int(uid),display_name=member.display_name))
+                values=[(uid,clean(getattr(member,'display_name',uid),80),member) for uid,member in people.items() if uid]
+                if not values:self.embed.description='No household accounts are cached yet. Open /chores in the household server after members have used it.'
+            else:
+                values=[(str(option.value),option.label,option.value) for option in picker.options]
+            page=max(0,min(page,max((len(values)-1)//10,0)))
+            selected=set(selected if selected is not None else [str(o.value) for o in getattr(picker,'options',[]) if o.default])
+            async def apply(i,chosen):
+                if not await source.interaction_check(i):return
+                picker._values=[value for key,label,value in values if key in chosen]
+                # Source callbacks continue to enforce ownership, stale state and permissions.
+                await picker.callback(i)
+            for index,(key,label,value) in enumerate(values[page*10:(page+1)*10]):
+                async def choose(i,key=key):
+                    if not await self.interaction_check(i):return
+                    if picker.max_values==1:return await apply(i,{key})
+                    changed=selected^{key}
+                    if len(changed)>picker.max_values:return await i.response.send_message('Choose at most '+str(picker.max_values)+' items.',ephemeral=True)
+                    await present(i,ButtonChoices(source,picker,i.guild,page,changed,members))
+                self.button(('✓ ' if key in selected else '')+label,choose,row=index//3,primary=key in selected)
+            if picker.max_values>1:
+                self.button('Apply selection',lambda i:apply(i,selected),row=3,primary=True,disabled=not picker.min_values<=len(selected)<=picker.max_values)
+            if page:self.button('Previous',lambda i:present(i,ButtonChoices(source,picker,i.guild,page-1,selected,members)),row=4)
+            if (page+1)*10<len(values):self.button('Next',lambda i:present(i,ButtonChoices(source,picker,i.guild,page+1,selected,members)),row=4)
+            if isinstance(picker,discord.ui.UserSelect):
+                outer=self
+                class FindPerson(discord.ui.Modal):
+                    def __init__(self):
+                        super().__init__(title='Find a household member')
+                        self.name=discord.ui.TextInput(label='Beginning of Discord name or nickname',min_length=1,max_length=32)
+                        self.add_item(self.name)
+                    async def on_submit(self,i):
+                        if not await source.interaction_check(i):return
+                        await i.response.defer()
+                        from discord.http import Route
+                        try:
+                            result=await asyncio.wait_for(bot.http.request(Route('GET','/guilds/{guild_id}/members/search',guild_id=i.guild_id),params={'query':self.name.value.strip(),'limit':25}),timeout=5)
+                        except Exception:
+                            return await present(i,outer,'Could not look up members. Nothing changed; try Find a person again.')
+                        found=[SimpleNamespace(id=int(m['user']['id']),display_name=m.get('nick') or m['user'].get('global_name') or m['user']['username'],bot=False) for m in result if not m['user'].get('bot',False)]
+                        await present(i,ButtonChoices(source,picker,i.guild,0,selected,tuple(members)+tuple(found)),'Choose a result below.' if found else 'No matching members. Try a different name.')
+                self.button('Find a person',lambda i:i.response.send_modal(FindPerson()),row=4)
+            self.button('Back',lambda i:present(i,source),row=4)
+
+    class ClaimChoices(View):
+        def __init__(self,owner,qid,guild=None,back=None):
+            super().__init__(owner)
+            back=back or (lambda:Card(owner,qid,guild=guild))
+            self.recovery_context={'screen':'card','qid':qid,'offset':0,'parent':recovery.bookmark(back())}
+            q=chore(qid);expected=ui.snapshot(qid)
+            self.embed=discord.Embed(title='Sign up · '+clean(q[1],100),description='Choose how long to take responsibility. Repeating days can be shared among people and pause when you are away.',color=0x6B9B77)
+            async def once(i):
+                if not await self.interaction_check(i):return
+                async def change():
+                    async with lock:
+                        ns['reset_due_quests']()
+                        if ui.snapshot(qid)!=expected:return 'This chore changed. Review it again.'
+                        context=ui.Context(i);await bot.get_command('claim').callback(context,qid)
+                        return '\n'.join(context.messages)
+                task=asyncio.create_task(change())
+                finished,_=await asyncio.wait({task},timeout=1.0)
+                if not finished:await i.response.defer()
+                await present(i,back(),await task)
+            self.button('Just this occurrence',once,row=0,primary=True,disabled=q[5] or not ready(qid) or bool(ownership(qid)[0]) or not ui.available(owner))
+            if q[2] in WEEKLY_FREQUENCIES:
+                for offset,label in ((0,'This week'),(1,'Next week')):
+                    async def week(i,offset=offset):
+                        if not await self.interaction_check(i):return
+                        async with lock:
+                            notice=ui.signup(owner,qid,ui.week_key(offset)) if ui.snapshot(qid)==expected else 'This chore changed. Review it again.'
+                        await present(i,back(),notice)
+                    self.button(label,week,row=1)
+            if ui.repeating.shifts(qid):self.button('Repeating weekdays / shifts',lambda i:present(i,Repeating(owner,qid,i.guild)),row=2)
+            self.nav(back)
+
+
     class LayoutPanel(discord.ui.LayoutView):
         """V2-only wire layout; the source retains the existing navigation and rules."""
         def __init__(self,source,notice=None):
@@ -675,36 +771,55 @@ def install(ns, ui, lock):
                     if not content:break
                     if calendar_day and index<len(calendar_details):
                         qid,open_chore=calendar_details[index]
-                        button=discord.ui.Button(label='Details',style=discord.ButtonStyle.secondary)
+                        button=discord.ui.Button(label=chore(qid)[1][:80],style=discord.ButtonStyle.secondary)
                         async def details(i,qid=qid,open_chore=open_chore):
                             if not await source.interaction_check(i):return
                             await open_chore(i,qid)
                         button.callback=details
-                        add_body(discord.ui.Section(content,accessory=button))
+                        button._sprig_navigation=True
+                        summary=discord.ui.Button(label=field.value.replace('\n',' · ')[:80],style=discord.ButtonStyle.secondary,disabled=True)
+                        add_body(discord.ui.ActionRow(button,summary))
                     elif isinstance(source,Browse) and index<len(source.quick_rows):
                         qid,expected,can_done=source.quick_rows[index]
-                        pending_steps=can_done and not ui.planning.complete(qid)
-                        can_done=can_done and source.state['area']=='mine'
-                        button=discord.ui.Button(label='Checklist' if pending_steps and can_done else 'Done' if can_done else 'Details',style=discord.ButtonStyle.success if can_done else discord.ButtonStyle.secondary,disabled=can_done and not ui.available(source.owner))
-                        async def click(i,qid=qid,expected=expected,can_done=can_done,pending_steps=pending_steps):
+                        q=chore(qid);uid=ownership(qid)[0]
+                        current=source.state['tab'] not in ('next','upcoming','done') and not q[5] and ready(qid)
+                        back=lambda:Browse(source.owner,**source.state,guild=getattr(source,'guild',None))
+                        name=discord.ui.Button(label=((timing.emoji(q[2])+' ' if timing.emoji(q[2]) else '')+q[1][:55]+(' · AM slot' if q[2] in ('daily-am','twice-daily') and (q[2]!='twice-daily' or timing.now().hour<12) else ' · PM slot' if q[2] in ('daily-pm','twice-daily') else '')+f' · {q[3]} points')[:80],style=discord.ButtonStyle.secondary)
+                        async def details(i,qid=qid):
                             if not await source.interaction_check(i):return
-                            if not can_done:
-                                return await present(i,Card(source.owner,qid,lambda:Browse(source.owner,**source.state,guild=i.guild),i.guild,1 if source.state['tab']=='next' else 0))
-                            if can_done and (pending_steps or not ui.planning.complete(qid)):return await present(i,ui.planning.Checklist(source.owner,qid,i.guild,lambda:Card(source.owner,qid,lambda:Browse(source.owner,**source.state,guild=i.guild),i.guild)))
-                            async def complete():
+                            await present(i,Card(source.owner,qid,lambda:Browse(source.owner,**source.state,guild=i.guild),i.guild,1 if source.state['tab']=='next' else 0))
+                        name.callback=details
+                        name._sprig_navigation=True
+                        action=discord.ui.Button(label='Done' if can_done else 'Claim' if not uid else ('Taken: '+clean(person(uid,getattr(source,'guild',None)),30)),style=discord.ButtonStyle.success if can_done else discord.ButtonStyle.primary if not uid else discord.ButtonStyle.secondary,disabled=not current or (bool(uid) and uid!=str(source.owner)) or not ui.available(source.owner))
+                        pending_steps=can_done and not ui.planning.complete(qid)
+                        async def act(i,qid=qid,expected=expected,can_done=can_done,pending_steps=pending_steps):
+                            if not await source.interaction_check(i):return
+                            parent=lambda:Browse(source.owner,**source.state,guild=i.guild)
+                            if not can_done:return await present(i,ClaimChoices(source.owner,qid,i.guild,parent))
+                            if pending_steps or not ui.planning.complete(qid):return await present(i,ui.planning.Checklist(source.owner,qid,i.guild,lambda:Card(source.owner,qid,parent,i.guild)))
+                            async def change():
                                 async with lock:
                                     ns['reset_due_quests']()
                                     if ui.snapshot(qid)!=expected:return 'This occurrence changed. Review the refreshed list.'
-                                    context=ui.Context(i)
-                                    await bot.get_command('done').callback(context,qid)
+                                    context=ui.Context(i);await bot.get_command('done').callback(context,qid)
                                     return '\n'.join(context.messages)
-                            task=asyncio.create_task(complete())
+                            task=asyncio.create_task(change())
                             finished,_=await asyncio.wait({task},timeout=1.0)
                             if not finished:await i.response.defer()
-                            result=await task
-                            await present(i,Browse(source.owner,**source.state,guild=i.guild),result[:800])
-                        button.callback=click
-                        add_body(discord.ui.Section(content,accessory=button))
+                            await present(i,parent(),await task)
+                        action.callback=act
+                        skip=discord.ui.Button(label='Skip',style=discord.ButtonStyle.secondary,disabled=not current or q[2]=='one-time')
+                        async def skip_click(i,qid=qid,expected=expected):
+                            if not await source.interaction_check(i):return
+                            parent=lambda:Browse(source.owner,**source.state,guild=i.guild)
+                            async def save(event):
+                                if not await source.interaction_check(event):return
+                                await event.response.defer()
+                                async with lock:notice=skip_occurrence(event.user.id,qid,expected)
+                                await present(event,parent(),notice)
+                            await present(i,Confirm(source.owner,'Skip this occurrence?','No points or completion credit. The next occurrence and weekly/repeating signup stay saved. A single claim is released. There is currently no Undo skip.',save,parent))
+                        skip.callback=skip_click
+                        add_body(discord.ui.ActionRow(name,action,skip))
                     else:add_body(content)
                 if body is not None and body.children:self.add_item(body)
                 footer_value=embed.footer.text if embed.footer and embed.footer.text else ''
@@ -728,7 +843,7 @@ def install(ns, ui, lock):
                     week_days.append(item);continue
                 if isinstance(item,discord.ui.Button) and item.label in ('Refresh','Refresh / Resume'):continue
                 if calendar_day and isinstance(item,discord.ui.Select) and item.placeholder=='Choose chore':continue
-                if isinstance(source,Browse) and source.state['area'] in ('pickup','household') and isinstance(item,discord.ui.Select) and item.placeholder=='Open a chore card…':
+                if isinstance(source,Browse) and isinstance(item,discord.ui.Select) and item.placeholder=='Open a chore card…':
                     continue  # Each chore already has its own Details button.
                 # Paired pickup controls use the existing Refresh / Resume;
                 # omit the duplicate Refresh to stay within Discord's limit.
@@ -738,14 +853,17 @@ def install(ns, ui, lock):
                     paging.append(item)
                     continue
                 row=row_ids.get(item.custom_id,item.row if item.row is not None else 0)
+                if isinstance(item,(discord.ui.Select,discord.ui.UserSelect)):
+                    picker=item
+                    item=discord.ui.Button(label=(picker.placeholder or 'Choose an option').rstrip('… .')[:80],style=discord.ButtonStyle.secondary)
+                    async def choose_buttons(i,picker=picker):
+                        if not await source.interaction_check(i):return
+                        await present(i,ButtonChoices(source,picker,i.guild))
+                    item.callback=choose_buttons
                 rows.setdefault(row,[]).append(item)
             if week_days:
-                day_picker=discord.ui.Select(placeholder='Open a day…',options=[discord.SelectOption(label=item.label,value=str(index)) for index,item in enumerate(week_days)])
-                async def open_day(i):
-                    if not await source.interaction_check(i):return
-                    await week_days[int(day_picker.values[0])].callback(i)
-                day_picker.callback=open_day
-                rows[1]=[day_picker]
+                rows[1]=week_days[:4]
+                rows[2]=week_days[4:]
             if paging_labels:
                 available={button.label:button for button in paging}
                 fixed=[]
@@ -904,6 +1022,7 @@ def install(ns, ui, lock):
             if keep_claim_on_pm:
                 db.execute('DELETE FROM claims WHERE quest_id=?',(qid,))
                 db.execute('INSERT INTO claims VALUES(?,?)',(pm_id,old_claim[0]))
+            db.execute("UPDATE repeating_signups SET quest_id=? WHERE quest_id=? AND shift='pm'",(pm_id,qid))
             db.execute('INSERT INTO chore_shift_splits VALUES(?,?)',(qid,pm_id))
         return 'Split into separate AM and PM chores. Existing weekly/ongoing ownership stays on AM; PM is open except for a current PM single claim. Earned points and old history are unchanged.'
 
@@ -933,6 +1052,8 @@ def install(ns, ui, lock):
         return ('Occurrence skipped. No points awarded; weekly sign-ups and ongoing assignments stay saved. '
                 +'Next due '+datetime.fromisoformat(next_due).strftime('%a %b %d, %I:%M %p %Z')+'.')
 
+    Repeating=ui.repeating.install_views(SimpleNamespace(View=View,Confirm=lambda *a,**kw:Confirm(*a,**kw),Card=lambda *a,**kw:Card(*a,**kw),present=lambda *a,**kw:present(*a,**kw),person=person))
+
     class Card(View):
         def __init__(self, owner, qid, back=None, guild=None, offset=0, notice=None):
             super().__init__(owner)
@@ -949,7 +1070,7 @@ def install(ns, ui, lock):
             uid, scope = ownership(qid, offset)
             self.name_ids=[uid]
             self.rebuild=lambda:Card(owner,qid,back,guild,offset,notice)
-            duration = {'assignment':'Every week · ongoing','week0':'This week · until Sunday 6 p.m.','week1':'Next week · Sunday 6 p.m. to Sunday 6 p.m.','occurrence':'Just this time'}.get(scope, 'Available')
+            duration = {'assignment':'Every week · ongoing','week0':'This week · until Sunday 6 p.m.','week1':'Next week · Sunday 6 p.m. to Sunday 6 p.m.','occurrence':'Just this time','repeating':'Repeating weekday/shift · only when home'}.get(scope, 'Available')
             self.embed.add_field(name='Responsibility', value=f'{clean(person(uid,guild),100)} · {duration}', inline=False)
             self.embed.add_field(name='When', value=f'{timing.label(q[2],qid)}\n{due_text(q)}', inline=False)
             self.embed.add_field(name='Points and room', value=f'{q[3]} points · {clean(q[9] or "Unspecified",100)}', inline=False)
@@ -958,6 +1079,11 @@ def install(ns, ui, lock):
             if help_status and not q[5]:self.embed.add_field(name='⚠ '+help_status[4],value=clean(help_status[5],500),inline=False)
             self.button('Stuck / need help',lambda i:present(i,ui.planning.HelpStatus(owner,qid,i.guild)),row=2)
             if ui.planning.steps(qid):self.button('Checklist',lambda i:present(i,ui.planning.Checklist(owner,qid,i.guild,card)),row=2)
+            if ui.repeating.shifts(qid):
+                self.button('Sign-up schedule',lambda i:present(i,Repeating(i.user.id,qid,i.guild)),row=2)
+                saved=ui.repeating.slots(qid)
+                self.name_ids.extend(uid for _,_,uid in saved)
+                if saved:self.embed.add_field(name='Repeating days · only when home',value='\n'.join(f'{WEEKDAYS[d][:3].title()} · {shift.upper()} · {clean(person(uid,guild),70)}' for d,shift,uid in saved)[:1000],inline=False)
             if q[8]: self.embed.add_field(name='Instructions', value=clean(q[8], 1000), inline=False)
             card = lambda: Card(owner, qid, back, guild, offset)
             async def mutate(i, action):
@@ -976,7 +1102,7 @@ def install(ns, ui, lock):
             if uid == str(owner) and not q[5] and ready(qid) and offset == 0:
                 self.button('Done', lambda i: mutate(i, 'done'), row=0, primary=True, disabled=not ui.available(owner))
             if not uid and not q[5] and ready(qid) and offset == 0:
-                self.button('Just this time', lambda i: mutate(i, 'claim'), row=0, primary=True, disabled=not ui.available(owner))
+                self.button('Claim',lambda i:present(i,ClaimChoices(owner,qid,i.guild,card)),row=0,primary=True,disabled=not ui.available(owner))
             if not q[5] and ready(qid) and offset==0 and q[2]!='one-time':
                 async def skip(i):
                     if not await self.interaction_check(i):return
@@ -997,7 +1123,7 @@ def install(ns, ui, lock):
                     await present(i,Confirm(owner,'Undo your completion?','This restores the previous chore state and reverses its points and streak changes, if nothing has changed since.',save,card))
                 self.button('Undo completion',undo,row=0)
             week_snapshot = tuple(ui.weekly_owner(qid, n) for n in (0, 1))
-            if q[2] in WEEKLY_FREQUENCIES and not q[4]:
+            if q[2] in WEEKLY_FREQUENCIES and not q[4] and not ui.repeating.slots(qid):
                 for label, week in [('This week', 0), ('Next week', 1)]:
                     current = ui.weekly_owner(qid, week)
                     if current not in (None, str(owner)) or (current is None and not ui.can_take_week(owner, qid, week)): continue
@@ -1020,7 +1146,7 @@ def install(ns, ui, lock):
                         async with lock: text = ui.reassign(qid,owner,'assignment',expected_assignment)
                         await present(event,card(),text)
                     await present(i,Confirm(owner,'Take ongoing responsibility?','This keeps future occurrences assigned to you across weeks, until you drop or reassign it.',save,card))
-                self.button('Every week · ongoing',ongoing,row=0)
+                if not ui.repeating.slots(qid):self.button('Every week · ongoing',ongoing,row=0)
             options = [('Duplicate chore','duplicate'), ('Estimate / checklist','plan'), ('Give feedback','feedback'), ('Edit chore','edit'), ('Reassign','reassign'), ('Completion history','history')]
             if q[2]=='twice-daily':options.append(('Separate AM and PM sign-ups','split'))
             if not q[5]: options.append(('Move this occurrence','move'))
@@ -1056,13 +1182,22 @@ def install(ns, ui, lock):
                 elif value == 'edit':
                     ids = [r[0] for r in db.execute('SELECT id FROM quests ORDER BY name COLLATE NOCASE,id') if not ui.is_archived(r[0])]
                     view = ui.EditChoreView(owner, ids.index(qid)//20, qid)
-                elif value == 'reassign': view = ui.ReassignView(owner, qid=qid, scope=scope, expected=ui.reassign_snapshot(qid))
-                elif value == 'drop': view = ui.DropChoreView(owner, qid, ui.snapshot(qid))
+                elif value == 'reassign': view = ui.ReassignView(owner, qid=qid, scope='occurrence' if scope=='repeating' else scope, expected=ui.reassign_snapshot(qid))
+                elif value == 'drop':
+                    if scope=='repeating':return await present(i,Repeating(owner,qid,i.guild))
+                    view = ui.DropChoreView(owner, qid, ui.snapshot(qid))
                 elif value == 'trade': view = ui.TradeOfferView(owner, qid)
                 else: view = ui.ChooseDayView(owner, qid, ui.snapshot(qid))
                 await present(i, adapt(view, owner, card))
-            picker.callback = more
-            self.add_item(picker)
+            picker.callback=more
+            self.action_picker=picker
+            for index,(label,value) in enumerate(options):
+                async def action(i,value=value):
+                    if not await self.interaction_check(i):return
+                    picker._values=[value]
+                    await more(i)
+                row=next(row for row in (1,3,4) if sum(c.row==row for c in self.children)<(3 if row==4 else 5))
+                self.button(label,action,row=row)
             self.nav(back)
 
     class Confirm(View):
@@ -1428,16 +1563,16 @@ def install(ns, ui, lock):
     TOPICS = {'Start here': '**To do a chore:** Open **My chores → Due now**. Use **Done** beside the chore, or open '
                    'its card to read instructions and finish its checklist.\n'
                    '\n'
-                   '**To take a chore:** Open **Pick up chores → Details** and choose how long you want '
-                   'responsibility. **Details** opens the same card from any list.\n'
+                   '**To take a chore:** Open **Pick up chores → Claim** and choose how long you want '
+                   'responsibility. The **chore name** opens the same card from any list.\n'
                    '\n'
                    '**To look ahead:** My chores has **This week**, **Next week**, **Upcoming**, and '
                    '**Completed**. Under **Plan & coordinate**, use **Household chores** to see everyone’s '
                    'work or **Calendar** to browse dates.\n'
                    '\n'
                    'Choose a topic below for the steps you need.',
-     'Pick up a chore': '1. Open **Do chores → Pick up chores**. Find a chore and press **Details**.\n'
-                        '2. Choose **Just this time** for one due occurrence, **Take this week** or **Take '
+     'Pick up a chore': '1. Open **Do chores → Pick up chores**. Find a chore and press its **chore name**.\n'
+                        '2. Choose **Claim → Just this occurrence** for one due occurrence, **Take this week** or **Take '
                         'next week** for a weekly responsibility, or **Every week · ongoing** for a continuing '
                         'assignment. Only available choices appear.\n'
                         '3. Read any confirmation before saving.\n'
@@ -1517,7 +1652,7 @@ def install(ns, ui, lock):
                          '\n'
                          'When the obstacle is gone, mark the help status resolved. You still need to finish '
                          'the work and press **Done** separately. Older notes stay in status history.',
-     'Suggest a chore change': 'Open the chore card, then **More actions… → Give feedback**.\n'
+     'Suggest a chore change': 'Open the chore card, then **Give feedback**.\n'
                                '\n'
                                'Explain what should change: the instructions, timing, or number of points. You '
                                'can suggest an effort score for the household to discuss.\n'
@@ -1531,7 +1666,7 @@ def install(ns, ui, lock):
      'Add, edit, or copy chores': 'Open **Do chores → Manage chores** to add a chore or archive one. New '
                                   'chores default to **5 points**.\n'
                                   '\n'
-                                  'To change an existing chore, open its card and choose **More actions… → '
+                                  'To change an existing chore, open its card and choose **'
                                   'Edit chore**. The same menu has **Estimate / checklist** for steps and a '
                                   'time estimate, and **Duplicate chore** to make a fresh, unassigned copy '
                                   'with a new name.\n'
@@ -1598,7 +1733,9 @@ def install(ns, ui, lock):
 
     TOPICS['Workload & pace']='Earned averages use recorded completions through yesterday, excluding undone work. Resets of the points balance do not erase this work. Days before the first recorded completion are unavailable, not invented zeros; today is shown separately.\n\nThe plan covers the next 7, 28, or 90 full days. It uses current assignments and dated week signups; unknown owners stay Unclaimed. Daily/fixed-day chores count scheduled occurrences. Flexible weekly/monthly points are prorated across their period, without choosing a weekday. Moved work counts once before its normal schedule resumes. Undated one-time work is separate. This estimates responsibility, assuming recurring work gets finished on time; it is not guaranteed future earnings.\n\nDaily rates use calendar days; weekly means 7 days and monthly means 30 days. Per home-day uses the saved rotation and exceptions, with Sunday split at 6 p.m. Old attendance edits can change that historical comparison. Away coverage remains in the plan so it is visible. Points measure the household’s chosen effort values, not hours worked.'
 
-    TOPICS['Change list length']='Open **My settings → List length**, then choose **1–5 items per page**. The default is **5**. This changes only your display and is saved for your account.\n\nIt applies to chore lists, calendar days, standings, and paged completion/help history. Detailed reviews and reset records still open one at a time. Time views, Search, Filters, and Dashboard remain visible as buttons below the list. Inline Done or Details buttons stay beside the chores.'
+    TOPICS['Repeating days']='Open a daily chore by its name button, then Sign-up schedule. Toggle weekdays and Whole day / AM / PM, then Save repeating days and Confirm.\n\nRepeats apply only when home, using usual attendance and exceptions. Away slots need coverage; the signup returns when you are home. Opposite home weeks may share a slot. If attendance changes create an overlap, it stays unclaimed until covered or corrected. Release selected days removes only your chosen repeating slots. Skip, occurrence Reassign, and accepted Trade preserve the repeating schedule. Whole-week/ongoing assignments cannot override repeating days. Points go to whoever completes each occurrence.'
+
+    TOPICS['Change list length']='Open **My settings → List length**, then choose **1–5 items per page**. The default is **5**. This changes only your display and is saved for your account.\n\nIt applies to chore lists, calendar days, standings, and paged completion/help history. Detailed reviews and reset records still open one at a time. Time views, Search, Filters, and Dashboard remain visible as buttons below the list. Chore-name, Claim/Done, and Skip buttons stay beside the chores.'
 
     TOPICS['Schedules and missed chores'] += DAY_LEGEND+'\nWeekly and monthly symbols mean no fixed weekday until one is chosen.'
 
@@ -1615,7 +1752,7 @@ def install(ns, ui, lock):
             self.add_item(picker)
             self.nav()
 
-    result = SimpleNamespace(skip_occurrence=skip_occurrence,UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
+    result = SimpleNamespace(ButtonChoices=ButtonChoices,ClaimChoices=ClaimChoices,Repeating=Repeating,skip_occurrence=skip_occurrence,UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
 
     from chore_recovery import install as install_recovery
     recovery = install_recovery(ns, ui, result)

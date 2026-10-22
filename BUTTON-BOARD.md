@@ -1,5 +1,20 @@
 # Sprig workspace implementation and deployment
 
+## Button controls and repeating weekday signups
+
+Each chore row has a **chore-name button**, **Claim / Done**, and **Skip**. Click the name to open instructions, checklist, estimate, responsibility, and actions. The colored day/period marker, AM/PM slot where relevant, and points appear on the name button. Taken work shows the responsible person; future and completed occurrences have disabled action buttons. Previous and Next keep their fixed positions, and pages stay at five chores by default.
+
+**Claim** opens **Just this occurrence**, **This week**, **Next week**, and, for daily chores, **Repeating weekdays / shifts**. Whole-week signups retain the existing Sunday 6 p.m. handoff. Buttons replace dropdown controls throughout the workspace. Longer option lists have Previous/Next; multi-choice screens use toggle buttons followed by **Apply selection**. **Find a person** can search the household server by the beginning of a Discord name or nickname, then display matching people as buttons. Text forms remain for names, instructions, dates, and feedback.
+
+To take particular days: open a daily chore → **Sign-up schedule** (or **Claim → Repeating weekdays / shifts**), toggle weekdays, choose **Whole day**, **AM**, or **PM** as offered, then **Save repeating days → Confirm**. A daily task stays daily: Kas can take Mondays/Wednesdays, Zel Tuesdays/Thursdays, and other days remain open. A twice-daily chore can give AM and PM to different people. A separate Daily AM or Daily PM chore offers only its own shift. Nothing saves before confirmation.
+
+Repeating signups are **only when home**. Usual attendance defaults, alternating weeks, and dated home/away exceptions are checked for each occurrence and reminder. Away days need coverage; the saved repeating signup returns automatically when that person is home. Two people may share a weekday/shift when their home schedules do not overlap, such as opposite alternating weeks. Overlapping home responsibility is rejected when saving. If an attendance change later puts both people home for the same slot, Sprig leaves it unclaimed instead of choosing a winner: use an occurrence Claim/Reassign for coverage and adjust the signup or attendance.
+
+Use **Sign-up schedule → select days/shifts → Release selected days → Confirm** to release your repeating slots. Other days and other people stay unchanged. **Skip** affects only the current occurrence, awards no points, and keeps the repeating signup. **Reassign** and accepted **Trade** change just the current occurrence when it comes from a repeating signup. Completed work, points, and history stay saved. Whole-week or ongoing assignments cannot override repeating days; release the conflicting responsibility first. Changing the regular repeat cadence requires releasing weekday signups first; splitting a twice-daily chore into separate AM/PM chores carries each shift's signups to the correct chore.
+
+My chores, Pick up chores, Needs attention, household responsibility summaries, calendar previews, reminders, and Workload & pace use the effective weekday/shift owner. Calendar previews show both AM and PM owners; uncovered and away slots remain available. Points still go only to the account that completes the work. Repeating signups are available for daily schedules; weekly/monthly/one-time chores retain their existing signup controls.
+
+
 The current household interface is documented in **USER-GUIDE.md**. It replaces the accumulated historical development notes that described contradictory stages of the interface.
 
 ## Automatic daily database backups
@@ -16,7 +31,7 @@ Restore is a separate deliberate maintenance action: stop Sprig, preserve the cu
 
 ## Runtime files
 
-Deploy all seven modules together:
+Deploy all ten runtime modules together:
 
 - sprig_bot.py. Discord bot, shared command mutations, and service entry point.
 - chore_board.py. Existing chore rules, specialized forms, permissions, and persistent panel registration.
@@ -26,6 +41,8 @@ Deploy all seven modules together:
 - chore_planning.py. Personal opt-in reminders, estimates, occurrence checklists, and private calendar previews.
 - chore_recovery.py. Durable owner/guild-bound navigation, expired-control recovery, and stale-action guards.
 - chore_workspace.py. Private dashboards, searchable lists, common chore cards, trip editor, and owner review queue.
+- chore_insights.py. Read-only earned/projected points and attendance-normalized comparisons.
+- repeating_signups.py. Weekday/shift signup records, home-only ownership, validation, history, and signup buttons.
 
 Dependencies remain discord.py 2.6 or newer below 3, python-dotenv, and tzdata. Configuration and the Discord token stay in the existing server environment; never put credentials into this guide or version control.
 
@@ -57,9 +74,7 @@ Duplicate chore snapshots source settings and metadata, validates the new name a
 
 ## Components V2 layout
 
-Private lists use LayoutView, TextDisplay, and Section accessory buttons. Eligible current owned occurrences have inline Done buttons; other rows have Details. Five entries per page keep nested components below Discord limits. Completion captures the displayed occurrence snapshot and rechecks it after acquiring the mutation lock, preserving points/history and blocking repeated or stale clicks. Away, upcoming, next-week, and other people’s work cannot be completed through the row button.
-
-Once a message uses Components V2, every destination on it is also rendered as V2, including existing editors and modal results. Edits explicitly clear legacy content, embeds, and attachments. Existing per-user/server/channel checks remain in force. Shared launcher entries send V2 controls ephemerally; no public chores list is introduced. Initial /chores dashboard remains compatible and upgrades to V2 on navigation. No saved-panel refresh is required for this layout-only update.
+Private lists use LayoutView, TextDisplay, Containers, and native button action rows. A chore-name button opens details; Claim/Done and Skip sit beside it. Calendar names are buttons too. Existing selector callbacks remain internal mutation handlers, while the wire UI renders button choices. Five chores per page stay within Discord component limits. Completion validates occurrence, ownership, home status, and checklist progress after taking the mutation lock. Repeated or stale actions cannot award points twice.
 
 ## Entry points and navigation
 
@@ -95,7 +110,7 @@ Old saved public panel buttons must be refreshed after deployment. The persisten
 
 ## Verify and deploy
 
-Before each new release, increment APP_VERSION in chore_board.py, update its announcement test and CHANGELOG.md, and run the full offline suite before obtaining approval for the exact commit and deployment. Use MAJOR.MINOR.PATCH: patch for fixes, minor for backward-compatible features, and major for breaking changes. Retrying or restarting the same release does not need another version bump.
+Before each new release, increment APP_VERSION in chore_board.py, update RELEASE_SUMMARY with one short sentence about changes since the previous release, update its announcement test and CHANGELOG.md, and run the full offline suite before obtaining approval for the exact commit and deployment. Use MAJOR.MINOR.PATCH: patch for fixes, minor for backward-compatible features, and major for breaking changes. Retrying or restarting the same release does not need another version bump.
 
 1. Run the full offline release suite: `python run_tests.py --suite full --profile --report ../sprig-release-tests.json`. It uses isolated temporary databases, a dummy token, and mocked Discord delivery. Keep the passing exact-source report for the server check; see [TESTING.md](TESTING.md). Do not start a second real bot.
 2. Compile all nine modules with `python -m py_compile sprig_bot.py chore_board.py chore_timing.py household_availability.py chore_history.py chore_workspace.py chore_planning.py chore_recovery.py chore_insights.py`.
@@ -162,8 +177,7 @@ A moved weekly or monthly occurrence that is skipped waits until its next regula
 
 ## Claim directly from Pick up chores
 
-Due, unclaimed chores in **Pick up chores** have a **Claim** button beside each row. This takes just the current occurrence and keeps you in the same filtered list; it does not complete the chore, check steps, award points, or reserve a whole week. The list refreshes and adjusts the page if needed. For weekly or ongoing responsibility, open the chore card. Future work and Next week keep Details so you can review the appropriate sign-up. Claims are disabled while away, and competing or stale clicks cannot overwrite another person’s responsibility. Expired controls refresh first without claiming.
-
+Press **Claim** beside a due unclaimed chore, then choose **Just this occurrence**, **This week**, **Next week**, or **Repeating weekdays / shifts** as available. Claiming awards no points and does not check checklist steps. Repeating days pause while away. Click the chore name for instructions without claiming it. Away and future occurrence action buttons are disabled; expired controls refresh without repeating an action.
 
 ### Calendar starts with today
 
@@ -173,7 +187,7 @@ Calendar on the Dashboard opens today’s dated chores in Eastern time. Use Prev
 ## Update announcement
 
 If ginaria enables automatic announcements, a new installed Git commit posts
-once after startup in the configured household chores channel: **Sprig has been updated to version 1.1.0. Open /chores for fresh controls.** A second line gives the announcement date and time in Eastern time, including EDT or EST. This release is version **1.1.0**; the timestamp records when the notice is posted, including when the owner announces manually later. Each installed Git commit remains a separate update for duplicate prevention. There are no mentions or mass pings. Open /chores again to get
+once after startup in the configured household chores channel: **Sprig has been updated to version 1.2.0. Open /chores for fresh controls.** A short “What’s new” sentence describes changes since the previous release, followed by the announcement date and time in Eastern time, including EDT or EST. This release is version **1.2.0**; the timestamp records when the notice is posted, including when the owner announces manually later. Each installed Git commit remains a separate update for duplicate prevention. There are no mentions or mass pings. Open /chores again to get
 the updated controls; existing chores, assignments, points, and history remain.
 
 Restarts and Discord reconnects on the same release do not post again. A saved
@@ -186,16 +200,9 @@ Offline tests mock channel delivery; deploying the code does not itself post a
 notice until Sprig starts with the approved feature installed.
 
 
-### Claim and Details together
+### Chore-name, Claim/Done, and Skip buttons
 
-In Pick up chores, each due, available chore has **Claim** and **Details** side by
-side beneath its description. Claim takes the current occurrence immediately;
-Details opens instructions, schedule, weekly sign-ups, and other actions without
-claiming it. Back returns to the same filtered page. Future/next-week work keeps
-Details without an early Claim, and away people can still read Details while
-Claim is disabled. The footer uses Refresh instead of a second Refresh
-button. All controls and replies stay private.
-
+Each list row has a chore-name button, Claim/Done, and Skip. The name opens details without changing responsibility. Claim opens the duration choices; Done opens an unfinished checklist or completes eligible work. Skip requires confirmation and keeps future repeats and saved responsibilities. Future/completed action buttons are disabled.
 
 ## Owner announcement choices and horizontal pickup card
 
@@ -213,14 +220,7 @@ expired screens require fresh review. There is still at most one attempt per
 release: already posted or uncertain notices cannot be reposted by the button.
 No pings or new personal DMs are added.
 
-Pick up chores now uses a framed Components V2 card. Chore name and schedule run
-across one text line where they fit, followed by Claim and Details together.
-Due-now pickup rows omit redundant Needs someone / Due now labels while keeping
-AM/PM slots, estimates, help notes, and away warnings. Other dates retain their
-status. Details replaces the redundant card picker in this view. Discord controls
-the actual displayed width and wrapping; the bot cannot set a pixel width or
-force full-window columns. This layout needs a real Discord visual check after
-deployment; serialized-component tests do not prove that it looks wider.
+Pick up chores uses a Components V2 frame containing chore-name, Claim/Done, and Skip button rows. Discord controls the actual width; serialized tests verify validity and limits, while real appearance still needs a Discord check after deployment.
 
 
 ### Fixed pagination controls
@@ -234,23 +234,11 @@ lists use Previous page / Next page; moving to another day remains separate.
 
 ### Consistent pickup rows
 
-The wider framed card keeps each chore name on its own line, with schedule,
-points, and relevant due status below. Every chore has the same Claim / Details
-button row. Claim is greyed out and does nothing for future, next-week, completed,
-or otherwise unavailable work; Details still opens the correct chore and week.
-Pickup rows do not repeat Needs someone. This week still distinguishes Due now
-from future dates. Paging controls retain their fixed positions.
+Rows are button-only controls with the day/period marker, chore name, shift where applicable, and points on the name button. Claim/Done and Skip follow it in the same native action row. The name stays clickable while unavailable actions are disabled. Other information is on the chore card. Discord determines actual button widths and wrapping; verify the appearance in Discord after deployment.
 
+## Pickup and My chores rows
 
-## Pickup list: Details on the right
-
-Each chore now has one Details button to the right of its text. Open Details
-for instructions, Just this time, weekly sign-ups, and other chore actions.
-Opening Details never claims or completes the chore. The wider frame, separate
-name/schedule lines, saved filters, and fixed Previous/Next controls remain.
-There is no inline Claim button in the pickup list. My chores keeps its inline
-Done or Checklist buttons. Earlier paired-button notes describe the previous UI.
-
+Click a chore-name button to open instructions and its named actions. Claim opens signup-duration buttons, including repeating weekdays on daily chores. My chores has Done and Skip beside each name. The saved filters, five-item default pages, and fixed Previous/Next positions stay in place.
 
 ### Pickup list footer
 
@@ -269,13 +257,11 @@ The private dashboard groups controls by purpose: Do chores (My chores, Pick up 
 
 ### Calendar day layout
 
-Calendar days show a framed chore list with Details beside each chore. Page controls stay below the page count, followed by Previous day / Today / Next day, then Week / Month / Back / Refresh / Dashboard. Refresh restores the date, page, calendar mode, and personal or household scope. Future and past dates open a schedule preview first; opening Details never claims or reschedules a chore.
-
+Calendar days have chore-name buttons with compact responsibility/points summary buttons. Page controls stay below the page count, followed by Previous day / Today / Next day, then Week / Month / Back / Refresh / Dashboard. Clicking a name opens its current card today or a schedule preview on another date; it never claims or reschedules work. AM/PM repeating owners are shown for the selected date.
 
 ### Household list layout
 
-Household uses the same framed, two-line chore rows and right-side Details buttons as Pick up chores. Responsibility, schedule, points, and due status stay visible. Below the fixed Previous / Next row are time tabs, the grouping and unclaimed controls, then Search / Filters / Refresh / Dashboard. Person, chore, and day grouping are unchanged; opening a card and returning or refreshing retains your view and filters.
-
+Household uses chore-name, Claim/Done, and Skip buttons. The Taken button identifies the current responsible person when it is someone else. Click the name for the full schedule and repeating weekday assignments. Time tabs, grouping/unclaimed controls, Search, Filters, Refresh and Dashboard remain visible; Back and Refresh preserve the view.
 
 ### Points & standings layout
 
@@ -289,7 +275,7 @@ Workspace screens use compact framed content and one Refresh button. Lists retai
 
 ### In-app Help
 
-Help starts with a short path for doing a chore, taking work, or looking ahead. The topic picker uses concrete tasks (for example, Finish a chore, Set reminders, and Drop, reassign, or trade). Each topic gives the actual button path and explains the result in short paragraphs. Earlier saved help topics map to the matching new topic; an unknown old topic returns to Start here. Help is private and never changes chores or points.
+Help starts with a short path for doing a chore, taking work, or looking ahead. The topic buttons use concrete tasks (for example, Finish a chore, Set reminders, and Drop, reassign, or trade). Each topic gives the actual button path and explains the result in short paragraphs. Earlier saved help topics map to the matching new topic; an unknown old topic returns to Start here. Help is private and never changes chores or points.
 
 
 The dashboard uses one compact framed menu with small group labels. Points and streak sit directly under its title, with Help beside the heading. The same groups, permissions, and recovery controls remain available.
@@ -297,13 +283,12 @@ The dashboard uses one compact framed menu with small group labels. Points and s
 
 ### Personal list length
 
-My settings → List length saves 1–5 items per page for your own account; the default is 5. Previously saved longer lists display five items without changing household data. It applies to chore lists, calendar days, standings, and completion/help-history lists. Detailed review and reset records still open one at a time. Chore pages keep inline Done/Details and fixed Previous/Next paging. Time views, Search, Filters, and Dashboard stay visible below the list, with one safe Refresh button. The combined View & tools menu has been removed. Old saved chore/calendar views keep the same approximate item position when the size changes. Other people’s preferences, chores, points, and history are unchanged.
+My settings → List length saves 1–5 items per page for your own account; the default is 5. Previously saved longer lists display five items without changing household data. It applies to chore lists, calendar days, standings, and completion/help-history lists. Detailed review and reset records still open one at a time. Chore pages keep chore-name, Claim/Done, and Skip buttons and fixed Previous/Next paging. Time views, Search, Filters, and Dashboard stay visible below the list, with one safe Refresh button. The combined View & tools menu has been removed. Old saved chore/calendar views keep the same approximate item position when the size changes. Other people’s preferences, chores, points, and history are unchanged.
 
 
 ### Compact secondary screens
 
-Chore-card metadata and short settings/review fields share single lines where readable; instructions, comments, warnings, and confirmation text retain their full line breaks. Checklists show each step once with its checkbox and a progress count. Week overviews put seven date choices in one Open a day menu; month grids retain their formatting. Add/schedule/setup screens have clear headings and a compact framed control group. These changes preserve the existing callbacks, privacy, permissions, and confirmations.
-
+Metadata shares short lines where readable; instructions, feedback, and confirmations keep their line breaks. Checklists show steps with progress. Week calendars have seven date buttons; month grids keep their formatting and date choices open buttons. Setting and account choices open button screens, with paging and Apply selection where needed. Permissions and confirmation boundaries are preserved.
 
 ### Workload & pace
 
@@ -317,6 +302,6 @@ Who’s home? accepts any household person. With no custom default, Kas and Zel 
 
 ## Skip only the current occurrence
 
-Open a due repeating chore’s **Details → Skip this occurrence**, then confirm. Anyone in the household can do this. It awards no points, creates no completion credit, releases a single-occurrence claim, and keeps weekly sign-ups, ongoing assignments, completed history, and the regular schedule. Morning and evening are separate occurrences: skipping morning leaves evening available at its normal time.
+Open a due repeating chore’s **chore name → Skip this occurrence**, then confirm. Anyone in the household can do this. It awards no points, creates no completion credit, releases a single-occurrence claim, and keeps weekly sign-ups, ongoing assignments, completed history, and the regular schedule. Morning and evening are separate occurrences: skipping morning leaves evening available at its normal time.
 
 The next occurrence opens at the next regular boundary: midnight for daily work, noon/midnight for twice-daily, the next AM/PM shift, the next selected weekday, Sunday at 6 p.m. for flexible weekly work, or the next month for monthly work. A moved occurrence returns to the regular schedule. Old checklist checks and help notes stay recorded but do not carry into the next occurrence. Skips are recorded separately from completions. There is currently no Undo skip control. Completed, future, archived, and one-time chores have no Skip button; archive a one-time chore if it is no longer needed. **Skip if missed** remains a separate automatic policy.

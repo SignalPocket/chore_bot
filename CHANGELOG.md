@@ -1,6 +1,11 @@
 # Sprig release notes
 
-## 1.1.0 - Prepared; deployment not yet verified
+## 1.2.0 - Prepared; deployment not yet verified
+
+- Button-only chore controls and repeating weekday or AM/PM signups that follow who is home.
+- Short change summaries in automatic and manual update announcements.
+
+## 1.1.0
 
 - Skip this occurrence without points, loss of weekly reservations, or changes to the regular schedule.
 - Correct the release version used in update notices.
