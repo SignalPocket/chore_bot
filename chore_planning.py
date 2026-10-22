@@ -231,7 +231,7 @@ def install(ns, ui, w, lock):
         result=[]
         for q in db.execute('SELECT id,name,frequency,points,assigned_to,completed,last_completed,reset_after FROM quests ORDER BY name COLLATE NOCASE').fetchall():
             if ui.is_archived(q[0]):continue
-            skipped=db.execute('SELECT skipped_at,next_due FROM occurrence_skips WHERE quest_id=? ORDER BY id DESC LIMIT 1',(q[0],)).fetchone()
+            skipped=db.execute('SELECT skipped_at,next_due FROM occurrence_skips WHERE quest_id=? AND NOT EXISTS (SELECT 1 FROM skip_undo_state u WHERE u.skip_id=occurrence_skips.id AND u.undone_at IS NOT NULL) ORDER BY id DESC LIMIT 1',(q[0],)).fetchone()
             if skipped and timing.state(q[0])==(skipped[1],) and datetime.fromisoformat(skipped[0]).date()<=day<datetime.fromisoformat(skipped[1]).date():continue
             if flexible:
                 if q[2] not in ('weekly','monthly','one-time') or db.execute('SELECT 1 FROM occurrence_moves WHERE quest_id=?',(q[0],)).fetchone():continue

@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '1.2.0'
+APP_VERSION = '1.2.1'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'Button-only controls and repeating weekday or AM/PM signups, only when home.'
+RELEASE_SUMMARY = 'Skip instantly, with Undo at the bottom of your chore screen.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 

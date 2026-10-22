@@ -1,6 +1,11 @@
 # Sprig release notes
 
-## 1.2.0 - Prepared; deployment not yet verified
+## 1.2.1 - Prepared; deployment not yet verified
+
+- Skip immediately without a confirmation screen; undo from the bottom of chore lists or details before the next occurrence, provided the chore has not changed.
+- Preserve skip and undo history, claims, schedule, points, and repeating signups.
+
+## 1.2.0 - Installed; live Discord verification pending
 
 - Button-only chore controls and repeating weekday or AM/PM signups that follow who is home.
 - Short change summaries in automatic and manual update announcements.

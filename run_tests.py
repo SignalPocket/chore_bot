@@ -18,6 +18,8 @@ SOURCES = RUNTIME + ('requirements.txt', 'test_chore_board.py', 'run_tests.py')
 # Reuse regression tests, rather than maintaining a second set of assertions.
 # These cover host-dependent loading, SQLite, async callbacks, and serialization.
 SERVER_CHECKS = {
+    'immediate Skip and bottom Undo': 'test_manual_skip_immediate_privacy_double_tap_and_bottom_undo',
+    'Skip Undo restoration and rollback': 'test_skip_undo_is_atomic_keeps_patterns_and_restores_calendar',
     'button-only chore navigation': 'test_buttons_only_real_claim_name_skip_flow_and_private_actions',
     'recurring weekday home coverage': 'test_repeating_weekdays_shared_daily_ownership_home_and_release',
     'recurring AM PM completion and Skip': 'test_repeating_am_pm_complete_skip_and_undo_preserve_patterns',

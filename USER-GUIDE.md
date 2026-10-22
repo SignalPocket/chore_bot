@@ -292,7 +292,7 @@ Calendar on the Dashboard opens today’s dated chores in Eastern time. Use Prev
 ## Update announcement
 
 If ginaria enables automatic announcements, a new installed Git commit posts
-once after startup in the configured household chores channel: **Sprig has been updated to version 1.2.0. Open /chores for fresh controls.** A short “What’s new” sentence describes changes since the previous release, followed by the announcement date and time in Eastern time, including EDT or EST. This release is version **1.2.0**; the timestamp records when the notice is posted, including when the owner announces manually later. Each installed Git commit remains a separate update for duplicate prevention. There are no mentions or mass pings. Open /chores again to get
+once after startup in the configured household chores channel: **Sprig has been updated to version 1.2.1. Open /chores for fresh controls.** A short “What’s new” sentence describes changes since the previous release, followed by the announcement date and time in Eastern time, including EDT or EST. This release is version **1.2.1**; the timestamp records when the notice is posted, including when the owner announces manually later. Each installed Git commit remains a separate update for duplicate prevention. There are no mentions or mass pings. Open /chores again to get
 the updated controls; existing chores, assignments, points, and history remain.
 
 Restarts and Discord reconnects on the same release do not post again. A saved
@@ -307,7 +307,7 @@ notice until Sprig starts with the approved feature installed.
 
 ### Chore-name, Claim/Done, and Skip buttons
 
-Each list row has a chore-name button, Claim/Done, and Skip. The name opens details without changing responsibility. Claim opens the duration choices; Done opens an unfinished checklist or completes eligible work. Skip requires confirmation and keeps future repeats and saved responsibilities. Future/completed action buttons are disabled.
+Each list row has a chore-name button, Claim/Done, and Skip. The name opens details without changing responsibility. Claim opens the duration choices; Done opens an unfinished checklist or completes eligible work. Skip happens immediately and keeps future repeats and saved responsibilities. Undo skip appears at the bottom. Future/completed action buttons are disabled.
 
 ## Owner announcement choices and horizontal pickup card
 
@@ -407,6 +407,6 @@ Who’s home? accepts any household person. With no custom default, Kas and Zel 
 
 ## Skip only the current occurrence
 
-Open a due repeating chore’s **chore name → Skip this occurrence**, then confirm. Anyone in the household can do this. It awards no points, creates no completion credit, releases a single-occurrence claim, and keeps weekly sign-ups, ongoing assignments, completed history, and the regular schedule. Morning and evening are separate occurrences: skipping morning leaves evening available at its normal time.
+Open a due repeating chore’s **chore name → Skip this occurrence**. Skip happens immediately, with an **Undo skip** button at the bottom. Anyone in the household can do this. It awards no points, creates no completion credit, releases a single-occurrence claim, and keeps weekly sign-ups, ongoing assignments, completed history, and the regular schedule. Morning and evening are separate occurrences: skipping morning leaves evening available at its normal time.
 
-The next occurrence opens at the next regular boundary: midnight for daily work, noon/midnight for twice-daily, the next AM/PM shift, the next selected weekday, Sunday at 6 p.m. for flexible weekly work, or the next month for monthly work. A moved occurrence returns to the regular schedule. Old checklist checks and help notes stay recorded but do not carry into the next occurrence. Skips are recorded separately from completions. There is currently no Undo skip control. Completed, future, archived, and one-time chores have no Skip button; archive a one-time chore if it is no longer needed. **Skip if missed** remains a separate automatic policy.
+The next occurrence opens at the next regular boundary: midnight for daily work, noon/midnight for twice-daily, the next AM/PM shift, the next selected weekday, Sunday at 6 p.m. for flexible weekly work, or the next month for monthly work. A moved occurrence returns to the regular schedule. Old checklist checks and help notes stay recorded but do not carry into the next occurrence. Skips are recorded separately from completions. Only the person who skipped can undo it, until the next occurrence begins and while the chore remains unchanged. Undo restores the occurrence and its previous claim or moved date without changing points; both actions remain in history. Completed, future, archived, and one-time chores have no Skip button; archive a one-time chore if it is no longer needed. **Skip if missed** remains a separate automatic policy.

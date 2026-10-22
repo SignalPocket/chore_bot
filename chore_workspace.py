@@ -1,5 +1,6 @@
 """A consistent private workspace around the existing household chore rules."""
 import asyncio
+import json
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from time import monotonic
@@ -17,7 +18,8 @@ def install(ns, ui, lock):
     CREATE TABLE IF NOT EXISTS trade_notifications(trade_id INTEGER PRIMARY KEY,status TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS chore_shift_splits(original_id INTEGER PRIMARY KEY,pm_id INTEGER UNIQUE NOT NULL);
     CREATE TABLE IF NOT EXISTS attention_windows(quest_id INTEGER PRIMARY KEY,cycle TEXT NOT NULL,deadline TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS occurrence_skips(id INTEGER PRIMARY KEY AUTOINCREMENT,quest_id INTEGER NOT NULL,actor TEXT NOT NULL,skipped_at TEXT NOT NULL,next_due TEXT NOT NULL,previous_state TEXT NOT NULL);''')
+    CREATE TABLE IF NOT EXISTS occurrence_skips(id INTEGER PRIMARY KEY AUTOINCREMENT,quest_id INTEGER NOT NULL,actor TEXT NOT NULL,skipped_at TEXT NOT NULL,next_due TEXT NOT NULL,previous_state TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS skip_undo_state(skip_id INTEGER PRIMARY KEY,expected TEXT NOT NULL,previous_policy TEXT NOT NULL,undone_at TEXT);''')
     db.commit()
     def page_size(owner):
         row=db.execute('SELECT list_size FROM workspace_preferences WHERE user_id=?',(str(owner),)).fetchone()
@@ -812,12 +814,9 @@ def install(ns, ui, lock):
                         async def skip_click(i,qid=qid,expected=expected):
                             if not await source.interaction_check(i):return
                             parent=lambda:Browse(source.owner,**source.state,guild=i.guild)
-                            async def save(event):
-                                if not await source.interaction_check(event):return
-                                await event.response.defer()
-                                async with lock:notice=skip_occurrence(event.user.id,qid,expected)
-                                await present(event,parent(),notice)
-                            await present(i,Confirm(source.owner,'Skip this occurrence?','No points or completion credit. The next occurrence and weekly/repeating signup stay saved. A single claim is released. There is currently no Undo skip.',save,parent))
+                            await i.response.defer()
+                            async with lock:notice=skip_occurrence(i.user.id,qid,expected)
+                            await present(i,parent(),notice)
                         skip.callback=skip_click
                         add_body(discord.ui.ActionRow(name,action,skip))
                     else:add_body(content)
@@ -926,6 +925,19 @@ def install(ns, ui, lock):
                 add_controls(utility_row)
                 if form is not None:self.add_item(form)
             recovery.attach(self,source,resume_row=utility_row)
+            pending=undoable_skip(source.owner) if isinstance(source,(Browse,Card)) else None
+            if pending:
+                skip_id,qid,_,_=pending
+                label='Undo skip: '+chore(qid)[1]
+                undo_button=discord.ui.Button(label=label[:80],style=discord.ButtonStyle.secondary)
+                async def undo_click(i):
+                    if not await source.interaction_check(i):return
+                    await i.response.defer()
+                    async with lock:notice=undo_skip(i.user.id,skip_id)
+                    target=Browse(source.owner,**source.state,guild=i.guild) if isinstance(source,Browse) else source.return_to()
+                    await present(i,target,notice)
+                undo_button.callback=undo_click
+                self.add_item(discord.ui.ActionRow(undo_button))
 
         async def interaction_check(self,i):
             return await self.source.interaction_check(i)
@@ -1041,16 +1053,42 @@ def install(ns, ui, lock):
         previous=json.dumps(dict(chore=q,timing=timing.state(qid),
             claim=db.execute('SELECT user_id FROM claims WHERE quest_id=?',(qid,)).fetchone(),
             move=db.execute('SELECT day FROM occurrence_moves WHERE quest_id=?',(qid,)).fetchone()))
+        previous_policy=json.dumps(timing.policy_state(qid))
         with db:
-            db.execute('INSERT INTO occurrence_skips(quest_id,actor,skipped_at,next_due,previous_state) VALUES(?,?,?,?,?)',
+            cursor=db.execute('INSERT INTO occurrence_skips(quest_id,actor,skipped_at,next_due,previous_state) VALUES(?,?,?,?,?)',
                 (qid,str(actor),now.isoformat(),next_due,previous))
             db.execute('DELETE FROM claims WHERE quest_id=?',(qid,))
             db.execute('DELETE FROM occurrence_moves WHERE quest_id=?',(qid,))
             db.execute('INSERT OR REPLACE INTO chore_timing VALUES(?,?)',(qid,next_due))
             if timing.policy(qid)=='skip':
                 db.execute('UPDATE missed_chore_policy SET deadline=? WHERE quest_id=?',(timing.deadline(qid,q[2]),qid))
+            db.execute('INSERT INTO skip_undo_state(skip_id,expected,previous_policy) VALUES(?,?,?)',(cursor.lastrowid,json.dumps(ui.snapshot(qid)),previous_policy))
         return ('Occurrence skipped. No points awarded; weekly sign-ups and ongoing assignments stay saved. '
                 +'Next due '+datetime.fromisoformat(next_due).strftime('%a %b %d, %I:%M %p %Z')+'.')
+
+    def undoable_skip(actor):
+        row=db.execute('SELECT s.id,s.quest_id,s.next_due,u.expected FROM occurrence_skips s JOIN skip_undo_state u ON u.skip_id=s.id WHERE s.actor=? AND u.undone_at IS NULL ORDER BY s.id DESC LIMIT 1',(str(actor),)).fetchone()
+        if row and timing.now()<datetime.fromisoformat(row[2]) and json.dumps(ui.snapshot(row[1]))==row[3]:return row
+        return None
+
+    def undo_skip(actor,skip_id):
+        ns['reset_due_quests']()
+        row=db.execute('SELECT s.quest_id,s.actor,s.next_due,s.previous_state,u.expected,u.previous_policy,u.undone_at FROM occurrence_skips s JOIN skip_undo_state u ON u.skip_id=s.id WHERE s.id=?',(skip_id,)).fetchone()
+        if not row or row[1]!=str(actor):return 'Only the person who skipped this occurrence can undo it.'
+        qid,_,next_due,previous,expected,policy,undone=row
+        if undone:return 'This skip was already undone.'
+        if timing.now()>=datetime.fromisoformat(next_due) or ui.is_archived(qid) or json.dumps(ui.snapshot(qid))!=expected:
+            return 'The chore changed or its next occurrence started. Nothing restored.'
+        previous=json.loads(previous);policy=json.loads(policy)
+        with db:
+            for table in ('claims','occurrence_moves','chore_timing','missed_chore_policy'):
+                db.execute('DELETE FROM '+table+' WHERE quest_id=?',(qid,))
+            if previous['claim']:db.execute('INSERT INTO claims VALUES(?,?)',(qid,previous['claim'][0]))
+            if previous['move']:db.execute('INSERT INTO occurrence_moves VALUES(?,?)',(qid,previous['move'][0]))
+            if previous['timing']:db.execute('INSERT INTO chore_timing VALUES(?,?)',(qid,previous['timing'][0]))
+            if policy:db.execute('INSERT INTO missed_chore_policy VALUES(?,?,?)',(qid,*policy))
+            db.execute('UPDATE skip_undo_state SET undone_at=? WHERE skip_id=?',(timing.now().isoformat(),skip_id))
+        return 'Skip undone. The occurrence and its previous claim are restored. No points changed.'
 
     Repeating=ui.repeating.install_views(SimpleNamespace(View=View,Confirm=lambda *a,**kw:Confirm(*a,**kw),Card=lambda *a,**kw:Card(*a,**kw),present=lambda *a,**kw:present(*a,**kw),person=person))
 
@@ -1061,6 +1099,7 @@ def install(ns, ui, lock):
             q = chore(qid)
             back = back or (lambda: Browse(owner, 'mine', guild=guild))
             self.qid, self.expected = qid, ui.snapshot(qid)
+            self.return_to=lambda:Card(owner,qid,back,guild,offset)
             self.recovery_context={'screen':'card','qid':qid,'offset':offset,'parent':recovery.bookmark(back())}
             self.embed = discord.Embed(title=clean(q[1], 200) if q else 'Chore unavailable', description=notice or '', color=0x6B9B77)
             if not q or ui.is_archived(qid):
@@ -1106,13 +1145,9 @@ def install(ns, ui, lock):
             if not q[5] and ready(qid) and offset==0 and q[2]!='one-time':
                 async def skip(i):
                     if not await self.interaction_check(i):return
-                    async def save(event):
-                        if not await self.interaction_check(event):return
-                        await event.response.defer()
-                        async with lock:text=skip_occurrence(event.user.id,qid,self.expected)
-                        await present(event,card(),text)
-                    await present(i,Confirm(owner,'Skip this occurrence?',
-                        'Skip only the due occurrence, with no points or completion credit. The next regular occurrence, weekly sign-ups, and ongoing assignment stay saved. A single-occurrence claim is released. This cannot currently be undone.',save,card))
+                    await i.response.defer()
+                    async with lock:text=skip_occurrence(i.user.id,qid,self.expected)
+                    await present(i,card(),text)
                 self.button('Skip this occurrence',skip,row=2)
             last_completion=db.execute('SELECT id,quest_id FROM completion_log WHERE user_id=? AND undone_at IS NULL ORDER BY id DESC LIMIT 1',(str(owner),)).fetchone()
             if q[5] and last_completion and last_completion[1]==qid:
@@ -1752,7 +1787,7 @@ def install(ns, ui, lock):
             self.add_item(picker)
             self.nav()
 
-    result = SimpleNamespace(ButtonChoices=ButtonChoices,ClaimChoices=ClaimChoices,Repeating=Repeating,skip_occurrence=skip_occurrence,UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
+    result = SimpleNamespace(ButtonChoices=ButtonChoices,ClaimChoices=ClaimChoices,Repeating=Repeating,skip_occurrence=skip_occurrence,undo_skip=undo_skip,undoable_skip=undoable_skip,UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
 
     from chore_recovery import install as install_recovery
     recovery = install_recovery(ns, ui, result)

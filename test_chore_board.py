@@ -184,7 +184,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'1.2.0')
+        self.assertEqual(chore_board.APP_VERSION,'1.2.1')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -194,7 +194,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 1.2.0. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 1.2.1. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -3727,9 +3727,6 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             panel=w.render(w.Browse(10,'mine'));row=next(row for row in self.chore_button_rows(panel) if 'Fill dishwasher' in row.children[0].label)
             self.assertEqual(row.children[1].label,'Done')
             event=Interaction();await row.children[2].callback(event)
-            self.assertTrue(self.ui.ready(1))
-            confirm=event.response.wire_payload['view']
-            await next(c for c in confirm.walk_children() if getattr(c,'label',None)=='Confirm').callback(Interaction())
             self.assertFalse(self.ui.ready(1));self.assertFalse(self.db.execute('SELECT * FROM completion_log').fetchall())
 
     async def test_buttons_only_choice_buttons_apply_multiselect_and_real_schedule_flow(self):
@@ -4022,27 +4019,70 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                 qid=self.db.execute('SELECT id FROM quests WHERE name=?',('Skip '+frequency,)).fetchone()[0]
                 self.assertTrue(self.ui.ready(qid))
 
-    async def test_manual_skip_confirmation_cancel_privacy_and_double_tap(self):
+    async def test_manual_skip_immediate_privacy_double_tap_and_bottom_undo(self):
         w=self.ui.workspace
         with self.clock('2026-10-21T09:00:00'):
             card=w.Card(10,1);button=next(c for c in card.children if getattr(c,'label',None)=='Skip this occurrence')
-            wrong=Interaction(20);await button.callback(wrong)
-            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM occurrence_skips').fetchone(),(0,))
-            event=Interaction();await button.callback(event);confirm=event.response.payload['view']
-            self.assertIsInstance(confirm,w.Confirm)
-            cancel=next(c for c in confirm.children if getattr(c,'label',None)=='Cancel')
-            await cancel.callback(Interaction())
+            await button.callback(Interaction(20))
             self.assertTrue(self.ui.ready(1))
-            event=Interaction();await button.callback(event);confirm=event.response.payload['view']
-            save=next(c for c in confirm.children if getattr(c,'label',None)=='Confirm')
-            await save.callback(Interaction(20))
-            self.assertTrue(self.ui.ready(1))
-            await asyncio.gather(save.callback(Interaction()),save.callback(Interaction()))
-            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM occurrence_skips').fetchone(),(1,))
+            event=Interaction();await button.callback(event)
+            panel=event.wire_result['view']
+            self.assertIsInstance(panel,w.LayoutPanel)
+            self.assertNotIsInstance(panel.source,w.Confirm)
             self.assertFalse(self.ui.ready(1))
+            await button.callback(Interaction())
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM occurrence_skips').fetchone(),(1,))
+            undo=next(c for c in panel.walk_children() if str(getattr(c,'label','')).startswith('Undo skip:'))
+            self.assertIs(panel.children[-1].children[0],undo)
+            await undo.callback(Interaction(20));self.assertFalse(self.ui.ready(1))
+            await asyncio.gather(undo.callback(Interaction()),undo.callback(Interaction()))
+            self.assertTrue(self.ui.ready(1))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM skip_undo_state WHERE undone_at IS NOT NULL').fetchone(),(1,))
             self.assertFalse(self.db.execute('SELECT * FROM completion_log').fetchall())
-            self.assertFalse(any(getattr(c,'label',None)=='Skip this occurrence' for c in w.Card(10,1).children))
-            self.assertFalse(any(getattr(c,'label',None)=='Skip this occurrence' for c in w.Card(10,2,offset=1).children))
+
+    async def test_skip_undo_restores_claim_move_policy_and_preserves_signups(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-21T09:00:00'):
+            self.db.execute("INSERT INTO claims VALUES(1,'10')")
+            self.db.execute("INSERT INTO occurrence_moves VALUES(1,'2026-10-21')")
+            self.db.commit()
+            self.ui.timing.set_policy(1,'skip')
+            previous=(self.ui.timing.state(1),self.ui.timing.policy_state(1))
+            w.skip_occurrence(10,1,self.ui.snapshot(1));sid=w.undoable_skip(10)[0]
+            self.assertIn('undone',w.undo_skip(10,sid))
+            self.assertEqual(self.db.execute('SELECT user_id FROM claims WHERE quest_id=1').fetchone(),('10',))
+            self.assertEqual(self.db.execute('SELECT day FROM occurrence_moves WHERE quest_id=1').fetchone(),('2026-10-21',))
+            self.assertEqual((self.ui.timing.state(1),self.ui.timing.policy_state(1)),previous)
+            self.assertIn('already',w.undo_skip(10,sid))
+
+    async def test_skip_undo_rejects_other_actor_changes_and_next_occurrence(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-21T09:00:00'):
+            w.skip_occurrence(10,1,self.ui.snapshot(1));sid=w.undoable_skip(10)[0]
+            self.assertIn('Only',w.undo_skip(20,sid))
+            self.db.execute("UPDATE quests SET notes='new instructions' WHERE id=1");self.db.commit()
+            self.assertIn('changed',w.undo_skip(10,sid));self.assertIsNone(w.undoable_skip(10))
+            w.skip_occurrence(10,2,self.ui.snapshot(2))
+            row=self.db.execute('SELECT id,next_due FROM occurrence_skips WHERE quest_id=2').fetchone()
+        with self.clock(row[1]):
+            self.assertIn('changed',w.undo_skip(10,row[0]))
+
+    async def test_skip_undo_is_atomic_keeps_patterns_and_restores_calendar(self):
+        import sqlite3
+        w=self.ui.workspace;r=self.ui.repeating
+        with self.clock('2026-10-21T09:00:00'):
+            r.save(10,1,[2],['day'],r.snapshot(1));patterns=r.slots(1)
+            w.skip_occurrence(10,1,self.ui.snapshot(1));sid=w.undoable_skip(10)[0]
+            state=self.ui.snapshot(1)
+            self.db.execute("CREATE TRIGGER fail_undo_skip BEFORE UPDATE ON skip_undo_state BEGIN SELECT RAISE(ABORT,'test rollback'); END")
+            self.db.commit()
+            with self.assertRaises(sqlite3.IntegrityError):w.undo_skip(10,sid)
+            self.assertEqual(self.ui.snapshot(1),state)
+            self.assertIsNotNone(w.undoable_skip(10))
+            self.db.execute('DROP TRIGGER fail_undo_skip');self.db.commit()
+            self.assertIn('undone',w.undo_skip(10,sid))
+            self.assertTrue(self.ui.ready(1));self.assertEqual(r.slots(1),patterns)
+            self.assertFalse(self.db.execute('SELECT * FROM completion_log').fetchall())
 
     async def test_manual_skip_stale_completed_archived_future_and_one_time_are_rejected(self):
         w=self.ui.workspace
