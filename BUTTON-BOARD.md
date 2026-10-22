@@ -95,6 +95,8 @@ Old saved public panel buttons must be refreshed after deployment. The persisten
 
 ## Verify and deploy
 
+Before each new release, increment APP_VERSION in chore_board.py, update its announcement test and CHANGELOG.md, and run the full offline suite before obtaining approval for the exact commit and deployment. Use MAJOR.MINOR.PATCH: patch for fixes, minor for backward-compatible features, and major for breaking changes. Retrying or restarting the same release does not need another version bump.
+
 1. Run the full offline release suite: `python run_tests.py --suite full --profile --report ../sprig-release-tests.json`. It uses isolated temporary databases, a dummy token, and mocked Discord delivery. Keep the passing exact-source report for the server check; see [TESTING.md](TESTING.md). Do not start a second real bot.
 2. Compile all nine modules with `python -m py_compile sprig_bot.py chore_board.py chore_timing.py household_availability.py chore_history.py chore_workspace.py chore_planning.py chore_recovery.py chore_insights.py`.
 3. Obtain approval for the exact commit, SignalPocket identity, main branch push, and deployment. These steps are separate from local preparation.
@@ -171,7 +173,7 @@ Calendar on the Dashboard opens today’s dated chores in Eastern time. Use Prev
 ## Update announcement
 
 If ginaria enables automatic announcements, a new installed Git commit posts
-once after startup in the configured household chores channel: **Sprig has been updated to version 1.0. Open /chores for fresh controls.** A second line gives the announcement date and time in Eastern time, including EDT or EST. This release is version **1.0**; the timestamp records when the notice is posted, including when the owner announces manually later. Each installed Git commit remains a separate update for duplicate prevention. There are no mentions or mass pings. Open /chores again to get
+once after startup in the configured household chores channel: **Sprig has been updated to version 1.1.0. Open /chores for fresh controls.** A second line gives the announcement date and time in Eastern time, including EDT or EST. This release is version **1.1.0**; the timestamp records when the notice is posted, including when the owner announces manually later. Each installed Git commit remains a separate update for duplicate prevention. There are no mentions or mass pings. Open /chores again to get
 the updated controls; existing chores, assignments, points, and history remain.
 
 Restarts and Discord reconnects on the same release do not post again. A saved
