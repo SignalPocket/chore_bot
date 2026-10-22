@@ -67,17 +67,17 @@ Back follows the page's saved parent route. Refresh restores current data withou
 | Group | Actions and destination | Effect |
 | --- | --- | --- |
 | This occurrence | Claim, Done, Checklist, Skip, Undo completion, Stuck / need help, Choose occurrence | Changes or inspects this occurrence; unavailable actions are omitted |
-| Responsibility menu | Signup options, This/Next week take/release, Sign-up schedule, ongoing ownership | Changes duration or repeating responsibility |
-| Responsibility menu | Reassign | Choose responsibility scope and recipient; preserve earned history |
-| Responsibility menu | Drop responsibility | Release the selected scope; repeating ownership can open the repeating schedule editor |
-| Responsibility menu | Propose trade | Choose recipient/exchange; proposal waits for the other person's acceptance |
-| Schedule & details menu | Edit chore, Change schedule, Change regular day | Prefilled editing form or schedule choices |
-| Schedule & details menu | Move this occurrence / Cancel occurrence move | Move one occurrence or return it to the normal schedule |
-| Schedule & details menu | Estimate / checklist | Edit estimate and checklist instructions |
-| Schedule & details menu | Duplicate chore | Prefilled copy form; creates a separate chore |
-| Schedule & details menu | Give feedback | Feedback form about instructions, timing, points, or other concerns |
-| Schedule & details menu | Completion history | Recorded completions and available corrections |
-| Schedule & details menu | Separate AM and PM sign-ups, when applicable | Confirm a split into independent shifts |
+| More options screen | Signup options, This/Next week take/release, Sign-up schedule, ongoing ownership | Changes duration or repeating responsibility |
+| More options screen | Reassign | Choose responsibility scope and recipient; preserve earned history |
+| More options screen | Drop responsibility | Release the selected scope; repeating ownership can open the repeating schedule editor |
+| More options screen | Propose trade | Choose recipient/exchange; proposal waits for the other person's acceptance |
+| More options / Manage this chore screens | Edit chore, Change schedule, Change regular day | Prefilled editing form or schedule choices |
+| More options / Manage this chore screens | Move this occurrence / Cancel occurrence move | Move one occurrence or return it to the normal schedule |
+| More options / Manage this chore screens | Estimate / checklist | Edit estimate and checklist instructions |
+| More options / Manage this chore screens | Duplicate chore | Prefilled copy form; creates a separate chore |
+| More options / Manage this chore screens | Give feedback | Feedback form about instructions, timing, points, or other concerns |
+| More options / Manage this chore screens | Completion history | Recorded completions and available corrections |
+| More options / Manage this chore screens | Separate AM and PM sign-ups, when applicable | Confirm a split into independent shifts |
 
 ### Occurrence, signup, and recovery pages
 
@@ -147,7 +147,7 @@ Attendance comes from saved schedules, not Discord presence. Date exceptions ove
 
 1. **One chore destination.** Names and Details should lead to the same chore information; future occurrence selection must be explicit.
 2. **Records belong beside their actions.** Attention and calendar use readable rows with Details; archives use a list plus dropdown.
-3. **One home for occasional actions.** Responsibility and Schedule & details menus replace the card's button wall.
+3. **One home for occasional actions.** More options opens occasional coordination; Manage this chore opens advanced editing.
 4. **Consistent management language.** Archive / Archived chores / Restore are used throughout; internal legacy identifiers remain compatible.
 5. **Explicit settings scope.** Chore reminders controls scheduled due-work DMs; Trade alerts controls new proposal DMs. The preferences are independent.
 6. **Predictable Undo.** Both Done and Skip expose immediate bottom Undo, subject to safe-state checks.
@@ -158,3 +158,6 @@ Attendance comes from saved schedules, not Discord presence. Date exceptions ove
 Primary implementation: chore_workspace.py (pages/navigation), chore_pages.py (shared frame), chore_planning.py (calendar/checklists/reminders/help statuses), chore_board.py (catalog, assignments, reviews and trades), chore_recovery.py (screen restoration), plus repeating/dated/attendance/insights helpers. USER-GUIDE.md is the user-facing procedure reference; PAGE-TEMPLATES.md is the reusable layout contract.
 
 Update this map when adding a destination, changing action scope, moving a control into a menu, or changing Back behavior. For each change, check destination, privacy/access, page context, stale-state handling, and mutation/history effects. This map deliberately does not give exact click counts: modal typing, conditional controls, and saved selections change those counts.
+
+### Prepared 1.3.3 screen simplification
+Chore details keeps Claim/Done, Checklist when present, Skip, Need help and Choose date visible. More options opens coordination/history/feedback; Manage this chore there opens editing. Undo remains last. Manage catalog actions follow content. Page controls use < Prev / Next >; day controls use << Prev day / Next day >>, with no yellow-square emoji. Local candidate, not deployed.

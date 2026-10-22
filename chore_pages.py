@@ -32,9 +32,10 @@ class ActionGroup:
 
 
 CHORE_ACTIONS=(
-    ActionGroup('This occurrence',('Claim','Done','Checklist','Skip this occurrence','Undo completion','Stuck / need help','Choose occurrence')),
-    ActionGroup('Responsibility',('Signup options','Sign-up schedule','Reassign','Drop responsibility','Propose trade','Every week · ongoing'),('Take ','Release '),menu=True),
-    ActionGroup('Schedule & details',fallback=True,menu=True),
+    ActionGroup('This occurrence',('Claim','Done','Checklist','Skip this occurrence','Undo completion','Stuck / need help','Need help','Choose occurrence','Choose date')),
+    ActionGroup('Who does it',('Signup options','Sign-up schedule','Reassign','Drop responsibility','Propose trade','Every week · ongoing'),('Take ','Release ')),
+    ActionGroup('Change this chore',('Edit chore','Change schedule','Change regular day','Estimate / checklist','Duplicate chore','Separate AM and PM sign-ups')),
+    ActionGroup('More options',fallback=True),
 )
 
 

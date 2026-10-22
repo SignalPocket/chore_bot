@@ -101,3 +101,6 @@ The screen polish adds concise inline contextual instructions for Card and Atten
 ## Next implementation contract
 
 Give each task a canonical title, purpose, preconditions, shortest path, saved effect, correction path, known restrictions and related tasks. Give each screen a help target plus its current chore/date/scope. Prefer linking to the same task instruction rather than maintaining duplicate prose. Do not display how-to instructions for missing features as though implemented.
+
+### Prepared 1.3.3 screen simplification
+Chore details keeps Claim/Done, Checklist when present, Skip, Need help and Choose date visible. More options opens coordination/history/feedback; Manage this chore there opens editing. Undo remains last. Manage catalog actions follow content. Page controls use < Prev / Next >; day controls use << Prev day / Next day >>, with no yellow-square emoji. Local candidate, not deployed.

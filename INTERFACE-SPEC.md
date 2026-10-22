@@ -66,7 +66,7 @@ Undo is conditional, not unlimited history editing. If later changes make revers
 
 | Screen | Purpose | Controls and expected behavior |
 | --- | --- | --- |
-| Chore details | Read responsibility, schedule, due/completed status, points, room, instructions, estimate/checklist. | Everyday actions stay visible. Responsibility and Schedule & details are named dropdowns. Back returns to the source list/calendar. |
+| Chore details | Read responsibility, schedule, due/completed status, points, room, instructions, estimate/checklist. | Everyday actions stay visible. More options opens occasional coordination/history actions; Manage this chore opens advanced editing. Everyday actions remain visible. Back returns to the source list/calendar. |
 | Signup options | Choose the duration of responsibility. | Just this occurrence claims only now; This week / Next week reserves the household week; repeating weekdays/shifts opens the recurring editor; ongoing ownership applies until changed where supported. |
 | Repeating signup | Maintain one account's repeating weekday/AM/PM pattern. | Saved choices preselected; toggle slots; Save repeating days applies replacement once. Unselect slots and Save releases those slots; empty selection releases all of this account's pattern. Other accounts stay unchanged. |
 | Choose occurrence | Select an exact future or current date. | Date buttons → shift picker or dated occurrence; More dates advances to the next household week; Current occurrence returns to the current card. This selection alone changes no schedule or ownership. |
@@ -231,3 +231,6 @@ Status: screen/control spec and task inventory prepared; full hop measurement an
 ## Change discipline
 
 When adding a screen or control: assign its purpose and parent, state action scope and permissions, define persistence/Undo behavior, preserve safe recovery, update this spec/map/guide, and test the complete task affected. A route that displays choices but cannot finish the task fails the contract.
+
+### Prepared 1.3.3 screen simplification
+Chore details keeps Claim/Done, Checklist when present, Skip, Need help and Choose date visible. More options opens coordination/history/feedback; Manage this chore there opens editing. Undo remains last. Manage catalog actions follow content. Page controls use < Prev / Next >; day controls use << Prev day / Next day >>, with no yellow-square emoji. Local candidate, not deployed.

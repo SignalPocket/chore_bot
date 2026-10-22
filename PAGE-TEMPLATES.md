@@ -96,3 +96,6 @@ callbacks, expired menu recovery, dense lists with both Undo types, complete pag
 and chore-name-to-details behavior. Run `python run_tests.py --suite focused --match
 page_templates --match undo_dense` during layout work. Run the full suite and retain
 its exact-source report before a release, as described in TESTING.md.
+
+## Local review: simpler chore details
+Everyday Claim/Done, Checklist, Skip and Need help stay visible. More options opens a separate screen for responsibility, dates, history and feedback. Manage this chore opens advanced editing controls. Manage catalog actions follow content. Paging uses < Prev / Next > and day controls use << Prev day / Next day >> without emoji. Not deployed.

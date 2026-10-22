@@ -1,5 +1,11 @@
 # Sprig release notes
 
+## 1.3.3
+
+- Keep everyday chore actions visible; move occasional coordination and advanced editing to separate screens.
+- Use plain < Prev / Next > page controls and << Prev day / Next day >> date controls without yellow squares.
+- Put Manage chores catalog actions below the content.
+
 ## 1.3.2
 
 - Final screen polish: concise card/attention help matches visible menus, old help paths corrected, and duplicate card Undo removed in favor of bottom Undo Done.

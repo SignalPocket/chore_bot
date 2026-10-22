@@ -432,7 +432,7 @@ Current chores, calendar ownership, household views, reminders, and projected po
 
 ## Button colors
 
-Green means Claim, Done, or Save. Red means Skip, Undo, or Drop. Dashboard uses Discord’s purple primary button and the dashboard panel has a purple accent. Previous/Next controls have yellow square markers because Discord does not provide yellow button backgrounds. Details, filters, and settings stay neutral; active view choices retain their selected highlight. Disabled actions stay disabled and dimmed. Labels always name the action, so you do not need to rely on color alone.
+Green means Claim, Done, or Save. Red means Skip, Undo, or Drop. Dashboard uses Discord’s purple primary button and the dashboard panel has a purple accent. Page controls use < Prev / Next > and day controls use << Prev day / Next day >>, without emoji markers. Details, filters, and settings stay neutral; active view choices retain their selected highlight. Disabled actions stay disabled and dimmed. Labels always name the action, so you do not need to rely on color alone.
 
 
 ## Understanding version numbers
@@ -456,7 +456,7 @@ Every private screen has a heading and a small **?** button. It opens help for t
 
 Calendar day rows show the chore name, owner, and points as readable text. Press Details on the right for the chore card. The page **?** stays at the top right beside its title, outside the chore list.
 
-Chore cards keep common **This occurrence** actions as buttons. Less-used actions are in the **Responsibility** and **Schedule & details** dropdowns. The ? is beside the title; Back, Refresh, and Dashboard stay together; available Skip Undo stays at the bottom.
+Chore cards keep common **This occurrence** actions as buttons. Less-used coordination actions open through **More options**; **Manage this chore** there opens advanced editing. The ? is beside the title; Back, Refresh, and Dashboard stay together; available Skip Undo stays at the bottom.
 
 ### Manage chores starts with the list
 
@@ -475,3 +475,6 @@ Needs attention shows a Details button beside each chore. Open it to review or a
 After Done, the bottom **Undo Done: chore name** reverses your latest unchanged completion immediately, with no confirmation page. It restores responsibility, points, and streak state. If later changes make reversal unsafe, the bot refuses it. Skip has its own immediate Undo; completion history retains the audit record.
 
 **Chore reminders** sends scheduled private messages for your due unfinished work, at up to ten chosen daily times. **Trade alerts** sends a private message when someone proposes a trade; it has a separate on/off switch. Changing either preference leaves the other unchanged. Owner feedback messages are separate.
+
+### Prepared 1.3.3 screen simplification
+Chore details keeps Claim/Done, Checklist when present, Skip, Need help and Choose date visible. More options opens coordination/history/feedback; Manage this chore there opens editing. Undo remains last. Manage catalog actions follow content. Page controls use < Prev / Next >; day controls use << Prev day / Next day >>, with no yellow-square emoji. Local candidate, not deployed.

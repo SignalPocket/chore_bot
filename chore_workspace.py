@@ -766,10 +766,12 @@ def install(ns, ui, lock):
             self.source,self.owner,self.notice=source,source.owner,notice
             for item in source.children:
                 if isinstance(item,discord.ui.Button):
+                    if hasattr(item,'_sprig_original_label'):item.label=item._sprig_original_label
                     if (not getattr(item,'_sprig_navigation',False) and not hasattr(item,'_sprig_checklist_step')) or item.label=='Dashboard':
                         item.style=action_style(item.label,item.style)
                     if item.label in ('Previous','Next','Previous page','Next page','Previous day','Next day'):
-                        item.emoji='\U0001f7e8'
+                        item.emoji=None
+
             embed=getattr(source,'embed',None)
             if embed is None:
                 source.embed=embed=discord.Embed(title=screen_name(source),color=0x6B9B77)
@@ -824,7 +826,7 @@ def install(ns, ui, lock):
                 frame.commit(self)
                 recovery.attach(self,source,resume=refresh)
                 return
-            if isinstance(source,Manage):frame.rows(source.top_actions,slot='toolbar')
+            if isinstance(source,Manage):frame.rows(source.top_actions,slot='actions')
             points_screen=isinstance(source,Points)
             calendar_day=getattr(source,'recovery_context',{}).get('screen')=='day'
             calendar_details=getattr(source,'calendar_details',[])
@@ -1006,7 +1008,19 @@ def install(ns, ui, lock):
                 controls=[item for items in rows.values() for item in items]
                 navigation=[item for label in ('Back','Dashboard') for item in controls if isinstance(item,discord.ui.Button) and item.label==label]
                 actions=[item for item in controls if item not in navigation]
-                frame.grouped_actions(actions,guard=source.interaction_check)
+                everyday=self.page_spec.action_groups[0]
+                primary=[item for item in actions if everyday.accepts(item)]
+                priority={label:n for n,label in enumerate(everyday.labels)}
+                primary.sort(key=lambda item:priority.get(item.label,99))
+                for item in primary:
+                    item.label={'Stuck / need help':'Need help','Choose occurrence':'Choose date'}.get(item.label,item.label)
+                frame.rows(primary)
+                async def more_options(i):
+                    if not await source.interaction_check(i):return
+                    await present(i,CardActions(source.owner,source,'More options'))
+                button=discord.ui.Button(label='More options',style=discord.ButtonStyle.secondary)
+                button.callback=more_options
+                frame.rows([button])
                 utility_row=discord.ui.ActionRow(*navigation)
             elif browse_screen:
                 utilities={getattr(item,'label',None):item for items in rows.values() for item in items
@@ -1049,7 +1063,9 @@ def install(ns, ui, lock):
                     if (not getattr(item,'_sprig_navigation',False) and not hasattr(item,'_sprig_checklist_step')) or item.label=='Dashboard':
                         item.style=action_style(item.label,item.style)
                     if item.label in ('Previous','Next','Previous page','Next page','Previous day','Next day'):
-                        item.emoji='\U0001f7e8'
+                        item.emoji=None
+                        item._sprig_original_label=item.label
+                        item.label={'Previous':'< Prev','Previous page':'< Prev','Next':'Next >','Next page':'Next >','Previous day':'<< Prev day','Next day':'Next day >>'}[item.label]
             refresh=frame.navigation(utility_row.children)
             pending=undoable_skip(source.owner) if isinstance(source,(Browse,Card)) else None
             if pending:
@@ -1461,6 +1477,26 @@ def install(ns, ui, lock):
                 row=next(row for row in (1,3,4) if sum(c.row==row for c in self.children)<(3 if row==4 else 5))
                 self.button(label,action,row=row)
             self.nav(back)
+
+    class CardActions(View):
+        def __init__(self,owner,card,title):
+            super().__init__(owner)
+            self.recovery_context=dict(card.recovery_context)
+            self.embed=discord.Embed(title=title+' · '+chore(card.qid)[1],description={
+                'Who does it':'Choose who takes this chore and for how long. Each action keeps its stated dates or responsibility scope.',
+                'Change this chore':'Change the chore for future repeats. Copying and separating shifts are advanced changes.',
+                'More options':'Change who does this chore or when you do it. These choices keep their stated dates and scope. Chore editing is available separately.'}[title],color=0x6B9B77)
+            groups=page_spec('Card','Chore details').action_groups
+            group=next(g for g in groups if g.title==title)
+            actions=[item for item in card.children if isinstance(item,discord.ui.Button) and item.label not in ('Back','Dashboard','Refresh','Refresh / Resume')]
+            selected=[item for item in actions if not groups[0].accepts(item) and ((title=='More options' and not groups[2].accepts(item)) or (title!='More options' and group.accepts(item)))]
+            for index,item in enumerate(selected):
+                copy=discord.ui.Button(label=item.label,style=item.style,disabled=item.disabled,row=index//5)
+                copy.callback=getattr(item,'_sprig_recovery_callback',item.callback)
+                self.add_item(copy)
+            if title=='More options':
+                self.button('Manage this chore',lambda i:present(i,CardActions(owner,card,'Change this chore')),row=4)
+            self.nav(card.return_to)
 
     class Confirm(View):
         def __init__(self, owner, title, text, save, back):
@@ -1908,7 +1944,7 @@ def install(ns, ui, lock):
                    'work or **Calendar** to browse dates.\n'
                    '\n'
                    'Choose a topic below for the steps you need.',
-     'Pick up a chore': '1. Open **Pick up chores** and press **Claim** beside a due chore, or open its name and press **Claim**. This takes just this occurrence.\n2. Read the instructions and use **Done** when finished.\n\nFor a longer signup, open the card’s **Responsibility** menu: take this week, next week, or choose repeating days where offered. A weekly signup ends Sunday at 6 p.m. Eastern; finishing today does not release the rest of the week.',
+     'Pick up a chore': '1. Open **Pick up chores** and press **Claim** beside a due chore, or open its name and press **Claim**. This takes just this occurrence.\n2. Read the instructions and use **Done** when finished.\n\nFor a longer signup, open the card’s **More options** screen: take this week, next week, or choose repeating days where offered. A weekly signup ends Sunday at 6 p.m. Eastern; finishing today does not release the rest of the week.',
      'Finish a chore': '1. Open **Do chores → My chores → Due now**.\n'
                        '2. Read the chore’s instructions. If it has a **Checklist**, check off its steps '
                        'first.\n'
@@ -1950,10 +1986,10 @@ def install(ns, ui, lock):
                                     '\n'
                                     'Separate **Daily AM** and **Daily PM** chores can have different owners. '
                                     'An unsplit twice-daily chore offers **Separate AM and PM sign-ups** in '
-                                    'its card’s Schedule & details menu.\n'
+                                    'More options → Manage this chore.\n'
                                     '\n',
-     'Use the calendar': 'Open **Plan & coordinate → Calendar** to see today. Use **Previous day**, **Today**, '
-                         'or **Next day** to change the date. **Previous page / Next page** shows more chores '
+     'Use the calendar': 'Open **Plan & coordinate → Calendar** to see today. Use **<< Prev day**, **Today**, '
+                         'or **Next day >>** to change the date. **< Prev / Next >** shows more chores '
                          'on the same date.\n'
                          '\n'
                          'Press **Details** beside a chore to read more. Past and future dates show a preview '
@@ -2125,7 +2161,7 @@ def install(ns, ui, lock):
                 description=getattr(getattr(source,'embed',None),'description',None) or ''
                 actions=[getattr(item,'label','') for item in source.children if isinstance(item,discord.ui.Button) and item.label not in ('Back','Dashboard')]
                 instructions=(description+'\n\n' if description else '')+'Use '+(', '.join('**'+label+'**' for label in actions) if actions else 'the choices on this screen')+' to continue. Back returns without confirming an action; Dashboard opens the main menu.'
-            if kind=='Card':instructions='Read the instructions and current responsibility above. **Claim** takes this occurrence; **Done** completes it; **Skip this occurrence** skips it without points. A required checklist must be finished first.\n\nUse **Responsibility** for signups, reassigning, dropping or trades. Use **Schedule & details** for editing, timing, feedback and history. Only applicable actions appear. Bottom Undo reverses your latest unchanged Done or Skip.'
+            if kind=='Card':instructions='Read the instructions and current responsibility above. **Claim** takes this occurrence; **Done** completes it; **Skip this occurrence** skips it without points. A required checklist must be finished first.\n\nUse **More options** for signups, reassigning, dropping, trades, moving one occurrence, feedback and history. Open **Manage this chore** there for advanced editing. Only applicable actions appear. Bottom Undo reverses your latest unchanged Done or Skip.'
             elif kind=='Attention':instructions='This list combines **Overdue**, **Needs someone**, and **Blocked** work. A chore appears once even when several labels apply. Due today does not automatically mean overdue.\n\nPress **Details** beside a chore to inspect or act. Back returns to this list page; Refresh reads the latest state.'
             elif kind=='Confirm':instructions='Read the proposed change above before confirming. Back leaves it unsaved. Opening Help never confirms or repeats the action.'
             elif kind=='ButtonChoices':instructions='Press a choice to select it. If several choices are allowed, toggle them and press Apply. Back returns without applying these choices.'

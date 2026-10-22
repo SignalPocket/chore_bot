@@ -329,7 +329,7 @@ Current chores, calendar ownership, household views, reminders, and projected po
 
 ## Button colors
 
-Green means Claim, Done, or Save. Red means Skip, Undo, or Drop. Dashboard uses Discord’s purple primary button and the dashboard panel has a purple accent. Previous/Next controls have yellow square markers because Discord does not provide yellow button backgrounds. Details, filters, and settings stay neutral; active view choices retain their selected highlight. Disabled actions stay disabled and dimmed. Labels always name the action, so you do not need to rely on color alone.
+Green means Claim, Done, or Save. Red means Skip, Undo, or Drop. Dashboard uses Discord’s purple primary button and the dashboard panel has a purple accent. Page controls use < Prev / Next > and day controls use << Prev day / Next day >>, without emoji markers. Details, filters, and settings stay neutral; active view choices retain their selected highlight. Disabled actions stay disabled and dimmed. Labels always name the action, so you do not need to rely on color alone.
 
 
 ## Shorter daily flows
@@ -347,3 +347,6 @@ Every private screen has a heading and a small **?** button. It opens help for t
 ### Consistent page layouts
 
 Every screen uses a shared page type: dashboard, list, detail, calendar, form/settings, help, or confirmation. Titles and contextual ? help identify the page. Page counts stay directly above fixed Previous/Next controls. Search/filter controls stay together; The ? stays at the top right beside the title; Back, Refresh, and Dashboard have a separate navigation row. Undo stays last. The calendar keeps readable text with Details on the right. Dropdowns hold occasional choices; Claim, Done, Skip, Checklist, paging, and navigation remain visible buttons.
+
+### Prepared 1.3.3 screen simplification
+Chore details keeps Claim/Done, Checklist when present, Skip, Need help and Choose date visible. More options opens coordination/history/feedback; Manage this chore there opens editing. Undo remains last. Manage catalog actions follow content. Page controls use < Prev / Next >; day controls use << Prev day / Next day >>, with no yellow-square emoji. Local candidate, not deployed.
