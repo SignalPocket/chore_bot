@@ -62,8 +62,12 @@ def install(ns, ui, w):
         kind = context.get('screen')
         parent_context = context.get('parent', {'screen': 'dashboard'})
         parent = lambda: restore(owner, parent_context, guild, depth+1)
+        if kind=='page_help':return w.PageHelp(owner,name=context.get('name','Chores'),topic=context.get('topic','Start here'),parent=parent_context,guild=guild,instructions=context.get('instructions'))
+        if kind=='occurrence_dates':return w.OccurrenceDates(owner,int(context['qid']),guild,week=context.get('week',0),page=context.get('page',0))
+        if kind=='future_slots':return w.FutureSlots(owner,int(context['qid']),date.fromisoformat(context['day']),guild,parent)
+        if kind=='future_occurrence':return w.FutureOccurrence(owner,int(context['qid']),date.fromisoformat(context['day']),context['slot'],guild,parent)
         if kind == 'repeating_signup':
-            return w.Repeating(owner,int(context['qid']),guild,context.get('days',[]),context.get('shifts',[]))
+            return w.Repeating(owner,int(context['qid']),guild,cells=context.get('cells'))
         if kind == 'usual_schedule':
             return w.UsualSchedule(owner,context.get('people',[]),guild,context.get('mode'),context.get('days',[]))
         if kind == 'insights_help':

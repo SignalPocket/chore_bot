@@ -59,20 +59,22 @@ def install(ns,ui):
         people=[uid for _,_,uid in slots(qid)]
         return (ui.reassign_snapshot(qid),slots(qid),ui.attendance.defaults_snapshot(people))
 
-    def save(actor,qid,days,selected_shifts,expected,remove=False):
+    def save(actor,qid,days,selected_shifts,expected,remove=False,replace_cells=None):
         import json
         ns['reset_due_quests']()
         if snapshot(qid)!=expected or ui.is_archived(qid):return 'This chore, attendance or signup changed. Review it again.'
         days=sorted(set(days));selected_shifts=sorted(set(selected_shifts));valid=shifts(qid)
-        if not valid or not days or not selected_shifts or any(type(d) is not int or not 0<=d<=6 for d in days) or any(s not in valid for s in selected_shifts):
+        cells=set((day,shift) for day in days for shift in selected_shifts) if replace_cells is None else set(tuple(cell) for cell in replace_cells)
+        if not valid or (not cells and replace_cells is None) or any(type(d) is not int or not 0<=d<=6 or shift not in valid for d,shift in cells):
             return 'Choose weekdays and the available shifts for a daily chore.'
         before=slots(qid)
-        if not remove:
+        if replace_cells is not None and cells=={(d,shift) for d,shift,uid in before if uid==str(actor)}:return "Nothing changed. Your repeating signups already match."
+        if not remove and cells:
             q=db.execute('SELECT assigned_to FROM quests WHERE id=?',(qid,)).fetchone()
             if q[0] or db.execute('SELECT 1 FROM week_signups WHERE quest_id=? AND week_start>=?',(qid,ui.week_key())).fetchone():
                 return 'Release the ongoing assignment or weekly signups before adding repeating days.'
             for day,shift,uid in before:
-                if day not in days or shift not in selected_shifts or uid==str(actor):continue
+                if (day,shift) not in cells or uid==str(actor):continue
                 # Two rotation cycles establish the ordinary weekly/alternating
                 # defaults; also inspect saved dated exceptions within a year.
                 dates={timing.now().date()+timedelta(days=n) for n in range(28)}
@@ -87,13 +89,13 @@ def install(ns,ui):
                         return 'Someone already has one of those weekday/shift slots while you are both home. Nothing changed.'
             current_claim=db.execute('SELECT user_id FROM claims WHERE quest_id=?',(qid,)).fetchone()
             current_shift=('am' if timing.now().hour<12 else 'pm') if valid==('am','pm') else valid[0]
-            if current_claim and current_claim[0]!=str(actor) and timing.now().weekday() in days and current_shift in selected_shifts:
+            if current_claim and current_claim[0]!=str(actor) and (timing.now().weekday(),current_shift) in cells:
                 return 'Someone has the current occurrence. Let them finish or drop it before reserving this day.'
         with db:
-            for day in days:
-                for shift in selected_shifts:
-                    if remove:db.execute('DELETE FROM repeating_signups WHERE quest_id=? AND weekday=? AND shift=? AND user_id=?',(qid,day,shift,str(actor)))
-                    else:db.execute('INSERT OR IGNORE INTO repeating_signups VALUES(?,?,?,?)',(qid,day,shift,str(actor)))
+            if replace_cells is not None:db.execute('DELETE FROM repeating_signups WHERE quest_id=? AND user_id=?',(qid,str(actor)))
+            for day,shift in sorted(cells):
+                if remove:db.execute('DELETE FROM repeating_signups WHERE quest_id=? AND weekday=? AND shift=? AND user_id=?',(qid,day,shift,str(actor)))
+                else:db.execute('INSERT OR IGNORE INTO repeating_signups VALUES(?,?,?,?)',(qid,day,shift,str(actor)))
             after=slots(qid)
             if after==before:return 'Nothing changed. Your repeating signups are already in that state.'
             db.execute('INSERT INTO repeating_signup_changes(quest_id,actor,changed_at,before_state,after_state) VALUES(?,?,?,?,?)',
@@ -103,41 +105,40 @@ def install(ns,ui):
             if owner(qid)==str(actor):db.execute('DELETE FROM claims WHERE quest_id=? AND user_id=?',(qid,str(actor)))
         return ('Repeating signup released.' if remove else 'Repeating days saved. You are responsible only when home; away occurrences need coverage.')+' Points and completed history are unchanged.'
 
+    def replace(actor,qid,cells,expected):
+        return save(actor,qid,[],[],expected,replace_cells=cells)
+
     def install_views(w):
         class Repeating(w.View):
-            def __init__(self,actor,qid,guild=None,days=(),selected_shifts=()):
+            def __init__(self,actor,qid,guild=None,days=None,selected_shifts=None,cells=None,expected=None):
                 super().__init__(actor)
-                self.recovery_context={'screen':'repeating_signup','qid':qid,'days':list(days),'shifts':list(selected_shifts)}
-                self.embed=discord.Embed(title='Repeating days',description='Choose weekdays and shifts. These repeat only when you are home, using your usual schedule and date exceptions. Away slots stay open for coverage. Nothing saves until you confirm.',color=0x6B9B77)
+                expected=snapshot(qid) if expected is None else expected
+                if cells is None:
+                    cells={(d,shift) for d,shift,uid in slots(qid) if uid==str(actor)} if days is None and selected_shifts is None else {(d,shift) for d in (days or ()) for shift in (selected_shifts or ())}
+                cells=set(tuple(cell) for cell in cells)
+                self.recovery_context={'screen':'repeating_signup','qid':qid,'cells':[list(cell) for cell in sorted(cells)]}
                 self.name_ids=[uid for _,_,uid in slots(qid)]
+                self.rebuild=lambda:Repeating(actor,qid,guild,cells=cells,expected=expected)
+                self.embed=discord.Embed(title='Repeating days',description='Your saved days and shifts are selected. Click a slot to add or remove it, then Save once. Only your pattern changes; responsibility applies only while you are home.',color=0x6B9B77)
                 labels=('Mon','Tue','Wed','Thu','Fri','Sat','Sun')
                 existing=slots(qid)
-                if existing:self.embed.add_field(name='Saved responsibilities',value='\n'.join(f'{labels[d]} · {s.upper()} · {w.person(uid,guild)} · only when home' for d,s,uid in existing)[:1000],inline=False)
-                def view(new_days=days,new_shifts=selected_shifts):return Repeating(actor,qid,guild,new_days,new_shifts)
-                for day,label in enumerate(labels):
-                    async def toggle(i,day=day):
-                        if not await self.interaction_check(i):return
-                        await w.present(i,view(tuple(sorted(set(days)^{day}))))
-                    self.button(('✓ ' if day in days else '')+label,toggle,row=0 if day<4 else 1,primary=day in days)
-                for shift in shifts(qid):
-                    async def toggle(i,shift=shift):
-                        if not await self.interaction_check(i):return
-                        await w.present(i,view(days,tuple(sorted(set(selected_shifts)^{shift}))))
-                    self.button(('✓ ' if shift in selected_shifts else '')+{'day':'Whole day','am':'AM','pm':'PM'}[shift],toggle,row=2,primary=shift in selected_shifts)
-                expected=snapshot(qid)
-                for remove,label in ((False,'Save repeating days'),(True,'Release selected days')):
-                    async def review(i,remove=remove):
-                        if not await self.interaction_check(i):return
-                        async def confirm(event):
-                            if not await self.interaction_check(event):return
-                            await event.response.defer()
-                            async with ui.mutation_lock:notice=save(event.user.id,qid,days,selected_shifts,expected,remove)
-                            await w.present(event,view(),notice)
-                        text=(', '.join(labels[d] for d in days)+' · '+', '.join(s.upper() for s in selected_shifts)+' · only when home. '
-                              +('Release only your selected repeating slots.' if remove else 'Reserve these days each week; other occurrences stay available. No points are awarded.'))
-                        await w.present(i,w.Confirm(actor,'Release repeating days?' if remove else 'Save repeating days?',text,confirm,view))
-                    self.button(label,review,row=3,primary=not remove,disabled=not days or not selected_shifts)
+                if existing:self.embed.add_field(name='Saved responsibilities',value='\n'.join(f'{labels[d]} · {shift.upper()} · {w.person(uid,guild)} · only when home' for d,shift,uid in existing)[:1000],inline=False)
+                offered=shifts(qid)
+                for day in range(7):
+                    for shift_index,shift in enumerate(offered):
+                        async def toggle(i,day=day,shift=shift):
+                            if not await self.interaction_check(i):return
+                            await w.present(i,Repeating(actor,qid,i.guild,cells=cells^{(day,shift)},expected=expected))
+                        label=('✓ ' if (day,shift) in cells else '')+labels[day]+(' · '+shift.upper() if shift!='day' else '')
+                        self.button(label,toggle,row=(day*len(offered)+shift_index)//4,primary=(day,shift) in cells)
+                async def save_selected(i):
+                    if not await self.interaction_check(i):return
+                    await i.response.defer()
+                    async with ui.mutation_lock:notice=replace(i.user.id,qid,cells,expected)
+                    await w.present(i,Repeating(actor,qid,i.guild),notice)
+                self.button('Save repeating days',save_selected,row=4,primary=True)
+                self.button('Clear selection',lambda i:w.present(i,Repeating(actor,qid,i.guild,cells=(),expected=expected)),row=4)
                 self.nav(lambda:w.Card(actor,qid,guild=guild))
         return Repeating
 
-    return SimpleNamespace(slots=slots,shifts=shifts,owner=owner,reserved=reserved,save=save,snapshot=snapshot,in_week=in_week,occurrences=occurrences,install_views=install_views)
+    return SimpleNamespace(slots=slots,shifts=shifts,owner=owner,reserved=reserved,save=save,replace=replace,snapshot=snapshot,in_week=in_week,occurrences=occurrences,install_views=install_views)

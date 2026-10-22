@@ -7,7 +7,7 @@ Start with **/chores** in the household server.
 - [Household user guide](USER-GUIDE.md).
 - [Implementation, tests, and deployment](BUTTON-BOARD.md).
 
-Run the offline regression suite with `python test_chore_board.py -q`. It uses temporary databases and mocked Discord delivery. Deploy all ten runtime modules together (including chore_recovery.py, chore_insights.py, and repeating_signups.py), preserving the existing server database and environment.
+Run the offline regression suite with `python test_chore_board.py -q`. It uses temporary databases and mocked Discord delivery. Deploy all eleven runtime modules together (including chore_recovery.py, chore_insights.py, repeating_signups.py, and dated_occurrences.py), preserving the existing server database and environment.
 
 Daily server database backups run independently of Sprig at 03:15 Eastern, with catch-up checks and integrity manifests. See BUTTON-BOARD.md for paths, verification, and the standalone backup helper.
 
@@ -18,3 +18,5 @@ See [BACKUP-RECOVERY.md](BACKUP-RECOVERY.md) for the installed server/laptop sch
 
 
 Private screens offer **Refresh / Resume** and `/chores` offers **Continue where I left off**. Expired controls restore saved navigation without replaying their old action. See USER-GUIDE.md for behavior and limits, and BUTTON-BOARD.md for recovery routing and deployment.
+
+Future dated chores support Claim just this time, immediate Skip just this time, bottom Undo, and dropping a dated reservation. Calendar, due ownership, reminders, and workload follow the selected date and AM/PM slot.

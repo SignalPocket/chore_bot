@@ -17,7 +17,31 @@ class HouseholdAvailability:
         db.execute('''CREATE TABLE IF NOT EXISTS availability_default_changes(
             id INTEGER PRIMARY KEY AUTOINCREMENT,actor TEXT NOT NULL,people TEXT NOT NULL,
             before_state TEXT NOT NULL,after_state TEXT NOT NULL,created_at TEXT NOT NULL)''')
+        db.execute('''CREATE TABLE IF NOT EXISTS availability_quick_changes(id INTEGER PRIMARY KEY AUTOINCREMENT,actor TEXT NOT NULL,people TEXT NOT NULL,day TEXT NOT NULL,state TEXT NOT NULL,before_state TEXT NOT NULL,after_state TEXT NOT NULL,created_at TEXT NOT NULL)''')
         db.commit()
+
+    def today_snapshot(self,people,when):
+        people=sorted(set(str(uid) for uid in people));day=when.astimezone(self.timezone).date().isoformat()
+        return day,self.defaults_snapshot(people),[(uid,self.db.execute('SELECT id,start_date,end_date,state,note FROM availability_exceptions WHERE user_id=? AND active=1 AND start_date<=? AND end_date>=? ORDER BY id',(uid,day,day)).fetchall()) for uid in people]
+
+    def mark_today(self,actor,people,state,expected,when):
+        people=sorted(set(str(uid) for uid in people))
+        if not 1<=len(people)<=10 or any(not uid.isdecimal() for uid in people) or state not in ('home','away'):return 'Choose household people and Home or Away.'
+        current=self.today_snapshot(people,when)
+        if current!=expected:return 'Dates or usual schedules changed. Review before marking today.'
+        day=when.astimezone(self.timezone).date();stamp=day.isoformat()
+        if any(len(rows)>1 for uid,rows in current[2]):return 'Conflicting date exceptions need review first. Nothing changed.'
+        changes=[(uid,rows) for uid,rows in current[2] if not rows or rows[0][3]!=state]
+        if not changes:return 'Today is already marked '+state+'. Nothing changed.'
+        with self.db:
+            for uid,rows in changes:
+                for key,start,end,old,note in rows:
+                    self.db.execute('UPDATE availability_exceptions SET active=0 WHERE id=?',(key,))
+                    if start<stamp:self.db.execute('INSERT INTO availability_exceptions(user_id,start_date,end_date,state,note) VALUES(?,?,?,?,?)',(uid,start,(day-timedelta(days=1)).isoformat(),old,note))
+                    if end>stamp:self.db.execute('INSERT INTO availability_exceptions(user_id,start_date,end_date,state,note) VALUES(?,?,?,?,?)',(uid,(day+timedelta(days=1)).isoformat(),end,old,note))
+                self.db.execute('INSERT INTO availability_exceptions(user_id,start_date,end_date,state,note) VALUES(?,?,?,?,?)',(uid,stamp,stamp,state,'Marked '+state+' today'))
+            self.db.execute('INSERT INTO availability_quick_changes(actor,people,day,state,before_state,after_state,created_at) VALUES(?,?,?,?,?,?,?)',(str(actor),json.dumps(people),stamp,state,json.dumps(current),json.dumps(self.today_snapshot(people,when)),when.isoformat()))
+        return 'Marked '+state+' today. Other trip dates, usual schedules, responsibilities, and points stay saved.'
 
     def profile(self,user_id):
         return self.db.execute('SELECT mode,weekdays,revision FROM availability_defaults WHERE user_id=?',(str(user_id),)).fetchone() or ('household','[]',0)

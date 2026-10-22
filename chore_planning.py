@@ -101,7 +101,18 @@ def install(ns, ui, w, lock):
                                     db.executemany('INSERT INTO checklist_checks VALUES(?,?,?,?)',[(qid,self.expected[2],idx,str(owner)) for idx in values])
                                 text=f'{len(values)}/{len(items)} steps checked. Mark the chore Done when finished.'
                     await w.present(i,Checklist(owner,qid,i.guild,back),text)
-                picker.callback=change;self.add_item(picker)
+                picker.callback=change;self.step_picker=picker
+                self.step_buttons=[]
+                for index,item in enumerate(items):
+                    async def toggle(i,index=index):
+                        values=set(self.expected[3])^{index}
+                        picker._values=[str(v) for v in sorted(values)]
+                        await change(i)
+                    button=self.button(item,toggle,row=index//5,primary=index in done)
+                    button.emoji='\u2611' if index in done else '\u2610'
+                    button.style=discord.ButtonStyle.success if index in done else discord.ButtonStyle.secondary
+                    button._sprig_checklist_step=index
+                    self.step_buttons.append(button)
             elif not items:self.embed.add_field(name='No checklist yet',value='Use Estimate / checklist from the chore card to add steps.')
             else:self.embed.add_field(name='View only',value='Only the person responsible for the current due occurrence can check or uncheck steps.')
             if q and items and complete(qid) and not q[5] and not ui.is_archived(qid) and timing.ready(qid) and uid==str(owner) and ui.available(owner):
@@ -116,8 +127,8 @@ def install(ns, ui, w, lock):
                             await bot.get_command('done').callback(context,qid)
                             text='\n'.join(context.messages)
                     await w.present(i,back(),text)
-                self.button('Done',finish,row=1,primary=True)
-            self.button('Open chore',lambda i:w.present(i,back()),row=1)
+                self.button('Done',finish,row=3,primary=True)
+            self.button('Open chore',lambda i:w.present(i,back()),row=3)
             self.nav(back)
 
     def settings(uid):
@@ -212,6 +223,9 @@ def install(ns, ui, w, lock):
                 with db:db.execute('UPDATE reminder_deliveries SET status=? WHERE user_id=? AND slot=?',(status,uid,slot))
 
     def owner_on(q,day):
+        at=datetime.combine(day,datetime.min.time(),tzinfo=ns['QUEST_TIMEZONE'])
+        dated=ui.dated.owner(q[0],at) or ui.dated.owner(q[0],at.replace(hour=12))
+        if dated:return dated
         if q[4]:return str(q[4])
         start=day-timedelta(days=(day.weekday()+1)%7 or 7)
         weekly=db.execute('SELECT user_id FROM week_signups WHERE quest_id=? AND week_start=?',(q[0],start.isoformat())).fetchone()
@@ -231,6 +245,8 @@ def install(ns, ui, w, lock):
         result=[]
         for q in db.execute('SELECT id,name,frequency,points,assigned_to,completed,last_completed,reset_after FROM quests ORDER BY name COLLATE NOCASE').fetchall():
             if ui.is_archived(q[0]):continue
+            slots=ui.dated.slots(q[0])
+            if slots and all(ui.dated.skipped(q[0],ui.dated.when(day,slot)) for slot in slots):continue
             skipped=db.execute('SELECT skipped_at,next_due FROM occurrence_skips WHERE quest_id=? AND NOT EXISTS (SELECT 1 FROM skip_undo_state u WHERE u.skip_id=occurrence_skips.id AND u.undone_at IS NOT NULL) ORDER BY id DESC LIMIT 1',(q[0],)).fetchone()
             if skipped and timing.state(q[0])==(skipped[1],) and datetime.fromisoformat(skipped[0]).date()<=day<datetime.fromisoformat(skipped[1]).date():continue
             if flexible:
@@ -238,7 +254,7 @@ def install(ns, ui, w, lock):
                 if q[2]=='one-time' and q[5]:continue
             elif not dated(q,day):continue
             uid=owner_on(q,day)
-            if owner is not None and uid!=str(owner) and not any(ui.repeating.owner(q[0],datetime.combine(day,datetime.min.time(),tzinfo=ns['QUEST_TIMEZONE']).replace(hour=h))==str(owner) for h in (0,12)):continue
+            if owner is not None and uid!=str(owner) and not any((ui.dated.owner(q[0],datetime.combine(day,datetime.min.time(),tzinfo=ns['QUEST_TIMEZONE']).replace(hour=h)) or ui.repeating.owner(q[0],datetime.combine(day,datetime.min.time(),tzinfo=ns['QUEST_TIMEZONE']).replace(hour=h)))==str(owner) for h in (0,12)):continue
             result.append((q,uid))
         return result
     class Calendar(w.View):
@@ -290,15 +306,21 @@ def install(ns, ui, w, lock):
             for q,uid in chunk:
                 when=datetime.combine(day,datetime.min.time(),tzinfo=ns['QUEST_TIMEZONE']).replace(hour=12)
                 away=uid and not ui.attendance.at(uid,when)
-                self.embed.add_field(name=w.clean(q[1],100),value=((' · '.join(s.upper()+': '+w.clean(w.person(ui.repeating.owner(q[0],when.replace(hour=12 if s=='pm' else 0)),guild),65) for s in ui.repeating.shifts(q[0]))) if ui.repeating.slots(q[0]) and not q[4] else w.clean(w.person(uid,guild),100))+f' · {q[3]} points'+summary(q[0])+(' · ⚠ Away' if away else ''),inline=False)
+                self.embed.add_field(name=w.clean(q[1],100),value=((' · '.join(s.upper()+': '+('Skipped' if ui.dated.skipped(q[0],when.replace(hour=12 if s=='pm' else 0)) else w.clean(w.person(ui.dated.owner(q[0],when.replace(hour=12 if s=='pm' else 0)) or ui.dated.base_owner(q[0],when.replace(hour=12 if s=='pm' else 0)),guild),65)) for s in ui.repeating.shifts(q[0]))) if ui.dated.slots(q[0])==('am','pm') or ui.repeating.slots(q[0]) else w.clean(w.person(uid,guild),100))+f' · {q[3]} points'+summary(q[0])+(' · ⚠ Away' if away else ''),inline=False)
             self.embed.set_footer(text=f'Page {page+1} of {max((len(rows)-1)//size+1,1)} · '+(f'Chores {page*size+1}–{page*size+len(chunk)} of {len(rows)}' if rows else '0 chores')+' · Eastern time')
             if chunk:
                 picker=discord.ui.Select(placeholder='Choose chore',row=0,options=[discord.SelectOption(label=q[1][:100],value=str(q[0])) for q,uid in chunk])
                 async def open_chore(i,qid):
                     q=chore(qid)
-                    if day==timing.now().date():return await w.present(i,w.Card(owner,qid,back=lambda:Day(owner,day,mine,i.guild,page,flexible,mode),guild=i.guild))
-                    preview=w.View(owner);preview.embed=discord.Embed(title=w.clean(q[1],100),description=f'Calendar preview for {day:%a %b %d}. This is not a dated claim. Open the current chore to manage its current responsibility.',color=0x6B9B77)
-                    preview.button('Open current chore',lambda event:w.present(event,w.Card(owner,qid,back=lambda:Day(owner,day,mine,event.guild,page,flexible,mode),guild=event.guild)),row=0);preview.nav(lambda:Day(owner,day,mine,guild,page,flexible,mode))
+                    parent=lambda:Day(owner,day,mine,i.guild,page,flexible,mode)
+                    offered=ui.dated.slots(qid)
+                    if offered and day>=timing.now().date():
+                        if len(offered)>1:return await w.present(i,w.FutureSlots(owner,qid,day,i.guild,parent))
+                        if ui.dated.when(day,offered[0])>timing.now() or ui.dated.record(qid,day,offered[0]):
+                            return await w.present(i,w.FutureOccurrence(owner,qid,day,offered[0],i.guild,parent))
+                    if day==timing.now().date():return await w.present(i,w.Card(owner,qid,back=parent,guild=i.guild))
+                    preview=w.View(owner);preview.embed=discord.Embed(title=w.clean(q[1],100),description=f'Calendar preview for {day:%a %b %d}. Give flexible work a regular day before reserving a dated occurrence.',color=0x6B9B77)
+                    preview.button('Open current chore',lambda event:w.present(event,w.Card(owner,qid,back=parent,guild=event.guild)),row=0);preview.nav(parent)
                     await w.present(i,preview)
                 self.calendar_details=[(q[0],open_chore) for q,uid in chunk]
                 async def select(i):await open_chore(i,int(picker.values[0]))

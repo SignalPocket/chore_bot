@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '1.2.1'
+APP_VERSION = '1.3.0'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'Skip instantly, with Undo at the bottom of your chore screen.'
+RELEASE_SUMMARY = 'Faster chore controls, easier schedules, and future date/AM–PM claims and skips with Undo.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 
@@ -295,7 +295,7 @@ def install(namespace):
 
     class SafeView(discord.ui.View):
         def add_dashboard(self,row=4):
-            button=discord.ui.Button(label='Dashboard',row=row,style=discord.ButtonStyle.secondary)
+            button=discord.ui.Button(label='Dashboard',row=row,style=discord.ButtonStyle.primary)
             async def home(interaction):
                 await workspace.present(interaction,workspace.Dashboard(interaction.user.id,interaction.guild,interaction.user))
             button.callback=home
@@ -492,6 +492,16 @@ def install(namespace):
                 # Monthly chores reappear in the week containing their reset.
                 if not reset or datetime.fromisoformat(reset)>=end or (offset and datetime.fromisoformat(reset)<start):
                     continue
+            dated=namespace['chore_ui'].dated
+            if db.execute("SELECT 1 FROM dated_occurrences WHERE quest_id=? AND day>=? AND day<=? AND state!='released'",(qid,start.date().isoformat(),end.date().isoformat())).fetchone():
+                for n in range((end.date()-start.date()).days+1):
+                    day=start.date()+timedelta(days=n)
+                    for slot in dated.slots(qid):
+                        when=dated.when(day,slot)
+                        if not start<=when<end or not dated.valid(qid,day,slot) or dated.skipped(qid,when):continue
+                        active=dated.owner(qid,when) or dated.base_owner(qid,when)
+                        result.append((active,qid,name+' · '+day.strftime('%a %b %d')+' · '+('All day' if slot=='day' else slot.upper()),frequency,'Dated occurrence','Scheduled'))
+                continue
             repeating=namespace['chore_ui'].repeating
             if repeating.slots(qid) and not assigned and not weekly_owner(qid,offset):
                 for when in repeating.occurrences(qid,start,end):
@@ -721,7 +731,7 @@ def install(namespace):
         defaults=db.execute('SELECT user_id,mode,weekdays,revision FROM availability_defaults ORDER BY user_id').fetchall()
         return base+(defaults,) if defaults else base
 
-    def reassign(qid,target,scope,expected):
+    def reassign(qid,target,scope,expected,actor=None):
         api.reset_due_quests()
         if reassign_snapshot(qid)!=expected or is_archived(qid):
             return 'This chore or week changed. Reopen Reassign and review it again.'
@@ -750,6 +760,12 @@ def install(namespace):
                 db.execute('UPDATE quests SET assigned_to=? WHERE id=?',(str(target),qid))
                 db.execute('DELETE FROM claims WHERE quest_id=?',(qid,))
             return 'Ongoing assignment saved. The chore name, completion history, and earned points are unchanged.'
+        if namespace['chore_ui'].dated.owner(qid):
+            if row[2] or not timing.ready(qid):return 'There is no open dated occurrence to reassign.'
+            with db:
+                namespace['chore_ui'].dated.transfer_current(actor if actor is not None else 'system',qid,str(target))
+                db.execute('DELETE FROM claims WHERE quest_id=?',(qid,))
+            return 'This dated occurrence reassigned. Later repeats and points stay saved.'
         if row[1] or weekly_owner(qid):
             return 'This chore has an ongoing assignment or weekly owner. Choose that scope instead.'
         if row[2] or not timing.ready(qid):
@@ -847,13 +863,15 @@ def install(namespace):
                 return
             await interaction.response.defer()
             async with lock:
-                notice=reassign(self.qid,self.target.id,self.scope,self.expected)
+                notice=reassign(self.qid,self.target.id,self.scope,self.expected,actor=interaction.user.id)
             await interaction.edit_original_response(content=notice,embed=None,view=ReturnView(interaction.user.id),allowed_mentions=discord.AllowedMentions.none())
 
     def owned_scope(qid):
         row=db.execute('SELECT assigned_to FROM quests WHERE id=?',(qid,)).fetchone()
         if not row or is_archived(qid):
             return None,None
+        if namespace['chore_ui'].dated.owner(qid):
+            return namespace['chore_ui'].dated.owner(qid),'dated'
         if row[0]:
             return row[0],'assignment'
         recurring=namespace['chore_ui'].repeating.owner(qid)
@@ -870,6 +888,9 @@ def install(namespace):
         current,scope=owned_scope(qid)
         if current!=str(owner):
             return 'This chore is no longer yours. Nothing changed.'
+        if scope=='dated':
+            with db:namespace['chore_ui'].dated.transfer_current(owner,qid,None)
+            return 'Dated claim released. Later repeats and points stay saved.'
         if scope=='repeating':return 'Use Sign-up schedule → Release selected days to release repeating responsibility, or Skip this occurrence for just today.'
         with db:
             if scope=='assignment':
@@ -944,7 +965,7 @@ def install(namespace):
             return 'A chore, availability, or week changed. Trade expired; propose a fresh one.'
         for qid,kind in [(offered,scope),(requested,other_scope)]:
             completed=db.execute('SELECT completed FROM quests WHERE id=?',(qid,)).fetchone()[0]
-            if kind in ('occurrence','repeating') and (completed or not timing.ready(qid)):
+            if kind in ('occurrence','repeating','dated') and (completed or not timing.ready(qid)):
                 return 'An occurrence is no longer open. Nothing exchanged.'
             if kind=='assignment' and db.execute('SELECT 1 FROM week_signups WHERE quest_id=? AND week_start>=?',(qid,week_key())).fetchone():
                 return 'An ongoing assignment has weekly reservations. Resolve those before trading.'
@@ -955,6 +976,9 @@ def install(namespace):
                     db.execute('DELETE FROM claims WHERE quest_id=?',(qid,))
                 elif kind=='week0':
                     db.execute('UPDATE week_signups SET user_id=? WHERE quest_id=? AND week_start=?',(new_owner,qid,week_key()))
+                    db.execute('DELETE FROM claims WHERE quest_id=?',(qid,))
+                elif kind=='dated':
+                    namespace['chore_ui'].dated.transfer_current(owner,qid,new_owner)
                     db.execute('DELETE FROM claims WHERE quest_id=?',(qid,))
                 elif kind=='repeating':
                     db.execute('INSERT OR REPLACE INTO claims(quest_id,user_id) VALUES(?,?)',(qid,new_owner))
@@ -971,7 +995,7 @@ def install(namespace):
             entries=[(qid,name) for qid,name in db.execute('SELECT id,name FROM quests ORDER BY name COLLATE NOCASE,id') if owned_scope(qid)[0] not in (None,str(owner))]
             page=min(max(page,0),max((len(entries)-1)//PAGE_SIZE,0))
             name=db.execute('SELECT name FROM quests WHERE id=?',(offered,)).fetchone()[0]
-            descriptions={'occurrence':'this occurrence','week0':'this whole week','assignment':'ongoing assignment','repeating':'this occurrence only; repeating signup stays saved'}
+            descriptions={'occurrence':'this occurrence','week0':'this whole week','assignment':'ongoing assignment','repeating':'this occurrence only; repeating signup stays saved','dated':'this dated occurrence only'}
             self.embed=discord.Embed(title='Propose a trade',description=f'You offer **{discord.utils.escape_markdown(name)}** ({descriptions.get(owned_scope(offered)[1],"ownership changed")}). Choose another person’s chore. They must accept in Trade requests.')
             chunk=entries[page*PAGE_SIZE:(page+1)*PAGE_SIZE]
             if chunk:
@@ -1412,6 +1436,8 @@ def install(namespace):
 
     def update_chore(quest_id,name,frequency,points,notes,expected,room=None):
         existing=db.execute('SELECT frequency FROM quests WHERE id=?',(quest_id,)).fetchone()
+        if existing and frequency!=existing[0] and db.execute("SELECT 1 FROM dated_occurrences WHERE quest_id=? AND day>=? AND state!='released'",(quest_id,timing.now().date().isoformat())).fetchone():
+            return 'Release dated claims and undo dated skips before changing the repeat schedule.'
         if existing and frequency!=existing[0] and namespace['chore_ui'].repeating.slots(quest_id):
             return 'Release repeating weekday signups before changing the repeat schedule.'
         api.reset_due_quests()
@@ -2086,6 +2112,8 @@ def install(namespace):
 
     from repeating_signups import install as install_repeating
     result.repeating=install_repeating(namespace,result)
+    from dated_occurrences import install as install_dated
+    result.dated=install_dated(namespace,result)
 
     from chore_history import install as install_history
     install_history(namespace,result)

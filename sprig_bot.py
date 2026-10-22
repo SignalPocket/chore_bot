@@ -484,7 +484,7 @@ async def claim(ctx, quest_id: int):
         return
 
     quest_id, name, assigned_to, completed = quest
-    assigned_to = assigned_to or chore_ui.weekly_owner(quest_id) or (None if cursor.execute('SELECT 1 FROM claims WHERE quest_id=?',(quest_id,)).fetchone() else chore_ui.repeating.owner(quest_id))
+    assigned_to = chore_ui.workspace.ownership(quest_id)[0]
 
     if completed:
         await ctx.send(f"Quest #{quest_id} is already completed! ✨")
@@ -597,7 +597,7 @@ async def done(ctx, quest_id: int):
         assigned_to,
         completed,
     ) = quest
-    assigned_to = assigned_to or chore_ui.weekly_owner(quest_id) or (None if cursor.execute('SELECT 1 FROM claims WHERE quest_id=?',(quest_id,)).fetchone() else chore_ui.repeating.owner(quest_id))
+    assigned_to = chore_ui.workspace.ownership(quest_id)[0]
 
     if completed:
         await ctx.send(
