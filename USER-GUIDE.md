@@ -447,3 +447,7 @@ Typical clicks from an open dashboard, with the person/item on the first page: c
 ### Screen names and page help
 
 Every private screen has a heading and a small **?** button. It opens help for that screen; **Back** returns to your place, including unsaved choices while the screen is still active. **All help topics** opens the full guide. After a restart, Refresh restores the saved screen location; unsaved confirmation actions are never replayed. Pop-up forms have their own titles; use **?** on the screen that opens the form for instructions.
+
+Calendar day rows show the chore name, owner, and points as readable text. Press Details on the right for the chore card. The page **?** stays with calendar navigation, outside the chore list.
+
+Chore-card buttons are grouped under **This occurrence**, **Responsibility**, and **Schedule & details**. Back, ?, Refresh, and Dashboard stay together; available Skip Undo stays at the bottom.

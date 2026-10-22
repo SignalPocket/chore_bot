@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '1.3.0'
+APP_VERSION = '1.3.1'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'Faster chore controls, easier schedules, and future date/AM–PM claims and skips with Undo.'
+RELEASE_SUMMARY = 'Restored the readable calendar, grouped chore-card actions, and kept help beside navigation.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 

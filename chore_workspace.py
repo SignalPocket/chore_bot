@@ -818,6 +818,7 @@ def install(ns, ui, lock):
             body=discord.ui.Container(accent_colour=0x6B9B77) if embed and embed.fields else None
             def add_body(item):
                 (body if body is not None else self).add_item(item)
+            card_metadata=None
             if embed:
                 for index,field in enumerate(embed.fields):
                     # Lists stay compact; instructions and warnings keep their line breaks.
@@ -837,14 +838,13 @@ def install(ns, ui, lock):
                         add_body(discord.ui.ActionRow(source.step_buttons[index]))
                     elif calendar_day and index<len(calendar_details):
                         qid,open_chore=calendar_details[index]
-                        button=discord.ui.Button(label=chore(qid)[1][:80],style=discord.ButtonStyle.secondary)
+                        button=discord.ui.Button(label='Details',style=discord.ButtonStyle.secondary)
                         async def details(i,qid=qid,open_chore=open_chore):
                             if not await source.interaction_check(i):return
                             await open_chore(i,qid)
                         button.callback=details
                         button._sprig_navigation=True
-                        summary=discord.ui.Button(label=field.value.replace('\n',' · ')[:80],style=discord.ButtonStyle.secondary,disabled=True)
-                        add_body(discord.ui.ActionRow(button,summary))
+                        add_body(discord.ui.Section(content,accessory=button))
                     elif isinstance(source,Browse) and index<len(source.quick_rows):
                         qid,expected,can_done=source.quick_rows[index]
                         q=chore(qid);uid=ownership(qid)[0]
@@ -891,6 +891,10 @@ def install(ns, ui, lock):
                             await present(i,parent(),notice)
                         skip.callback=skip_click
                         add_body(discord.ui.ActionRow(name,action,skip))
+                    elif isinstance(source,Card) and field.name in ('Responsibility','When','Points and room','Estimate and checklist'):
+                        if card_metadata is None:
+                            card_metadata=content;add_body(card_metadata)
+                        else:card_metadata.content+='\n'+content.content
                     else:add_body(content)
                 if body is not None and body.children:self.add_item(body)
                 footer_value=embed.footer.text if embed.footer and embed.footer.text else ''
@@ -976,6 +980,24 @@ def install(ns, ui, lock):
                 self.add_item(discord.ui.ActionRow(*(controls[label] for label in ('Previous day','Today','Next day'))))
                 utility_row=discord.ui.ActionRow(*(controls[label] for label in ('Week','Month','Back','Dashboard')))
                 self.add_item(utility_row)
+            elif isinstance(source,Card):
+                controls=[item for items in rows.values() for item in items]
+                navigation=[item for label in ('Back','Dashboard') for item in controls if isinstance(item,discord.ui.Button) and item.label==label]
+                actions=[item for item in controls if item not in navigation]
+                occurrence={'Claim','Done','Checklist','Skip this occurrence','Undo completion','Stuck / need help','Choose occurrence'}
+                responsibility={'Signup options','Sign-up schedule','Reassign','Drop responsibility','Propose trade'}
+                def group(item):
+                    label=getattr(item,'label','')
+                    if label in occurrence:return 'This occurrence'
+                    if label in responsibility or label.startswith(('Take ','Release ')):return 'Responsibility'
+                    return 'Schedule & details'
+                for title in ('This occurrence','Responsibility','Schedule & details'):
+                    items=[item for item in actions if group(item)==title]
+                    if not items:continue
+                    self.add_item(discord.ui.TextDisplay('### '+title))
+                    for start in range(0,len(items),5):self.add_item(discord.ui.ActionRow(*items[start:start+5]))
+                utility_row=discord.ui.ActionRow(*navigation)
+                self.add_item(utility_row)
             elif browse_screen:
                 utilities={getattr(item,'label',None):item for items in rows.values() for item in items
                     if isinstance(item,discord.ui.Button) and item.label in ('Search','Filters','Dashboard')}
@@ -1031,7 +1053,7 @@ def install(ns, ui, lock):
                     self.remove_item(footer_item)
             help_row=utility_row
             if len(help_row.children)>=4:
-                help_row=next((row for row in self.walk_children() if isinstance(row,discord.ui.ActionRow) and len(row.children)<5 and row is not utility_row),None)
+                help_row=next((row for row in reversed(self.children) if isinstance(row,discord.ui.ActionRow) and len(row.children)<5 and row is not utility_row and any(getattr(button,'label',None)=='Today' for button in row.children)),None)
             if help_row is None:
                 help_row=discord.ui.ActionRow();self.add_item(help_row)
             help_row.add_item(page_help_button(source))

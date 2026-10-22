@@ -1,6 +1,12 @@
 # Sprig release notes
 
-## 1.3.0 - Prepared; not pushed or deployed
+## 1.3.1 - Prepared; not pushed or deployed
+
+- Group chore-card actions by occurrence, responsibility, and schedule/details; keep navigation together and retain every existing action.
+
+- Restore the earlier readable calendar rows with Details on the right; page help stays with navigation and cannot land inside a chore row.
+
+## 1.3.0 - Installed
 
 - clear screen names and a private contextual ? button on every screen, with Back and restart recovery; forms keep named titles and instructions on their launch screen.
 
