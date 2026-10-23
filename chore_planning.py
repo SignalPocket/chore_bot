@@ -266,7 +266,8 @@ def install(ns, ui, w, lock):
             def view(**changes):return Calendar(owner,guild,**dict(dict(day=day,mode=mode,mine=mine),**changes))
             self.button('Week',lambda i:w.present(i,view(mode='week')),row=0,primary=mode=='week')
             self.button('Month',lambda i:w.present(i,view(mode='month')),row=0,primary=mode=='month')
-            self.button('Household' if mine else 'My calendar',lambda i:w.present(i,view(mine=not mine)),row=0)
+            self.button('Mine',lambda i:w.present(i,view(mine=True)),row=0,primary=mine)
+            self.button('Everyone',lambda i:w.present(i,view(mine=False)),row=0,primary=not mine)
             if mode=='week':
                 for idx in range(7):
                     date=start+timedelta(days=idx);rows=project(date,owner if mine else None)
@@ -298,6 +299,8 @@ def install(ns, ui, w, lock):
             self.list_page_size=size
             rows=project(day,owner if mine else None,flexible);page=min(max(page,0),max((len(rows)-1)//size,0));chunk=rows[page*size:(page+1)*size]
             self.day,self.page,self.mine,self.flexible,self.mode=day,page,mine,flexible,mode
+            self.button('Mine',lambda i:w.present(i,Day(owner,day,True,i.guild,flexible=flexible,mode=mode)),row=2,primary=mine)
+            self.button('Everyone',lambda i:w.present(i,Day(owner,day,False,i.guild,flexible=flexible,mode=mode)),row=2,primary=not mine)
             self.name_ids=[uid for q,uid in chunk if uid]+[uid for q,_ in chunk for _,_,uid in ui.repeating.slots(q[0])]
             self.rebuild=lambda:Day(owner,day,mine,guild,page,flexible,mode)
             self.recovery_context={'screen':'day','day':day.isoformat(),'page':page,'mine':mine,'flexible':flexible,'mode':mode,'list_size':size}

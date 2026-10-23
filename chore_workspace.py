@@ -34,7 +34,7 @@ def install(ns, ui, lock):
     CREATE TABLE IF NOT EXISTS skip_undo_state(skip_id INTEGER PRIMARY KEY,expected TEXT NOT NULL,previous_policy TEXT NOT NULL,undone_at TEXT);''')
     db.execute("CREATE TABLE IF NOT EXISTS person_colors(user_id TEXT PRIMARY KEY,color TEXT NOT NULL)")
     db.commit()
-    COLORS={'lavender':('🟣','Lavender'),'blue':('🔵','Blue'),'pink':('🩷','Pink'),'orange':('🟠','Orange'),'green':('🟢','Green'),'yellow':('🟡','Yellow'),'none':('','No marker')}
+    COLORS={'lavender':('🟣','Lavender'),'blue':('🔵','Blue'),'pink':('🩷','Pink'),'orange':('🟠','Orange'),'green':('🟢','Green'),'yellow':('🟡','Yellow'),'red':('🔴','Red'),'white':('⚪','White'),'black':('⚫','Black'),'brown':('🟤','Brown'),'star':('🌟','Star'),'flower':('🌸','Flower'),'leaf':('🍃','Leaf'),'moon':('🌙','Moon'),'paws':('🐾','Paw prints'),'none':('','No marker')}
     def color_key(uid,guild=None,name=None):
         saved=db.execute('SELECT color FROM person_colors WHERE user_id=?',(str(uid),)).fetchone()
         if saved and saved[0] in COLORS:return saved[0]
@@ -144,6 +144,7 @@ def install(ns, ui, lock):
             else: await i.response.send_message(text, ephemeral=True)
 
     async def present(i, view, notice=None):
+        while isinstance(i,InteractionProxy):i=i.raw
         view._choice_guild=i.guild
         drafts=getattr(view,'_choice_drafts',{})
         pages=getattr(view,'_choice_pages',{})
@@ -194,7 +195,7 @@ def install(ns, ui, lock):
             return await self.raw.edit_original_response(**kwargs)
 
     def adapt(view, owner, back=None):
-        if isinstance(view, View) or getattr(view, 'workspace_adapted', False): return view
+        if isinstance(view, (View,LayoutPanel)) or getattr(view, 'workspace_adapted', False): return view
         view.workspace_adapted = True
         view.recovery_parent = back
         if not getattr(view,'embed',None):
@@ -249,8 +250,8 @@ def install(ns, ui, lock):
             back=back or (lambda:PersonalSettings(owner,guild))
             self.recovery_context={'screen':'person_color','parent':recovery.bookmark(back())}
             current=color_key(owner,guild)
-            self.embed=discord.Embed(title='Your color',description='Choose the marker everyone sees beside your name. Saves immediately. Lavender uses a purple dot; pink uses a heart because Discord has no standard pink circle emoji. Names stay visible.',color=0x6B9B77)
-            picker=discord.ui.Select(placeholder='Choose your color',options=[discord.SelectOption(label=label,value=key,emoji=emoji or None,default=key==current) for key,(emoji,label) in COLORS.items()])
+            self.embed=discord.Embed(title='Your name marker',description='Choose a color dot or symbol beside your name. Changes save immediately; names stay visible.',color=0x6B9B77)
+            picker=discord.ui.Select(placeholder='Choose your name marker',options=[discord.SelectOption(label=label,value=key,emoji=emoji or None,default=key==current) for key,(emoji,label) in COLORS.items()])
             async def save(i):
                 if not await self.interaction_check(i):return
                 value=picker.values[0] if picker.values else None
@@ -272,14 +273,14 @@ def install(ns, ui, lock):
             async def refresh(i,notice=None):
                 if notice and notice.startswith('Chore reminders '):notice='Reminder settings saved.'
                 await present(i,PersonalSettings(owner,i.guild,back),notice)
-            color=discord.ui.Select(placeholder='Your color',row=0,options=[discord.SelectOption(label='Color · '+label,value=key,emoji=emoji or None,default=key==color_key(owner,guild)) for key,(emoji,label) in COLORS.items()])
+            color=discord.ui.Select(placeholder='Name marker',row=0,options=[discord.SelectOption(label='Marker · '+label,value=key,emoji=emoji or None,default=key==color_key(owner,guild)) for key,(emoji,label) in COLORS.items()])
             async def save_color(i):
                 if not await self.interaction_check(i):return
                 value=color.values[0] if color.values else None
                 if value not in COLORS:return await i.response.send_message('Choose a listed color.',ephemeral=True)
                 async with lock:
                     with db:db.execute('INSERT OR REPLACE INTO person_colors VALUES(?,?)',(str(owner),value))
-                await refresh(i,'Color saved.')
+                await refresh(i,'Name marker saved.')
             color.callback=save_color;self.add_item(color)
             size=discord.ui.Select(placeholder='Chores per page',row=1,options=[discord.SelectOption(label=f'List length · {n} chores',value=str(n),default=n==sheet_size(owner)) for n in range(1,11)])
             async def save_size(i):
@@ -416,7 +417,7 @@ def install(ns, ui, lock):
             if catalog:
                 frame.rows([button('Add chore',lambda i:present(i,adapt(ui.AddChoreMenu(owner),owner,parent))),button('Archived chores',lambda i:present(i,adapt(ui.RemoveChoreView(owner,removed=True),owner,parent))),button('Household tools',lambda i:present(i,Dashboard(owner,i.guild,i.user))),button('Search',lambda i:i.response.send_modal(ChoresSearch(self))),button('Back to list',lambda i:present(i,target(i,mode='today',who='mine',page=0)))])
             else:
-                frame.rows([button('Other dates',lambda i:present(i,ui.planning.Calendar(owner,i.guild,day=day))),button('Manage chores',lambda i:present(i,target(i,mode='all',who='everyone',query='',page=0))),button('Settings',lambda i:present(i,PersonalSettings(owner,i.guild,parent)))])
+                frame.rows([button('Other dates',lambda i:present(i,ui.planning.Calendar(owner,i.guild,day=day,mine=state['who']=='mine'))),button('Manage chores',lambda i:present(i,target(i,mode='all',who='everyone',query='',page=0))),button('Settings',lambda i:present(i,PersonalSettings(owner,i.guild,parent)))])
             refresh=button('Refresh',lambda i:present(i,target(i)))
             # A refresh action lives with contextual help instead of a permanent toolbar.
             return refresh
@@ -1175,6 +1176,10 @@ def install(ns, ui, lock):
                 frame.commit(self)
                 recovery.attach(self,source,resume=refresh)
                 return
+            calendar_scope=getattr(source,'recovery_context',{}).get('screen') in ('calendar','day')
+            if calendar_scope:
+                scopes=[c for c in source.children if isinstance(c,discord.ui.Button) and c.label in ('Mine','Everyone')]
+                frame.rows(scopes,slot='toolbar')
             if isinstance(source,Manage):frame.rows(source.top_actions,slot='actions')
             points_screen=isinstance(source,Points)
             calendar_day=getattr(source,'recovery_context',{}).get('screen')=='day'
@@ -1296,6 +1301,7 @@ def install(ns, ui, lock):
                     if isinstance(item,discord.ui.Button) and item.label in ('Previous page','Next page'):
                         item.label='Previous' if item.label=='Previous page' else 'Next'
             for item in source.children:
+                if calendar_scope and isinstance(item,discord.ui.Button) and item.label in ('Mine','Everyone'):continue
                 if isinstance(source,Manage) and item in source.top_actions:continue
                 if hasattr(item,'_sprig_checklist_step'):continue
                 if calendar_week and isinstance(item,discord.ui.Button) and item.row in (1,2):

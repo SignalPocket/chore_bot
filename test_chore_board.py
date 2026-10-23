@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.0.6')
+        self.assertEqual(chore_board.APP_VERSION,'2.0.7')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.0.6. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.0.7. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -3112,6 +3112,67 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(ids),27)
             self.assertEqual(len(set(ids)),27)
 
+    async def test_other_dates_carries_mine_and_everyone_scope(self):
+        w=self.ui.workspace
+        for who,mine in [('mine',True),('everyone',False)]:
+            with self.subTest(who=who):
+                source=w.Chores(10,who=who,day='2026-10-23')
+                panel=w.render(source);event=Interaction();await self.activate(panel,'Other dates',event)
+                calendar=self.rendered(event)
+                self.assertEqual(calendar.source.recovery_context['mine'],mine)
+                self.assertEqual(calendar.source.recovery_context['day'],'2026-10-23')
+                scopes=calendar.layout_plan.slots['toolbar'][0].children
+                self.assertEqual([c.label for c in scopes],['Mine','Everyone'])
+                self.assertEqual([c.label for c in scopes if c.style==discord.ButtonStyle.primary],['Mine' if mine else 'Everyone'])
+                restored=w.recovery.restore(10,calendar.source.recovery_context,event.guild)
+                self.assertEqual(restored.recovery_context['mine'],mine)
+                label=next(c.label for c in calendar.walk_children() if isinstance(c,discord.ui.Button) and c.label=='Next >')
+                event=Interaction();await self.activate(calendar,label,event)
+                self.assertEqual(self.rendered(event).source.recovery_context['mine'],mine)
+                day=w.render(self.ui.planning.Day(10,datetime(2026,10,23).date(),mine,guild=event.guild))
+                self.assertEqual([c.label for c in day.layout_plan.slots['toolbar'][0].children],['Mine','Everyone'])
+                event=Interaction();await self.activate(day,'Everyone' if mine else 'Mine',event)
+                self.assertEqual(self.rendered(event).source.mine,not mine)
+
+    async def test_personal_marker_colors_and_symbols_share_one_selector(self):
+        w=self.ui.workspace
+        panel=w.render(w.PersonalSettings(10))
+        marker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='Name marker')
+        self.assertLessEqual(len(marker.options),25)
+        self.assertTrue({'red','white','black','brown','star','flower','leaf','moon','paws'}.issubset({o.value for o in marker.options}))
+        before=self.ui.planning.settings(10)
+        for value in ('red','star','none'):
+            marker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='Name marker')
+            marker._values=[value];event=Interaction();await marker.callback(event)
+            panel=self.rendered(event);self.assertEqual(w.color_key(10),value)
+        self.assertEqual(self.ui.planning.settings(10),before)
+        marker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='Name marker')
+        marker._values=['paws'];wrong=Interaction(20);await marker.callback(wrong)
+        self.assertEqual(w.color_key(10),'none')
+        self.assertTrue(wrong.response.payload[1]['ephemeral'])
+
+    async def test_adapted_drop_return_chores_emits_valid_v2_without_double_wrapping(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-23T10:00:00'):
+            self.db.execute("INSERT INTO claims VALUES(1,'10')")
+            self.db.execute("INSERT INTO users(id,points) VALUES('10',25)");self.db.commit()
+            drop=w.adapt(self.ui.DropChoreView(10,1,self.ui.snapshot(1)),10,lambda:w.Chores(10))
+            panel=w.render(drop);event=Interaction();await self.activate(panel,'Confirm drop',event)
+            self.assertIsNone(w.ownership(1)[0])
+            returned=self.rendered(event)
+            wrong=Interaction(20);await self.activate(returned,'Chores',wrong)
+            self.assertTrue(wrong.response.payload[1]['ephemeral'])
+            event=Interaction();await self.activate(returned,'Chores',event)
+            panel=self.rendered(event);self.assertIsInstance(panel.source,w.Chores)
+            self.assertTrue(all(c['type'] in (1,9,10,12,13,14,17) for c in panel.to_components()))
+            self.assertFalse(any(isinstance(c,discord.ui.Button) for c in panel.children))
+            self.assertLessEqual(panel.total_children_count,40)
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone()[0],25)
+            self.assertIsNone(w.ownership(1)[0])
+            self.assertIs(w.adapt(panel,10),panel)
+            event=Interaction();await self.activate(panel,'↻',event)
+            self.assertIsInstance(self.rendered(event).source,w.Chores)
+
     async def test_inline_personal_settings_save_guard_stale_and_back(self):
         w=self.ui.workspace;p=self.ui.planning
         parent=lambda:w.Chores(10,who='everyone')
@@ -3124,10 +3185,10 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         event=Interaction();await picker.callback(event)
         self.assertEqual(w.sheet_size(10),8)
         panel=self.rendered(event);self.assertIsInstance(panel.source,w.PersonalSettings)
-        picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='Your color')
+        picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='Name marker')
         picker._values=['blue'];event=Interaction();await picker.callback(event)
         self.assertEqual(w.color_key(10),'blue')
-        self.assertIn('Color saved.',self.rendered(event).layout_plan.slots['footer'][0].content)
+        self.assertIn('Name marker saved.',self.rendered(event).layout_plan.slots['footer'][0].content)
         panel=self.rendered(event);before=p.settings(10)
         label=next(c.label for c in panel.walk_children() if getattr(c,'label','') and c.label.startswith('Chore reminders:'))
         event=Interaction();await self.activate(panel,label,event)
@@ -5237,7 +5298,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(all(not c.accessory.disabled for c in sections))
             rows=[c for c in panel.children if isinstance(c,discord.ui.ActionRow)]
             self.assertEqual([[b.label for b in r.children] for r in rows],
-                [['🏠','↻','⚙','?'],['< Prev','Next >'],['<< Prev day','Today','Next day >>'],['Week','Month'],['Back']])
+                [['🏠','↻','⚙','?'],['Mine','Everyone'],['< Prev','Next >'],['<< Prev day','Today','Next day >>'],['Week','Month'],['Back']])
             self.assertFalse(any(isinstance(c,discord.ui.Select) for c in panel.walk_children()))
             footer=next(c for c in panel.children if isinstance(c,discord.ui.TextDisplay) and 'Page ' in c.content)
             self.assertIn('Chores 1–5 of',footer.content);self.assertNotIn('Refresh / Resume',footer.content)

@@ -16,7 +16,7 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.0.6'
+APP_VERSION = '2.0.7'
 # Keep this to one short sentence describing changes since the previous release.
 RELEASE_SUMMARY = 'Consistent page layouts, easier chore editing, direct chore details, and a Home/Away household overview.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
@@ -303,7 +303,7 @@ def install(namespace):
 
         async def on_error(self, interaction, error, item):
             # Do not repeat an action after a response failure: it may have saved.
-            message = "I couldn't finish updating this view. Open My chores again to check what saved before trying again."
+            message = "I couldn't finish updating this view. Open /chores again to check what saved before trying again."
             if interaction.response.is_done():
                 await interaction.followup.send(message, ephemeral=True)
             else:

@@ -523,3 +523,14 @@ Dashboard and new starter messages expose one Chores destination. Older persiste
 
 ## Prepared 2.0.6 — inline personal settings
 Your settings contains native color and list-length dropdowns, direct reminder and trade-alert toggles, and Change times opening a small native text-entry modal. Saves return to the same Settings page; Back keeps the opening screen. Reminder times/revisions use existing guarded validation; trade toggles reject stale state. No navigation-only preference buttons. Existing opt-ins are preserved unless the user changes them. Not deployed.
+
+
+### Prepared name marker palette
+Settings → Name marker offers extra red, white, black and brown dots plus star, flower, leaf, moon and paw-print symbols in the same chooser. Existing saved choices and household defaults remain unchanged. Symbols retain native emoji colors. No marker remains available. Local only.
+
+
+### Prepared Other dates scope fix
+Other dates carries Mine into the personal calendar and Everyone into the household calendar. Existing week/month/date navigation and recovery preserve that scope. Local only, not deployed.
+
+
+Calendar scope controls are now consistently visible as Mine / Everyone directly below the header on week, month and day views. The selected scope is highlighted; changing dates or restoring the view retains it. Other dates inherits Mine or Everyone from the Chores sheet. Not deployed.
