@@ -408,7 +408,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             if isinstance(item,discord.ui.Button):
                 if item.label in ('Refresh','Refresh / Resume'):continue
                 if item.label=='Dashboard' and any(getattr(c,'label',None)=='🏠' for c in wire):continue
-                if item not in wire and not any(item in getattr(control,'_sprig_menu_actions',()) for control in wire):return False
+                if item not in wire and not any(item in getattr(control,'_sprig_menu_actions',())+getattr(control,'_sprig_more_actions',()) for control in wire):return False
             elif isinstance(item,(discord.ui.Select,discord.ui.UserSelect)):
                 if item in wire:continue
                 if item.placeholder=='Choose a chore' and (getattr(source,'qid',None) is not None or getattr(source,'selected',None) is not None):continue
@@ -416,11 +416,19 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         return True
 
     def wire_actions(self,panel):
-        return [item for item in panel.walk_children() if isinstance(item,discord.ui.Button)]+[action for item in panel.walk_children() for action in getattr(item,'_sprig_menu_actions',())]
+        return [item for item in panel.walk_children() if isinstance(item,discord.ui.Button)]+[action for item in panel.walk_children() for action in getattr(item,'_sprig_menu_actions',())+getattr(item,'_sprig_more_actions',())]
 
     async def activate(self,panel,label,event):
         button=next((item for item in panel.walk_children() if isinstance(item,discord.ui.Button) and (item.label==label or (label=='Back' and item.label=='Back to list') or (label=='⚙' and item.label=='Settings'))),None)
         if button is not None:return await button.callback(event)
+        more=next((c for c in panel.walk_children() if any(b.label==label for b in getattr(c,'_sprig_more_actions',()))),None)
+        if more is not None:
+            await more.callback(event)
+            value=getattr(event,'wire_result',None) or event.response.wire_payload
+            value=value[1] if isinstance(value,tuple) else value
+            if not value or 'view' not in value:return
+            if not isinstance(value['view'].source,self.ui.workspace.ChoreMore):return
+            return await self.activate(self.rendered(event),label,event)
         for picker in panel.walk_children():
             for index,action in enumerate(getattr(picker,'_sprig_menu_actions',())):
                 if action.label==label:
@@ -449,8 +457,8 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(row.children[1].callback(first),row.children[1].callback(second))
             self.assertEqual(w.ownership(1),('10','occurrence'))
             panel=self.rendered(first);self.assertIsInstance(panel.source,w.Card)
-            self.assertTrue(any(isinstance(c,discord.ui.Select) and c.placeholder=='Other actions…' for c in panel.walk_children()))
-            self.assertIn('Signup options',[c.label for c in self.wire_actions(panel)])
+            self.assertTrue(any(isinstance(c,discord.ui.Select) and c.placeholder=='Sign up…' for c in panel.walk_children()))
+            self.assertIn('More…',[c.label for c in self.wire_actions(panel)])
             self.assertFalse(any(getattr(c,'label',None)=='Just this occurrence' for c in panel.walk_children()))
             done=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Done')
             await done.callback(Interaction())
@@ -597,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.0.2')
+        self.assertEqual(chore_board.APP_VERSION,'2.0.3')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -607,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.0.2. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.0.3. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -6238,8 +6246,8 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             for qid in (1,2):
                 source=w.Card(10,qid);panel=w.render(source)
                 menus=[c for c in panel.walk_children() if isinstance(c,discord.ui.Select)]
-                self.assertEqual(len(menus),1)
-                self.assertEqual(menus[0].placeholder,'Other actions…')
+                self.assertLessEqual(len(menus),1)
+                if menus:self.assertEqual(menus[0].placeholder,'Sign up…')
                 actions=self.wire_actions(panel)
                 self.assertIn('Edit chore',[c.label for c in actions])
                 self.assertNotIn('Edit chore',[getattr(c,'label',None) for c in panel.walk_children()])
@@ -6425,6 +6433,31 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(w.person(10,guild),'Dar')
         picker._values=['invalid'];event=Interaction();event.guild=guild;await picker.callback(event)
         self.assertEqual(w.color_key(10,guild),'none')
+
+    async def test_card_signups_more_back_and_quiet_help_preserve_guarded_actions(self):
+        w=self.ui.workspace
+        panel=w.render(w.Card(10,1,lambda:w.Chores(10,who='everyone')))
+        rows=[c for c in panel.walk_children() if isinstance(c,discord.ui.ActionRow)]
+        main=next(r for r in rows if any(getattr(c,'label',None)=='Claim' for c in r.children))
+        self.assertIn('Back to list',[c.label for c in main.children])
+        help_button=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Need help')
+        self.assertEqual(help_button.style,discord.ButtonStyle.secondary)
+        self.assertNotIn(help_button,list(main.children))
+        menu=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select))
+        self.assertEqual(menu.placeholder,'Sign up…')
+        self.assertNotIn('Edit chore',[o.label for o in menu.options])
+        event=Interaction(20);await self.activate(panel,'More…',event)
+        self.assertTrue(event.response.payload[1]['ephemeral'])
+        event=Interaction();await self.activate(panel,'More…',event)
+        more=self.rendered(event);self.assertIsInstance(more.source,w.ChoreMore)
+        self.assertIn('Edit chore',[c.label for c in self.wire_actions(more)])
+        restored=w.recovery.restore(10,more.source.recovery_context,Interaction().guild)
+        self.assertIsInstance(restored,w.ChoreMore)
+        event=Interaction();await self.activate(more,'Back',event)
+        self.assertEqual(self.rendered(event).source.qid,1)
+        card=self.rendered(event)
+        event=Interaction();await self.activate(card,'Back',event)
+        self.assertEqual(self.rendered(event).source.state['who'],'everyone')
 
     async def test_work_card_done_uses_supported_check_mark_emoji(self):
         w=self.ui.workspace
@@ -6846,7 +6879,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_final_polish_help_matches_visible_card_and_attention_controls(self):
         w=self.ui.workspace
-        for source,words in ((w.Card(10,1),('Other actions','Back to list','Undo')), (w.Attention(10),('Overdue','Needs someone','Blocked','Details'))):
+        for source,words in ((w.Card(10,1),('Sign up','More','Back to list','Undo')), (w.Attention(10),('Overdue','Needs someone','Blocked','Details'))):
             panel=w.render(source);help_button=next(c for c in panel.walk_children() if getattr(c,'label',None)=='?')
             event=Interaction();await help_button.callback(event)
             help_view=self.rendered(event).source

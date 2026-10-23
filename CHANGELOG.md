@@ -102,3 +102,7 @@ Every workspace page has a compact Refresh button. Daily sheets and work cards n
 
 ## 2.0.2 — Prepared Done emoji fix
 Replace the Done button’s plain check glyph with the supported check-mark emoji. Discord rejected the prior payload when opening assigned chore details (HTTP 400 / Invalid emoji). No domain or layout changes. Local only.
+
+
+## Prepared 2.0.3 chore card
+Claim/Done remain prominent with Back beside them. Sign up… groups available responsibility choices. More… opens a separate screen for occasional tools. Skip and neutral Need help remain visible below the main actions. Discord button sizes are fixed; quieter styling and placement reduce emphasis. Refresh and restart recovery preserve context. Local only, not deployed.

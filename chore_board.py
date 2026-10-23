@@ -16,7 +16,7 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.0.2'
+APP_VERSION = '2.0.3'
 # Keep this to one short sentence describing changes since the previous release.
 RELEASE_SUMMARY = 'Consistent page layouts, easier chore editing, direct chore details, and a Home/Away household overview.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'

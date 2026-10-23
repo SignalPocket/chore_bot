@@ -252,3 +252,7 @@ Settings → Your color saves a personal marker, visible beside your name to eve
 
 
 Daily-sheet rows are compact plain text: number · chore · person/color (Everyone). Points remain on the work card. Long titles can still wrap in narrow Discord clients. Existing list-length preference remains; eight is the new-account default.
+
+
+## Prepared 2.0.3 chore card
+Claim/Done remain prominent with Back beside them. Sign up… groups available responsibility choices. More… opens a separate screen for occasional tools. Skip and neutral Need help remain visible below the main actions. Discord button sizes are fixed; quieter styling and placement reduce emphasis. Refresh and restart recovery preserve context. Local only, not deployed.

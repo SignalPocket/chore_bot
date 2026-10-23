@@ -972,6 +972,30 @@ def install(ns, ui, lock):
                 for option in item.options:
                     if option.label in ACTION_ICONS:option.emoji=ACTION_ICONS[option.label]
 
+    SIGNUP_ACTIONS={'Sign-up schedule','Every week · ongoing','Take this week','Take next week','Release this week','Release next week'}
+    def action_picker(source,actions,placeholder):
+        picker=discord.ui.Select(placeholder=placeholder,options=[discord.SelectOption(label=b.label[:100],value=str(n),description='Unavailable right now' if b.disabled else None) for n,b in enumerate(actions)])
+        async def choose(i):
+            if not await source.interaction_check(i):return
+            try:
+                index=int(picker.values[0])
+                if not 0<=index<len(actions):raise ValueError('Invalid action')
+                action=actions[index]
+            except (ValueError,IndexError):return await i.response.send_message('Choose an action from this list.',ephemeral=True)
+            if action.disabled:return await i.response.send_message('That action is unavailable. Refresh this screen.',ephemeral=True)
+            await getattr(action,'_sprig_recovery_callback',action.callback)(i)
+        picker.callback=choose;picker._sprig_menu_actions=tuple(actions)
+        return picker
+
+    class ChoreMore(View):
+        def __init__(self,owner,card):
+            super().__init__(owner)
+            self.recovery_context={'screen':'chore_more','qid':card.qid,'offset':card.recovery_context.get('offset',0),'parent':card.recovery_context.get('parent',{'screen':'dashboard'})}
+            self.embed=discord.Embed(title='More · '+card.embed.title,description='Occasional tools for this chore.',color=0x6B9B77)
+            actions=[b for b in card.children if isinstance(b,discord.ui.Button) and b.label not in SIGNUP_ACTIONS|{'Claim','Done','Checklist','Skip this occurrence','Stuck / need help','Need help','Back','Dashboard','Refresh','Refresh / Resume'}]
+            if actions:self.add_item(action_picker(self,actions,'Choose a tool…'))
+            self.nav(card.return_to)
+
     def work_card(frame,source,notice=None):
         q=chore(source.qid)
         frame.heading(discord.ui.TextDisplay('# '+clean(q[1],100) if q else '# Chore unavailable'),page_help_button(source))
@@ -988,32 +1012,32 @@ def install(ns, ui, lock):
             for field in source.embed.fields:
                 if field.name.startswith('⚠'):frame.add_item(discord.ui.TextDisplay('**'+field.name+'**\n'+field.value))
             controls=[b for b in source.children if isinstance(b,discord.ui.Button) and b.label not in ('Back','Dashboard','Refresh','Refresh / Resume')]
-            primary=[];occasional=[]
+            main=[];secondary=[];signups=[];occasional=[]
             for item in controls:
                 if item.label in ('Claim','Done','Checklist','Skip this occurrence','Stuck / need help','Need help'):
-                    copy=discord.ui.Button(label={'Skip this occurrence':'Skip','Stuck / need help':'Need help'}.get(item.label,item.label),style=item.style,disabled=item.disabled)
+                    copy=discord.ui.Button(label={'Skip this occurrence':'Skip','Stuck / need help':'Need help'}.get(item.label,item.label),style=item.style if item.label in ('Claim','Done') else discord.ButtonStyle.secondary,disabled=item.disabled)
                     copy.callback=getattr(item,'_sprig_recovery_callback',item.callback)
-                    primary.append(copy)
+                    (main if item.label in ('Claim','Done','Checklist') else secondary).append(copy)
+                elif item.label in SIGNUP_ACTIONS:signups.append(item)
                 else:occasional.append(item)
-            primary.sort(key=lambda b:{'Claim':0,'Done':0,'Checklist':1,'Skip':2,'Need help':3}.get(b.label,4))
-            frame.rows(primary)
+            back=next((b for b in source.children if getattr(b,'label',None)=='Back'),None)
+            if back:
+                copy=discord.ui.Button(label='Back to list',style=discord.ButtonStyle.secondary)
+                copy.callback=getattr(back,'_sprig_recovery_callback',back.callback);main.append(copy)
+            frame.rows(main)
+            if signups:frame.add_item(discord.ui.ActionRow(action_picker(source,signups,'Sign up…')))
             if occasional:
-                picker=discord.ui.Select(placeholder='Other actions…',options=[discord.SelectOption(label=b.label[:100],value=str(n),description='Unavailable right now' if b.disabled else None) for n,b in enumerate(occasional)])
-                async def choose(i):
-                    if not await source.interaction_check(i):return
-                    try:
-                        index=int(picker.values[0])
-                        if not 0<=index<len(occasional):raise ValueError('Invalid action')
-                        action=occasional[index]
-                    except (ValueError,IndexError):return await i.response.send_message('Choose an action from this menu.',ephemeral=True)
-                    if action.disabled:return await i.response.send_message('That action is unavailable. Refresh the chore.',ephemeral=True)
-                    await getattr(action,'_sprig_recovery_callback',action.callback)(i)
-                picker.callback=choose;picker._sprig_menu_actions=tuple(occasional);frame.add_item(discord.ui.ActionRow(picker))
-        back=next((b for b in source.children if getattr(b,'label',None)=='Back'),None)
-        if back:
-            copy=discord.ui.Button(label='Back to list',style=discord.ButtonStyle.secondary)
-            copy.callback=getattr(back,'_sprig_recovery_callback',back.callback)
-            frame.rows([copy])
+                more=discord.ui.Button(label='More…',style=discord.ButtonStyle.secondary)
+                more.callback=lambda i:present(i,ChoreMore(source.owner,source))
+                more._sprig_more_actions=tuple(occasional)
+                secondary.append(more)
+            secondary.sort(key=lambda b:{'Skip':0,'Need help':1}.get(b.label,2))
+            frame.rows(secondary)
+        if not q or ui.is_archived(source.qid):
+            back=next((b for b in source.children if getattr(b,'label',None)=='Back'),None)
+            if back:
+                copy=discord.ui.Button(label='Back to list',style=discord.ButtonStyle.secondary)
+                copy.callback=getattr(back,'_sprig_recovery_callback',back.callback);frame.rows([copy])
         refresh=discord.ui.Button(label='Refresh')
         return refresh
 
@@ -1581,6 +1605,7 @@ def install(ns, ui, lock):
             ns['reset_due_quests']()
             q = chore(qid)
             back = back or (lambda: Browse(owner, 'mine', guild=guild))
+            self.guild=guild
             self.qid, self.expected = qid, ui.snapshot(qid)
             self.return_to=lambda:Card(owner,qid,back,guild,offset)
             self.recovery_context={'screen':'card','qid':qid,'offset':offset,'parent':recovery.bookmark(back())}
@@ -1634,7 +1659,6 @@ def install(ns, ui, lock):
                     async with lock:text=skip_occurrence(i.user.id,qid,self.expected)
                     await present(i,card(),text)
                 self.button('Skip this occurrence',skip,row=2)
-            if q[2] in WEEKLY_FREQUENCIES:self.button('Signup options',lambda i:present(i,ClaimChoices(owner,qid,i.guild,card,include_once=False)),row=0)
             week_snapshot = tuple(ui.weekly_owner(qid, n) for n in (0, 1))
             if q[2] in WEEKLY_FREQUENCIES and not q[4] and not ui.repeating.slots(qid):
                 for label, week in [('This week', 0), ('Next week', 1)]:
@@ -2193,7 +2217,7 @@ def install(ns, ui, lock):
                    'work or **Calendar** to browse dates.\n'
                    '\n'
                    'Choose a topic below for the steps you need.',
-     'Pick up a chore': 'Open **Available** on the daily sheet. Choose a chore from the dropdown, read its instructions, then press **✋ Claim**. This takes just this occurrence. The card stays open with **✓ Done** ready when you finish.\n\nUse **Other actions…** for a longer signup or repeating days. Each option names its scope. Weekly signups end Sunday at 6 p.m. Eastern; finishing today does not release the rest of the week.',
+     'Pick up a chore': 'Open **Available** on the daily sheet. Choose a chore from the dropdown, read its instructions, then press **✋ Claim**. This takes just this occurrence. The card stays open with **✓ Done** ready when you finish.\n\nUse **Sign up…** for a longer signup or repeating days. Each option names its scope. Weekly signups end Sunday at 6 p.m. Eastern; finishing today does not release the rest of the week.',
      'Finish a chore': '1. Open **Do chores → My chores → Due now**.\n'
                        '2. Read the chore’s instructions. If it has a **Checklist**, check off its steps '
                        'first.\n'
@@ -2410,7 +2434,7 @@ def install(ns, ui, lock):
                 description=getattr(getattr(source,'embed',None),'description',None) or ''
                 actions=[getattr(item,'label','') for item in source.children if isinstance(item,discord.ui.Button) and item.label not in ('Back','Dashboard')]
                 instructions=(description+'\n\n' if description else '')+'Use '+(', '.join('**'+label+'**' for label in actions) if actions else 'the choices on this screen')+' to continue. Back returns without confirming an action; Dashboard opens the main menu.'
-            if kind=='Card':instructions='Read this chore’s instructions. **Claim** takes this occurrence; after claiming, **Done** completes it. **Skip** skips only this occurrence without points. **Need help** records a problem; required checklist steps must be finished before Done.\n\nUse **Other actions…** for signups, reassigning, trades, editing, dates and history. **Back to list** returns to the sheet and preserves its view. One small **↶ Undo** names your latest reversible Done or Skip at the bottom.'
+            if kind=='Card':instructions='Read this chore’s instructions. **Claim** takes this occurrence; after claiming, **Done** completes it. **Skip** skips only this occurrence without points. **Need help** records a problem; required checklist steps must be finished before Done.\n\nUse **Sign up…** for responsibility choices and **More…** for reassigning, trades, editing, dates and history. **Back to list** returns to the sheet and preserves its view. One small **↶ Undo** names your latest reversible Done or Skip at the bottom.'
             elif kind=='Attention':instructions='This list combines **Overdue**, **Needs someone**, and **Blocked** work. A chore appears once even when several labels apply. Due today does not automatically mean overdue.\n\nPress **Details** beside a chore to inspect or act. Back returns to this list page; Refresh reads the latest state.'
             elif kind=='Confirm':instructions='Read the proposed change above before confirming. Back leaves it unsaved. Opening Help never confirms or repeats the action.'
             elif kind=='ButtonChoices':instructions='Press a choice to select it. If several choices are allowed, toggle them and press Apply. Back returns without applying these choices.'
@@ -2437,7 +2461,7 @@ def install(ns, ui, lock):
 
     TOPICS['Your color']='Open **Settings → Your color** and choose a marker.\n\nChoosing saves immediately. **No marker** removes it. Everyone sees it on refreshed workspace screens; responsibility and points stay unchanged.'
 
-    result = SimpleNamespace(PersonColor=PersonColor,color_key=color_key,sheet_size=sheet_size,Chores=Chores,PersonalSettings=PersonalSettings,browse_page_size=browse_page_size,PageHelp=PageHelp,screen_name=screen_name,PAGE_TOPICS=PAGE_TOPICS,ButtonChoices=ButtonChoices,ClaimChoices=ClaimChoices,Repeating=Repeating,OccurrenceDates=OccurrenceDates,FutureOccurrence=FutureOccurrence,FutureSlots=FutureSlots,skip_occurrence=skip_occurrence,undo_skip=undo_skip,undoable_skip=undoable_skip,UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
+    result = SimpleNamespace(ChoreMore=ChoreMore,PersonColor=PersonColor,color_key=color_key,sheet_size=sheet_size,Chores=Chores,PersonalSettings=PersonalSettings,browse_page_size=browse_page_size,PageHelp=PageHelp,screen_name=screen_name,PAGE_TOPICS=PAGE_TOPICS,ButtonChoices=ButtonChoices,ClaimChoices=ClaimChoices,Repeating=Repeating,OccurrenceDates=OccurrenceDates,FutureOccurrence=FutureOccurrence,FutureSlots=FutureSlots,skip_occurrence=skip_occurrence,undo_skip=undo_skip,undoable_skip=undoable_skip,UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
 
     from chore_recovery import install as install_recovery
     recovery = install_recovery(ns, ui, result)

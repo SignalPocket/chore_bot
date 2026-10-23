@@ -505,3 +505,7 @@ Daily-sheet rows are compact plain text: number · chore · person/color (Everyo
 
 
 All workspace pages, including daily sheets and work cards, display compact Home / Refresh / Settings / Help. Refresh reloads current state and context without repeating the last mutation. Mine/Available/Everyone show the selected scope in blue. Discord pop-up forms retain their native submit/cancel behavior.
+
+
+## Prepared 2.0.3 chore card
+Claim/Done remain prominent with Back beside them. Sign up… groups available responsibility choices. More… opens a separate screen for occasional tools. Skip and neutral Need help remain visible below the main actions. Discord button sizes are fixed; quieter styling and placement reduce emphasis. Refresh and restart recovery preserve context. Local only, not deployed.
