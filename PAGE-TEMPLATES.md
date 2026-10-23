@@ -99,3 +99,9 @@ its exact-source report before a release, as described in TESTING.md.
 
 ## Local review: simpler chore details
 Everyday Claim/Done, Checklist, Skip and Need help stay visible. More options opens a separate screen for responsibility, dates, history and feedback. Manage this chore opens advanced editing controls. Manage catalog actions follow content. Paging uses < Prev / Next > and day controls use << Prev day / Next day >> without emoji. Not deployed.
+
+## Local combined Chores review — October 22, 2026
+Not deployed. Dashboard now has one Chores destination replacing Calendar, Household chores and Manage chores. Chores offers Today, Week and All chores; a person filter, search, date/page navigation, direct Claim/Done and Edit, Add chore and Archived chores. The gear opens personal List length, Chore reminders and Trade alerts only. Header order is Home, Refresh, Settings, Help on the new Chores, chore details/advanced actions, personal settings and Dashboard screens. Older saved routes remain recoverable. Three chore rows per page maximum reserve room within Discord component limits. Live Discord validation remains pending.
+
+## Compact screen pass — October 23, 2026, local review
+All adapted screens now use Home, Refresh, personal Settings, Help in that order in the header; Back remains below when relevant and temporary Undo stays last. Native dropdowns/person selectors remain compact instead of expanding into button walls. Occasional/advanced chore actions use clearly named selectors on their separate screens. Claim/Done, Skip, Need help and Checklist remain visible on chore details. Dense list capacity reserves the complete header footprint. Search in projected calendar lists uses canonical chore records. No push/deployment authorized for this pass.

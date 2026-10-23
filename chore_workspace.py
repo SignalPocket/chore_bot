@@ -227,6 +227,129 @@ def install(ns, ui, lock):
             picker.callback=save;self.add_item(picker)
             self.nav()
 
+    class PersonalSettings(View):
+        def __init__(self,owner,guild=None):
+            super().__init__(owner)
+            self.recovery_context={'screen':'personal_settings'}
+            self.embed=discord.Embed(title='Your settings',description='Preferences for your account.',color=0x6B9B77)
+            self.button('List length',lambda i:present(i,ListLength(owner)))
+            self.button('Chore reminders',lambda i:present(i,ui.planning.Reminders(owner)))
+            self.button('Trade alerts',lambda i:present(i,Notifications(owner)))
+            self.nav()
+
+    class ChoresSearch(discord.ui.Modal):
+        def __init__(self,source):
+            super().__init__(title='Find a chore')
+            self.source=source
+            self.term=discord.ui.TextInput(label='Name, instructions, or room',required=False,default=source.state['query'],max_length=100)
+            self.add_item(self.term)
+        async def on_submit(self,i):
+            if not await self.source.interaction_check(i):return
+            await present(i,Chores(self.source.owner,i.guild,**dict(self.source.state,query=self.term.value,page=0)))
+
+    class Chores(View):
+        def __init__(self,owner,guild=None,mode='today',day=None,who='everyone',query='',page=0):
+            super().__init__(owner)
+            day=datetime.fromisoformat(day).date() if isinstance(day,str) else day or timing.now().date()
+            mode=mode if mode in ('today','week','all') else 'today'
+            self.guild=guild
+            self.state=dict(mode=mode,day=day.isoformat(),who=str(who),query=str(query).strip()[:100],page=max(0,int(page)))
+            self.recovery_context=dict(screen='chores',**self.state)
+            self.embed=discord.Embed(title='Chores',description='Choose a chore to read its instructions.',color=0x6B9B77)
+            self.entries=[]
+            if mode=='all':
+                self.entries=[(None,chore(qid),ownership(qid)[0]) for qid, in db.execute('SELECT id FROM quests ORDER BY name COLLATE NOCASE,id') if not ui.is_archived(qid)]
+            else:
+                start=day-timedelta(days=day.weekday()) if mode=='week' else day
+                for n in range(7 if mode=='week' else 1):
+                    date=start+timedelta(days=n)
+                    self.entries.extend((date,chore(q[0]),uid) for q,uid in ui.planning.project(date))
+                if mode=='week':
+                    self.entries.extend((None,chore(q[0]),uid) for q,uid in ui.planning.project(start,flexible=True))
+                # Flexible and overdue work remains findable on Today.
+                if mode=='today' and day==timing.now().date():
+                    seen={q[0] for _,q,_ in self.entries}
+                    for qid, in db.execute('SELECT id FROM quests ORDER BY name COLLATE NOCASE,id'):
+                        q=chore(qid)
+                        if qid not in seen and not ui.is_archived(qid) and not q[5] and ready(qid):self.entries.append((day,q,ownership(qid)[0]))
+            def matches(entry):
+                _,q,uid=entry
+                person_id=str(owner) if who=='mine' else str(who)
+                return (who=='everyone' or (who=='unclaimed' and not uid) or str(uid)==person_id) and (not query or query.casefold() in ' '.join(str(q[n] or '') for n in (1,8,9)).casefold())
+            self.entries=[entry for entry in self.entries if matches(entry)]
+            self.size=min(page_size(owner),3)
+            self.page=min(self.state['page'],max(((8 if mode=='week' else len(self.entries))-1)//self.size,0))
+            self.state['page']=self.page;self.recovery_context['page']=self.page
+            self.rebuild=lambda:Chores(owner,guild,**self.state)
+
+        def build(self,frame,notice=None):
+            owner=self.owner;state=self.state;day=datetime.fromisoformat(state['day']).date()
+            def target(i,**changes):return Chores(owner,i.guild,**dict(state,**changes))
+            def button(label,callback,disabled=False):
+                item=discord.ui.Button(label=label,style=discord.ButtonStyle.primary if label=='🏠' else discord.ButtonStyle.secondary,disabled=disabled);item.callback=callback;return item
+            home=button('🏠',lambda i:present(i,Dashboard(owner,i.guild,i.user)))
+            refresh=button('↻',lambda i:present(i,target(i)))
+            gear=button('⚙',lambda i:present(i,PersonalSettings(owner,i.guild)))
+            help_button=page_help_button(self)
+            frame.add_item(discord.ui.TextDisplay('# Chores'+(('\n'+str(notice)) if notice else '')),slot='header')
+            frame.rows([home,refresh,gear,help_button],slot='header')
+            frame.rows([button(label,lambda i,mode=mode:present(i,target(i,mode=mode,page=0))) for label,mode in [('Today','today'),('Week','week'),('All chores','all')]]+[button('Search',lambda i:i.response.send_modal(ChoresSearch(self)))])
+            if state['mode']!='all':
+                frame.add_item(discord.ui.TextDisplay(day.strftime('**%A, %B %d, %Y**')+(' · week view' if state['mode']=='week' else '')))
+                step=7 if state['mode']=='week' else 1
+                frame.rows([button('<< Prev day' if step==1 else '<< Prev week',lambda i:present(i,target(i,day=(day-timedelta(days=step)).isoformat(),page=0))),button('Today',lambda i:present(i,target(i,day=timing.now().date().isoformat(),page=0))),button('Next day >>' if step==1 else 'Next week >>',lambda i:present(i,target(i,day=(day+timedelta(days=step)).isoformat(),page=0)))])
+            ids={str(uid) for _,_,uid in self.entries if uid}
+            ids.update(str(uid) for uid, in db.execute('SELECT DISTINCT assigned_to FROM quests WHERE assigned_to IS NOT NULL'))
+            if self.guild:ids.update(str(m.id) for m in getattr(self.guild,'members',[]) if not getattr(m,'bot',False))
+            options=[discord.SelectOption(label=label,value=value,default=state['who']==value) for label,value in [('Everyone','everyone'),('Mine','mine'),('Unclaimed','unclaimed')]]
+            for uid in sorted(ids):
+                if len(options)>=25:break
+                options.append(discord.SelectOption(label=clean(person(uid,self.guild),90),value=uid,default=state['who']==uid))
+            picker=discord.ui.Select(placeholder='Show chores for…',options=options)
+            async def choose(i):await present(i,target(i,who=picker.values[0],page=0))
+            picker.callback=choose;frame.add_item(discord.ui.ActionRow(picker))
+            chunk=self.entries[self.page*self.size:(self.page+1)*self.size]
+            if state['mode']=='week':
+                start=day-timedelta(days=day.weekday())
+                dates=[start+timedelta(days=n) for n in range(7)]+[None]
+                for date in dates[self.page*self.size:(self.page+1)*self.size]:
+                    rows=[(q,uid) for when,q,uid in self.entries if when==date]
+                    title=date.strftime('%A, %b %d') if date else 'No fixed day'
+                    summary='\n'.join(clean(q[1],55)+' · '+clean(person(uid,self.guild),35) for q,uid in rows[:3]) or 'No matching chores'
+                    if len(rows)>3:summary+=f'\n+ {len(rows)-3} more'
+                    frame.add_item(discord.ui.TextDisplay('**'+title+'**\n'+summary))
+                    if date:
+                        frame.rows([button('Open '+date.strftime('%a'),lambda i,date=date:present(i,target(i,mode='today',day=date.isoformat(),page=0)))])
+                    else:frame.rows([button('Flexible chores',lambda i:present(i,target(i,mode='all',page=0)))])
+                chunk=[]
+            for date,q,uid in chunk:
+                qid=q[0]
+                parent=lambda:self.rebuild()
+                async def details(i,qid=qid,date=date):
+                    if date is not None and date!=timing.now().date():
+                        offered=ui.dated.slots(qid)
+                        if len(offered)>1:return await present(i,FutureSlots(owner,qid,date,i.guild,parent))
+                        if offered and date>=timing.now().date():return await present(i,FutureOccurrence(owner,qid,date,offered[0],i.guild,parent))
+                        return await present(i,ui.planning.Day(owner,date,guild=i.guild))
+                    await present(i,Card(owner,qid,parent,i.guild))
+                async def edit(i,qid=qid):await present(i,CardActions(owner,Card(owner,qid,parent,i.guild),'Change this chore'))
+                name=button(clean(q[1],65),details)
+                controls=[name]
+                if (date is None or date==timing.now().date()) and not q[5] and ready(qid):
+                    card=Card(owner,qid,parent,self.guild)
+                    action=next((b for b in card.children if getattr(b,'label',None) in ('Claim','Done')),None)
+                    if action:controls.append(action)
+                controls.append(button('Edit',edit))
+                frame.rows(controls)
+                frame.add_item(discord.ui.TextDisplay(clean(person(uid,self.guild),70)+f' · {q[3]} points'+(' · '+date.strftime('%a %b %d') if date else ' · '+timing.label(q[2],qid))))
+            if not chunk and state['mode']!='week':frame.add_item(discord.ui.TextDisplay('No chores match this view. Try Everyone or All chores.'))
+            count=max(((8 if state['mode']=='week' else len(self.entries))-1)//self.size+1,1)
+            frame.add_item(discord.ui.TextDisplay(f'Page {self.page+1} of {count} · {len(self.entries)} entries'))
+            frame.rows([button('< Prev',lambda i:present(i,target(i,page=self.page-1)),self.page==0),button('Next >',lambda i:present(i,target(i,page=self.page+1)),self.page+1>=count)])
+            back=lambda:self.rebuild()
+            frame.rows([button('Add chore',lambda i:present(i,adapt(ui.AddChoreMenu(owner),owner,back))),button('Archived chores',lambda i:present(i,adapt(ui.RemoveChoreView(owner,removed=True),owner,back)))])
+            return refresh
+
     class Dashboard(View):
         def __init__(self, owner, guild=None, member=None):
             super().__init__(owner)
@@ -245,6 +368,7 @@ def install(ns, ui, lock):
             self.button('Manage chores', lambda i: present(i, Manage(owner, i.guild)), row=1)
             self.button('Help', lambda i: present(i, Guide(owner)), row=1)
             self.button(f'Trades ({incoming} incoming)', lambda i: present(i, adapt(ui.TradeInboxView(owner), owner)), row=2)
+            self.button('Chores',lambda i:present(i,Chores(owner,i.guild)),row=3)
             self.button('Calendar',lambda i:present(i,ui.planning.Day(owner,ui.timing.now().date(),guild=i.guild)),row=3)
             self.button('Needs attention',lambda i:present(i,Attention(owner,i.guild)),row=0)
             self.button('Chore reminders',lambda i:present(i,ui.planning.Reminders(owner)),row=3)
@@ -772,6 +896,13 @@ def install(ns, ui, lock):
                     if item.label in ('Previous','Next','Previous page','Next page','Previous day','Next day'):
                         item.emoji=None
 
+            if isinstance(source,Chores):
+                self.page_spec=page_spec('Browse','Chores','Use the calendar')
+                frame=self.layout_plan=PagePlan(self.page_spec)
+                refresh=source.build(frame,notice)
+                frame.commit(self)
+                recovery.attach(self,source,resume=refresh)
+                return
             embed=getattr(source,'embed',None)
             if embed is None:
                 source.embed=embed=discord.Embed(title=screen_name(source),color=0x6B9B77)
@@ -803,11 +934,11 @@ def install(ns, ui, lock):
                     if item:frame.add_item(item)
                 trade=next(label for label in buttons if label.startswith('Trades ('))
                 review=next((label for label in buttons if label.startswith('Review inbox (')),None)
-                planning=['Calendar','Household chores','Who’s home?','Workload & pace',trade]
+                planning=['Who’s home?','Workload & pace',trade]
                 if source.owner!=OWNER:planning.append('Household setup')
-                groups=[('Do chores',['My chores','Pick up chores','Needs attention','Manage chores']),
+                groups=[('Do chores',['My chores','Pick up chores','Needs attention','Chores']),
                     ('Plan & coordinate',planning),
-                    ('My settings',['Chore reminders','Trade alerts','Points & standings','List length','Continue where I left off']),
+                    ('Your activity',['Points & standings','Continue where I left off']),
                     ('Owner tools',[review,'Update announcements','Household setup'] if source.owner==OWNER else [])]
                 settings_row=None
                 menu=discord.ui.Container(accent_colour=self.page_spec.accent)
@@ -822,7 +953,13 @@ def install(ns, ui, lock):
                         if title=='My settings':settings_row=row
                 frame.add_item(menu,slot='content')
                 refresh=discord.ui.Button(label='Refresh',style=discord.ButtonStyle.secondary)
-                settings_row.add_item(refresh)
+                heading_section=frame.slots['header'][0]
+                frame.slots['header']=[heading_section.children[0]]
+                top=discord.ui.ActionRow()
+                for label,callback in [('🏠',lambda i:present(i,Dashboard(source.owner,i.guild,i.user))),('↻',lambda i:present(i,Dashboard(source.owner,i.guild,i.user))),('⚙',lambda i:present(i,PersonalSettings(source.owner,i.guild))),('?',page_help_button(source).callback)]:
+                    b=discord.ui.Button(label=label,style=discord.ButtonStyle.primary if label=='🏠' else discord.ButtonStyle.secondary);b.callback=callback;top.add_item(b)
+                    if label=='↻':refresh=b
+                frame.add_item(top,slot='header')
                 frame.commit(self)
                 recovery.attach(self,source,resume=refresh)
                 return
@@ -965,26 +1102,9 @@ def install(ns, ui, lock):
                 row=row_ids.get(item.custom_id,item.row if item.row is not None else 0)
                 if isinstance(item,discord.ui.Select) and item.placeholder=='Choose a chore' and (getattr(source,'qid',None) is not None or getattr(source,'selected',None) is not None):continue
                 if isinstance(item,(discord.ui.Select,discord.ui.UserSelect)):
-                    if self.page_spec.native_choices:
-                        rows.setdefault(row,[]).append(item)
-                        continue
-                    picker=item
-                    guild=getattr(source,'_choice_guild',None) or getattr(source,'guild',None)
-                    options=ButtonChoices(source,picker,guild,inline=True)
-                    choices=[c for c in options.children if isinstance(c,discord.ui.Button) and c.label!='Back']
-                    count=options.choice_count
-                    if count<=10:choices=[c for c in choices if c.label not in ('Previous','Next')]
-                    cost=len(choices)+(len(choices)+4)//5+1
-                    if count>0 and (count<=10 or isinstance(source,Guide)) and cost<=inline_room and (not isinstance(picker,discord.ui.UserSelect) or guild is not None):
-                        inline_room-=cost
-                        for start in range(0,len(choices),5):rows[10+len(rows)]=choices[start:start+5]
-                        continue
-
-                    item=discord.ui.Button(label=(picker.placeholder or 'Choose an option').rstrip('… .')[:80],style=discord.ButtonStyle.secondary)
-                    async def choose_buttons(i,picker=picker):
-                        if not await source.interaction_check(i):return
-                        await present(i,ButtonChoices(source,picker,i.guild))
-                    item.callback=choose_buttons
+                    # Preserve compact native choices and their guarded callbacks.
+                    rows.setdefault(row,[]).append(item)
+                    continue
                 rows.setdefault(row,[]).append(item)
             if week_days:
                 rows[1]=week_days[:4]
@@ -1067,6 +1187,20 @@ def install(ns, ui, lock):
                         item._sprig_original_label=item.label
                         item.label={'Previous':'< Prev','Previous page':'< Prev','Next':'Next >','Next page':'Next >','Previous day':'<< Prev day','Next day':'Next day >>'}[item.label]
             refresh=frame.navigation(utility_row.children)
+            if frame.slots['header']:
+                section=frame.slots['header'][0]
+                help_control=section.accessory
+                title=section.children[0]
+                frame.slots['header']=[title]
+                home=discord.ui.Button(label='🏠',style=discord.ButtonStyle.primary)
+                home.callback=lambda i:present(i,Dashboard(source.owner,i.guild,i.user))
+                refresh.label='↻'
+                gear=discord.ui.Button(label='⚙',style=discord.ButtonStyle.secondary)
+                gear.callback=lambda i:present(i,PersonalSettings(source.owner,i.guild))
+                frame.slots['navigation']=[]
+                back=[b for b in utility_row.children if b.label=='Back']
+                if back:frame.rows(back,slot='navigation')
+                frame.rows([home,refresh,gear,help_control],slot='header')
             pending=undoable_skip(source.owner) if isinstance(source,(Browse,Card)) else None
             if pending:
                 skip_id,qid,_,_=pending
@@ -1490,10 +1624,20 @@ def install(ns, ui, lock):
             group=next(g for g in groups if g.title==title)
             actions=[item for item in card.children if isinstance(item,discord.ui.Button) and item.label not in ('Back','Dashboard','Refresh','Refresh / Resume')]
             selected=[item for item in actions if not groups[0].accepts(item) and ((title=='More options' and not groups[2].accepts(item)) or (title!='More options' and group.accepts(item)))]
-            for index,item in enumerate(selected):
-                copy=discord.ui.Button(label=item.label,style=item.style,disabled=item.disabled,row=index//5)
-                copy.callback=getattr(item,'_sprig_recovery_callback',item.callback)
-                self.add_item(copy)
+            if selected:
+                picker=discord.ui.Select(placeholder='Choose what to change…' if title=='Change this chore' else 'Choose an occasional action…',options=[discord.SelectOption(label=item.label,value=str(n),description='Unavailable right now' if item.disabled else None) for n,item in enumerate(selected)])
+                async def choose(i):
+                    if not await self.interaction_check(i):return
+                    try:
+                        index=int(picker.values[0])
+                        if not 0<=index<len(selected):raise ValueError('Invalid action')
+                        action=selected[index]
+                    except (IndexError,ValueError):return await i.response.send_message('Choose an action from this list.',ephemeral=True)
+                    if action.disabled:return await i.response.send_message('That action is unavailable right now. Refresh this screen.',ephemeral=True)
+                    await getattr(action,'_sprig_recovery_callback',action.callback)(i)
+                picker.callback=choose
+                picker._sprig_menu_actions=tuple(selected)
+                self.add_item(picker)
             if title=='More options':
                 self.button('Manage this chore',lambda i:present(i,CardActions(owner,card,'Change this chore')),row=4)
             self.nav(card.return_to)
@@ -2186,7 +2330,7 @@ def install(ns, ui, lock):
             self.add_item(picker)
             self.nav()
 
-    result = SimpleNamespace(browse_page_size=browse_page_size,PageHelp=PageHelp,screen_name=screen_name,PAGE_TOPICS=PAGE_TOPICS,ButtonChoices=ButtonChoices,ClaimChoices=ClaimChoices,Repeating=Repeating,OccurrenceDates=OccurrenceDates,FutureOccurrence=FutureOccurrence,FutureSlots=FutureSlots,skip_occurrence=skip_occurrence,undo_skip=undo_skip,undoable_skip=undoable_skip,UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
+    result = SimpleNamespace(Chores=Chores,PersonalSettings=PersonalSettings,browse_page_size=browse_page_size,PageHelp=PageHelp,screen_name=screen_name,PAGE_TOPICS=PAGE_TOPICS,ButtonChoices=ButtonChoices,ClaimChoices=ClaimChoices,Repeating=Repeating,OccurrenceDates=OccurrenceDates,FutureOccurrence=FutureOccurrence,FutureSlots=FutureSlots,skip_occurrence=skip_occurrence,undo_skip=undo_skip,undoable_skip=undoable_skip,UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
 
     from chore_recovery import install as install_recovery
     recovery = install_recovery(ns, ui, result)

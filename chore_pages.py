@@ -223,5 +223,5 @@ def list_capacity(preferred,*,undo_count=0,grouped=False,tab_count=4):
     Decorative separators do not consume this essential-controls reservation.
     """
     filter_count=4 if grouped else 2
-    fixed=13+tab_count+filter_count+(1+undo_count if undo_count else 0)
+    fixed=14+tab_count+filter_count+(1+undo_count if undo_count else 0)
     return max(1,min(preferred,(PagePlan.MAX_COMPONENTS-fixed)//4))

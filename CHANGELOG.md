@@ -1,5 +1,11 @@
 # Sprig release notes
 
+## 1.4.0
+
+- Combine calendar, household assignments and catalog management in Chores, with Today, Week, All chores, people filters and search.
+- Put personal preferences behind the gear and use Home / Refresh / Settings / Help headers.
+- Keep native selectors compact and everyday Claim/Done/Skip/Need help visible; keep Undo last.
+
 ## 1.3.3
 
 - Keep everyday chore actions visible; move occasional coordination and advanced editing to separate screens.
