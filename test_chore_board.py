@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.1.1')
+        self.assertEqual(chore_board.APP_VERSION,'2.1.2')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.1.1. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.1.2. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -3146,16 +3146,17 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         menu=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='Actions…')
         self.assertTrue(all(o.description and o.emoji for o in menu.options))
         labels=[o.label for o in menu.options]
-        self.assertIn('People · Reassign',labels)
-        self.assertIn('Edit · Chore details',labels)
-        self.assertIn('History · Completions',labels)
+        self.assertIn('➡️ Reassign',labels)
+        self.assertIn('Edit chore details',labels)
+        self.assertIn('Completion history',labels)
         self.assertEqual(len(set(o.value for o in menu.options)),len(menu.options))
         self.assertEqual(len(menu.options),len(menu._sprig_menu_actions))
         self.assertLessEqual(len(menu.options),25)
         self.assertEqual(sum(isinstance(c,discord.ui.Select) for c in panel.walk_children()),1)
-        self.assertTrue(labels[0].startswith('Sign up · '))
-        self.assertLess(labels.index('People · Reassign'),labels.index('Edit · Chore details'))
-        self.assertLess(labels.index('Edit · Chore details'),labels.index('History · Completions'))
+        self.assertFalse(any(label.startswith(('People · ','Schedule · ','Edit · ','Sign up · ')) for label in labels))
+        self.assertTrue(menu.options[0].description.startswith('Sign up · '))
+        self.assertLess(labels.index('➡️ Reassign'),labels.index('Edit chore details'))
+        self.assertLess(labels.index('Edit chore details'),labels.index('Completion history'))
         event=Interaction();await self.activate(panel,'Completion history',event)
         self.assertIsInstance(self.rendered(event).source,w.History)
         event=Interaction();await self.activate(panel,'Edit chore',event)
@@ -3230,11 +3231,10 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             drop=w.adapt(self.ui.DropChoreView(10,1,self.ui.snapshot(1)),10,lambda:w.Chores(10))
             panel=w.render(drop);event=Interaction();await self.activate(panel,'Confirm drop',event)
             self.assertIsNone(w.ownership(1)[0])
-            returned=self.rendered(event)
-            wrong=Interaction(20);await self.activate(returned,'Chores',wrong)
-            self.assertTrue(wrong.response.payload[1]['ephemeral'])
-            event=Interaction();await self.activate(returned,'Chores',event)
             panel=self.rendered(event);self.assertIsInstance(panel.source,w.Chores)
+            self.assertFalse(any(getattr(c,'label',None)=='Chores' for c in panel.walk_children()))
+            wrong=Interaction(20);await self.activate(panel,'↻',wrong)
+            self.assertTrue(wrong.response.payload[1]['ephemeral'])
             self.assertTrue(all(c['type'] in (1,9,10,12,13,14,17) for c in panel.to_components()))
             self.assertFalse(any(isinstance(c,discord.ui.Button) for c in panel.children))
             self.assertLessEqual(panel.total_children_count,40)
@@ -6645,7 +6645,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(menu.placeholder,'Actions…')
         self.assertNotIn('Edit chore',[o.label for o in menu.options])
         more=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='Actions…')
-        self.assertIn('Edit · Chore details',[o.label for o in more.options])
+        self.assertIn('Edit chore details',[o.label for o in more.options])
         self.assertFalse(any(getattr(c,'label',None)=='More…' for c in panel.walk_children()))
         wrong=Interaction(20);await self.activate(panel,'Completion history',wrong)
         self.assertTrue(wrong.response.payload[1]['ephemeral'])

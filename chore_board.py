@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.1.1'
+APP_VERSION = '2.1.2'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'One described Actions menu on chore cards, with everyday controls kept visible.'
+RELEASE_SUMMARY = 'Dropping a chore returns directly to Chores.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 
@@ -910,9 +910,13 @@ def install(namespace):
             for label,save in [('Confirm drop',True),('Cancel',False)]:
                 button=discord.ui.Button(label=label)
                 async def choose(interaction,save=save):
+                    if not await self.interaction_check(interaction):return
                     async with lock:
                         result=drop_chore(owner,qid,expected) if save else 'Canceled. Nothing changed.'
-                    await interaction.response.edit_message(content=result,embed=None,view=ReturnView(interaction.user.id))
+                    if save and result.startswith('Dropped.'):
+                        await workspace.present(interaction,workspace.Chores(owner,guild=interaction.guild),notice='Dropped · '+name)
+                    else:
+                        await interaction.response.edit_message(content=result,embed=None,view=ReturnView(interaction.user.id))
                 button.callback=choose
                 self.add_item(button)
             self.add_dashboard()

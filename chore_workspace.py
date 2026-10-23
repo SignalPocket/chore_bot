@@ -1042,7 +1042,18 @@ def install(ns, ui, lock):
         options=[]
         for n,b in enumerate(actions):
             label,description=(('Sign up · '+b.label,SIGNUP_DESCRIPTIONS[b.label]) if b.label in SIGNUP_DESCRIPTIONS else MENU_DETAILS.get(b.label,('Other · '+b.label,'Open this chore tool.'))) if grouped else (b.label,SIGNUP_DESCRIPTIONS.get(b.label))
-            options.append(discord.SelectOption(label=label[:100],value=str(n),description='Unavailable right now' if b.disabled else description,emoji=ACTION_ICONS.get(b.label)))
+            emoji=ACTION_ICONS.get(b.label)
+            if grouped:
+                category,_,action=label.partition(' · ')
+                if not action:category,action='Other',label
+                action={'Chore details':'Edit chore details','Checklist & estimate':'Edit checklist & estimate','Repeat pattern':'Change repeat pattern','Completions':'Completion history'}.get(action,action)
+                if category in ('People','Schedule'):
+                    action_icon={'Reassign':'➡️','Propose trade':'🔁','Drop responsibility':'↩️','Choose occurrence':'🔎','Move this occurrence':'➡️','Cancel occurrence move':'↩️','Change regular day':'🔁','Change schedule':'🔁','Separate AM and PM sign-ups':'➗'}.get(b.label,emoji)
+                    action=action_icon+' '+action
+                    emoji={'People':'👥','Schedule':'📅'}[category]
+                label=action
+                description=category+' · '+(description or 'Open this chore tool.')
+            options.append(discord.SelectOption(label=label[:100],value=str(n),description='Unavailable right now' if b.disabled else description,emoji=emoji))
         picker=discord.ui.Select(placeholder=placeholder,options=options)
         async def choose(i):
             if not await source.interaction_check(i):return

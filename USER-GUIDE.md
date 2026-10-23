@@ -550,3 +550,11 @@ Any authorized household member may report Stuck, Need supplies or Need help on 
 
 ## Prepared 2.1.1 — single chore Actions menu
 Chore cards combine signups and occasional tools in one Actions dropdown. Signups come first, followed by People, Schedule, Edit, Review and History; all choices retain icons, descriptions and original guarded callbacks. Claim/Done and Back remain outside the menu with existing double-click safety positions. Completed chores explain why Claim and Done are unavailable. Local review only, not deployed.
+
+
+## Prepared 2.1.2 — drop returns directly to Chores
+Successful Confirm drop now opens Chores directly with a short result notice. The intermediary Chores-button screen is removed from that success path. Ownership, stale-state checks, history and earned points are preserved; cancellation and failure paths remain unchanged. Local only, not deployed.
+
+
+### Action-first labels in local 2.1.2
+Approved menu refinement: action names lead; categories move into the retained descriptions. People/Schedule choices use a native category icon plus a distinct action icon in the label where useful; other choices retain one icon. Related ordering and original callbacks unchanged. Refreshed actual-source approximate local review; 9 focused menu/drop tests passed (sprig-action-labels-focused.json), narrow overflow none. Includes pending direct-drop return. No push/deployment. Full exact-source release testing remains required.
