@@ -270,3 +270,15 @@ Your settings contains native color and list-length dropdowns, direct reminder a
 
 
 Calendar scope controls are now consistently visible as Mine / Everyone directly below the header on week, month and day views. The selected scope is highlighted; changing dates or restoring the view retains it. Other dates inherits Mine or Everyone from the Chores sheet. Not deployed.
+
+
+## Prepared 2.0.8 — native chore detail card
+Chore details separates app navigation from a native accented card containing task name, status/points, instructions and visible help warnings. Everyday controls appear under Actions; signup/tools remain separate dropdowns. Quiet result messages follow controls, with Undo last. Claim/Back → Back/Done position safety is preserved. Local review only, not deployed.
+
+
+### Prepared organized chore menus
+More orders related tools under People, Schedule, Edit, Review and History prefixes, with native icons and short descriptions on actual selectable actions. Sign up describes each responsibility scope. No selectable fake headings, no intermediate navigation, and original guarded callbacks remain in use. Local only.
+
+
+## Prepared 2.1.0 — household help reporting
+Any authorized household member may report Stuck, Need supplies or Need help on an unfinished, non-archived chore, including unclaimed or not-yet-due work. Reporting does not claim/complete/reassign the chore or award points, and sends no automatic DM. Shared-note history, validation and stale-state guards remain. Completed/archived/unavailable chores explain why reporting is closed. Includes pending native card and organized-menu refinements. Local only, not deployed.

@@ -1018,8 +1018,32 @@ def install(ns, ui, lock):
                     if option.label in ACTION_ICONS:option.emoji=ACTION_ICONS[option.label]
 
     SIGNUP_ACTIONS={'Sign-up schedule','Every week · ongoing','Take this week','Take next week','Release this week','Release next week'}
+    MENU_DETAILS={
+        'Reassign':('People · Reassign','Give responsibility to someone else.'),
+        'Propose trade':('People · Propose trade','Offer an exchange.'),
+        'Drop responsibility':('People · Drop responsibility','Release your current responsibility.'),
+        'Choose occurrence':('Schedule · Choose occurrence','Choose an exact date and slot.'),
+        'Move this occurrence':('Schedule · Move occurrence','Change this occurrence’s date.'),
+        'Cancel occurrence move':('Schedule · Cancel move','Return to the regular schedule.'),
+        'Change regular day':('Schedule · Change regular day','Set the repeating weekday.'),
+        'Change schedule':('Schedule · Repeat pattern','Change how often this chore repeats.'),
+        'Separate AM and PM sign-ups':('Schedule · Split AM / PM','Make morning and evening independent chores.'),
+        'Edit chore':('Edit · Chore details','Change instructions, room or points.'),
+        'Estimate / checklist':('Edit · Checklist & estimate','Change steps or estimated time.'),
+        'Duplicate chore':('Edit · Duplicate chore','Create a separate copy.'),
+        'Give feedback':('Review · Give feedback','Suggest an improvement or point value.'),
+        'Completion history':('History · Completions','See past work.')}
+    SIGNUP_DESCRIPTIONS={'Take this week':'Take responsibility for this household week.','Take next week':'Take responsibility for the next household week.','Release this week':'Release this week; keep later signups.','Release next week':'Release only the next household week.','Every week · ongoing':'Keep responsibility until you release it.','Sign-up schedule':'Choose repeating weekdays or shifts.'}
     def action_picker(source,actions,placeholder):
-        picker=discord.ui.Select(placeholder=placeholder,options=[discord.SelectOption(label=b.label[:100],value=str(n),description='Unavailable right now' if b.disabled else None) for n,b in enumerate(actions)])
+        grouped=placeholder in ('More…','Choose a tool…')
+        if grouped:
+            ranks={label:n for n,label in enumerate(MENU_DETAILS)}
+            actions=sorted(actions,key=lambda b:ranks.get(b.label,len(ranks)))
+        options=[]
+        for n,b in enumerate(actions):
+            label,description=MENU_DETAILS.get(b.label,('Other · '+b.label,'Open this chore tool.')) if grouped else (b.label,SIGNUP_DESCRIPTIONS.get(b.label))
+            options.append(discord.SelectOption(label=label[:100],value=str(n),description='Unavailable right now' if b.disabled else description,emoji=ACTION_ICONS.get(b.label)))
+        picker=discord.ui.Select(placeholder=placeholder,options=options)
         async def choose(i):
             if not await source.interaction_check(i):return
             try:
@@ -1043,19 +1067,24 @@ def install(ns, ui, lock):
 
     def work_card(frame,source,notice=None):
         q=chore(source.qid)
-        frame.heading(discord.ui.TextDisplay('# '+clean(q[1],100) if q else '# Chore unavailable'),page_help_button(source))
+        frame.heading(discord.ui.TextDisplay('# Chore details' if q else '# Chore unavailable'),page_help_button(source))
         if not q or ui.is_archived(source.qid):
             frame.add_item(discord.ui.TextDisplay('This chore is archived or unavailable.'))
         else:
             uid,scope=ownership(source.qid,getattr(source,'offset',0))
             status=('Yours' if str(uid)==str(source.owner) else clean(person(uid,getattr(source,'guild',None)),80))
-            frame.add_item(discord.ui.TextDisplay(status+f' · {q[3]} points · '+due_text(q)+'\n\n'+clean(q[8] or 'No extra instructions.',1200)))
+            card=discord.ui.Container(accent_colour=0x6B9B77)
+            card.add_item(discord.ui.TextDisplay('## '+clean(q[1],100)))
+            card.add_item(discord.ui.TextDisplay(status+f' · {q[3]} points · '+due_text(q)))
+            card.add_item(discord.ui.Separator())
+            card.add_item(discord.ui.TextDisplay('**To do**\n'+clean(q[8] or 'No extra instructions.',1200)))
+            frame.add_item(card)
             if notice or source.embed.description:
                 message=str(notice or source.embed.description)
                 if q[5] and 'completed quest #' in message:message=f'✓ Marked done · +{q[3]} points'
-                frame.add_item(discord.ui.TextDisplay(message))
+                frame.add_item(discord.ui.TextDisplay('-# '+message),slot='undo')
             for field in source.embed.fields:
-                if field.name.startswith('⚠'):frame.add_item(discord.ui.TextDisplay('**'+field.name+'**\n'+field.value))
+                if field.name.startswith('⚠'):card.add_item(discord.ui.TextDisplay('**'+field.name+'**\n'+field.value))
             controls=[b for b in source.children if isinstance(b,discord.ui.Button) and b.label not in ('Back','Dashboard','Refresh','Refresh / Resume')]
             main=[];secondary=[];signups=[];occasional=[]
             for item in controls:
@@ -1071,6 +1100,7 @@ def install(ns, ui, lock):
                 copy.callback=getattr(back,'_sprig_recovery_callback',back.callback)
                 if any(b.label=='Done' for b in main):main.insert(0,copy)
                 else:main.append(copy)
+            frame.add_item(discord.ui.TextDisplay('-# ACTIONS'),slot='actions')
             frame.rows(main)
             if signups:frame.add_item(discord.ui.ActionRow(action_picker(source,signups,'Sign up…')))
             if occasional:frame.add_item(discord.ui.ActionRow(action_picker(source,occasional,'More…')))
@@ -2335,7 +2365,7 @@ def install(ns, ui, lock):
                          'supplies**, or **Need help**, then explain what is stopping you.\n'
                          '\n'
                          'The note is shared with the household and appears under **Needs attention**. '
-                         'Reporting a problem keeps the chore assigned to you and does not mark it Done.\n'
+                         'Anyone can report a problem on an unfinished chore, even before it is due or claimed. Responsibility and points stay unchanged.\n'
                          '\n'
                          'When the obstacle is gone, mark the help status resolved. You still need to finish '
                          'the work and press **Done** separately. Older notes stay in status history.',

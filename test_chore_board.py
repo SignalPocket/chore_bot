@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.0.7')
+        self.assertEqual(chore_board.APP_VERSION,'2.1.0')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.0.7. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.1.0. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -2206,17 +2206,45 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Need supplies',str(self.ui.workspace.Browse(10,'mine').embed.to_dict()))
         self.dm.send.assert_not_awaited()
 
+    async def test_household_help_available_without_ownership_or_due_requirement(self):
+        p=self.ui.planning;w=self.ui.workspace
+        with self.clock('2026-10-23T10:00:00'):
+            self.ui.create_chore('Future help example','daily-pm','5','')
+            qid=self.db.execute("SELECT id FROM quests WHERE name='Future help example'").fetchone()[0]
+            self.db.execute('INSERT INTO occurrence_moves VALUES(?,?)',(qid,'2026-10-24'));self.db.commit()
+            self.assertIsNone(w.ownership(qid)[0])
+            self.assertFalse(self.ui.timing.ready(qid))
+            before=self.db.execute('SELECT * FROM quests WHERE id=?',(qid,)).fetchone()
+            panel=w.render(p.HelpStatus(20,qid))
+            for label in ('Stuck','Need supplies','Need help'):
+                self.assertTrue(any(getattr(c,'label',None)==label for c in panel.walk_children()))
+            event=Interaction();await self.activate(panel,'Need help',event)
+            self.assertTrue(event.response.payload[1]['ephemeral'])
+            event=Interaction(20);await self.activate(panel,'Need supplies',event)
+            modal=event.response.payload;modal.note._value='We are out of cleaner.'
+            event=Interaction(20);await modal.on_submit(event)
+            self.assertEqual(p.help_record(qid)[3],'20')
+            self.assertEqual(self.db.execute('SELECT * FROM quests WHERE id=?',(qid,)).fetchone(),before)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone()[0],0)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM users').fetchone()[0],0)
+            self.dm.send.assert_not_awaited()
+            self.db.execute('UPDATE quests SET completed=1 WHERE id=?',(qid,));self.db.commit()
+            closed=p.HelpStatus(20,qid)
+            self.assertIn('already done',str(closed.embed.to_dict()))
+            self.assertFalse(any(getattr(c,'label',None)=='Need help' for c in closed.children))
+            self.assertIn('already done',p.report_help(20,qid,'Need help','More help',p.help_snapshot(qid)))
+
     async def test_support_reports_permissions_validation_and_stale_updates(self):
         p=self.ui.planning;expected=p.help_snapshot(2)
-        self.assertIn('Only the person',p.report_help(20,2,'Stuck','Cannot reach',expected))
+        self.assertIn('saved',p.report_help(20,1,'Stuck','Cannot reach',p.help_snapshot(1)))
         for kind,note in [('Other','Text'),('Stuck',''),('Stuck','x'*501)]:
             self.assertNotIn('saved',p.report_help(10,2,kind,note,expected))
         p.report_help(10,2,'Stuck','Cannot reach',expected)
         self.assertIn('changed',p.report_help(10,2,'Need help','Move furniture',expected))
         self.assertEqual(p.help_record(2)[5],'Cannot reach')
         p.report_help(10,2,'Need help','Move furniture',p.help_snapshot(2))
-        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM chore_help').fetchone(),(2,))
-        self.assertIsNotNone(self.db.execute('SELECT resolved_at FROM chore_help WHERE id=1').fetchone()[0])
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM chore_help WHERE quest_id=2').fetchone(),(2,))
+        self.assertIsNotNone(self.db.execute('SELECT resolved_at FROM chore_help WHERE quest_id=2 ORDER BY id LIMIT 1').fetchone()[0])
 
     async def test_support_status_survives_reassign_and_definition_edits(self):
         p=self.ui.planning;p.report_help(10,2,'Need help','Heavy basket',p.help_snapshot(2))
@@ -2224,7 +2252,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         p.save_plan(2,10,'Lift basket',p.plan(2));self.assertEqual(p.help_record(2),record)
         self.db.execute("UPDATE quests SET assigned_to='20' WHERE id=2");self.db.commit()
         self.assertEqual(p.help_record(2),record)
-        self.assertIn('Only the person',p.report_help(10,2,'Stuck','Old owner',p.help_snapshot(2)))
+        self.assertIn('saved',p.report_help(10,2,'Stuck','Helping after reassignment',p.help_snapshot(2)))
         self.assertIn('saved',p.report_help(20,2,'Need supplies','New owner needs gloves',p.help_snapshot(2)))
         self.assertEqual(p.help_record(2)[3],'20')
 
@@ -2242,7 +2270,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_support_resolve_is_confirmed_shared_and_private_permissions_hold(self):
         p=self.ui.planning;p.report_help(10,2,'Need supplies','Soap',p.help_snapshot(2))
         view=p.HelpStatus(20,2);button=next(c for c in view.children if getattr(c,'label',None)=='Mark resolved')
-        self.assertNotIn('Stuck',[getattr(c,'label',None) for c in view.children])
+        self.assertIn('Stuck',[getattr(c,'label',None) for c in view.children])
         wrong=Interaction(10);await button.callback(wrong);self.assertIsNotNone(p.help_record(2))
         i=Interaction(20);await button.callback(i)
         confirm=i.response.payload['view']
@@ -3111,6 +3139,42 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                 self.assertLess(len(str(chunk.embed.to_dict())),6000)
             self.assertEqual(len(ids),27)
             self.assertEqual(len(set(ids)),27)
+
+    async def test_more_menu_groups_describes_and_routes_original_actions(self):
+        w=self.ui.workspace
+        panel=w.render(w.Card(10,1))
+        menu=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='More…')
+        self.assertTrue(all(o.description and o.emoji for o in menu.options))
+        labels=[o.label for o in menu.options]
+        self.assertIn('People · Reassign',labels)
+        self.assertIn('Edit · Chore details',labels)
+        self.assertIn('History · Completions',labels)
+        self.assertEqual(len(set(o.value for o in menu.options)),len(menu.options))
+        self.assertEqual(len(menu.options),len(menu._sprig_menu_actions))
+        self.assertLess(labels.index('People · Reassign'),labels.index('Edit · Chore details'))
+        self.assertLess(labels.index('Edit · Chore details'),labels.index('History · Completions'))
+        event=Interaction();await self.activate(panel,'Completion history',event)
+        self.assertIsInstance(self.rendered(event).source,w.History)
+        event=Interaction();await self.activate(panel,'Edit chore',event)
+        self.assertIsInstance(self.rendered(event).source,self.ui.EditChoreView)
+        wrong=Interaction(20);await self.activate(panel,'Completion history',wrong)
+        self.assertTrue(wrong.response.payload[1]['ephemeral'])
+
+    async def test_chore_details_groups_task_content_in_native_card(self):
+        w=self.ui.workspace
+        self.db.execute("UPDATE quests SET notes='Wipe the counter and put supplies away.' WHERE id=1");self.db.commit()
+        panel=w.render(w.Card(10,1))
+        card=next(c for c in panel.children if isinstance(c,discord.ui.Container))
+        text='\n'.join(c.content for c in card.walk_children() if isinstance(c,discord.ui.TextDisplay))
+        self.assertIn('## Fill dishwasher',text)
+        self.assertIn('5 points',text)
+        self.assertIn('**To do**',text)
+        self.assertIn('Wipe the counter',text)
+        self.assertTrue(any(isinstance(c,discord.ui.Separator) for c in card.children))
+        self.assertFalse(any(isinstance(c,discord.ui.Button) for c in card.walk_children()))
+        self.assertTrue(any(getattr(c,'label',None)=='Claim' for c in panel.walk_children()))
+        self.assertLessEqual(panel.total_children_count,40)
+        self.assertTrue(all(c['type'] in (1,9,10,12,13,14,17) for c in panel.to_components()))
 
     async def test_other_dates_carries_mine_and_everyone_scope(self):
         w=self.ui.workspace
@@ -6574,7 +6638,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(menu.placeholder,'Sign up…')
         self.assertNotIn('Edit chore',[o.label for o in menu.options])
         more=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='More…')
-        self.assertIn('Edit chore',[o.label for o in more.options])
+        self.assertIn('Edit · Chore details',[o.label for o in more.options])
         self.assertFalse(any(getattr(c,'label',None)=='More…' for c in panel.walk_children()))
         wrong=Interaction(20);await self.activate(panel,'Completion history',wrong)
         self.assertTrue(wrong.response.payload[1]['ephemeral'])

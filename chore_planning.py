@@ -348,13 +348,19 @@ def install(ns, ui, w, lock):
     def help_summary(qid):
         q=chore(qid);record=help_record(qid)
         return ' · ⚠ '+record[4] if q and not q[5] and not ui.is_archived(qid) and record else ''
+    def help_unavailable(qid,q):
+        if not q:return 'This chore is no longer available.'
+        if ui.is_archived(qid):return 'This chore is archived. Restore it before reporting a new problem.'
+        if q[5]:return 'This occurrence is already done. Earlier help notes are in Status history.'
+        return None
     def report_help(actor,qid,kind,note,expected):
         q=chore(qid);note=note.strip()
-        if not q or q[5] or ui.is_archived(qid) or not timing.ready(qid) or w.ownership(qid)[0]!=str(actor):return 'Only the person responsible for this due occurrence can report a problem.'
+        reason=help_unavailable(qid,q)
+        if reason:return reason
         if help_snapshot(qid)!=expected:return 'This chore or help status changed. Reopen it before saving.'
         if kind not in ('Stuck','Need supplies','Need help') or not 1<=len(note)<=500:return 'Choose a help status and add a note of up to 500 characters.'
         with db:
-            db.execute('UPDATE chore_help SET resolved_at=?,resolved_by=?,resolution=? WHERE quest_id=? AND cycle=? AND resolved_at IS NULL',(timing.now().isoformat(),str(actor),'Updated by responsible person',qid,occurrence(qid)))
+            db.execute('UPDATE chore_help SET resolved_at=?,resolved_by=?,resolution=? WHERE quest_id=? AND cycle=? AND resolved_at IS NULL',(timing.now().isoformat(),str(actor),'Updated by household member',qid,occurrence(qid)))
             db.execute('INSERT INTO chore_help(quest_id,cycle,reporter,kind,note,created_at) VALUES(?,?,?,?,?,?)',(qid,occurrence(qid),str(actor),kind,note,timing.now().isoformat()))
         return 'Help status saved. Responsibility, completion, and points are unchanged. The household can see this note.'
     def resolve_help(actor,qid,expected):
@@ -379,7 +385,7 @@ def install(ns, ui, w, lock):
         def __init__(self,owner,qid,guild=None):
             super().__init__(owner)
             q=chore(qid);record=help_record(qid);expected=help_snapshot(qid)
-            self.embed=discord.Embed(title='Help status · '+w.clean(q[1],100) if q else 'Chore unavailable',description='Flag what is stopping this occurrence without dropping it or marking it Done. Notes are household information. No automatic DM is sent.',color=0x6B9B77)
+            self.embed=discord.Embed(title='Help status · '+w.clean(q[1],100) if q else 'Chore unavailable',description='Anyone in the household can report a problem with an unfinished chore. No need to claim it first. Notes are shared; no automatic DM is sent.',color=0x6B9B77)
             if record and q and not q[5] and not ui.is_archived(qid):
                 self.embed.add_field(name=record[4],value=w.clean(record[5],650)+'\nReported by '+w.clean(w.person(record[3],guild),100),inline=False)
                 self.name_ids=[record[3]];self.rebuild=lambda:HelpStatus(owner,qid,guild)
@@ -392,8 +398,10 @@ def install(ns, ui, w, lock):
                         await w.present(event,HelpStatus(owner,qid,event.guild),text)
                     await w.present(i,w.Confirm(owner,'Mark this help status resolved?','This clears the active status, keeping the note in history. It does not complete or release the chore.',save,lambda:HelpStatus(owner,qid,guild)))
                 self.button('Mark resolved',ask,row=1)
-            else:self.embed.add_field(name='No active help status',value='Responsibility and normal completion controls stay on the chore card.',inline=False)
-            if q and not q[5] and not ui.is_archived(qid) and timing.ready(qid) and w.ownership(qid)[0]==str(owner):
+            else:
+                reason=help_unavailable(qid,q)
+                self.embed.add_field(name='Reporting unavailable' if reason else 'No help note yet',value=reason or 'Choose what you need below. Responsibility and points stay unchanged.',inline=False)
+            if not help_unavailable(qid,q):
                 for kind in ('Stuck','Need supplies','Need help'):
                     async def choose(i,kind=kind):
                         if not await self.interaction_check(i):return
