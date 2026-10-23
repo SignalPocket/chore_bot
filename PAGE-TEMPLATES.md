@@ -105,3 +105,9 @@ Not deployed. Dashboard now has one Chores destination replacing Calendar, House
 
 ## Compact screen pass — October 23, 2026, local review
 All adapted screens now use Home, Refresh, personal Settings, Help in that order in the header; Back remains below when relevant and temporary Undo stays last. Native dropdowns/person selectors remain compact instead of expanding into button walls. Occasional/advanced chore actions use clearly named selectors on their separate screens. Claim/Done, Skip, Need help and Checklist remain visible on chore details. Dense list capacity reserves the complete header footprint. Search in projected calendar lists uses canonical chore records. No push/deployment authorized for this pass.
+
+## Local Settings Back and quiet Undo fix — October 23, 2026
+Settings now preserves its opening screen as a Back/recovery parent. Skip, dated Skip and Done shortcuts collapse to one neutral ↶ Undo accessory beside a small action description at the bottom. It targets the most recent eligible event by recorded timestamp; existing guarded domain reversals remain in use. Older completion/skip validity checks still apply. Local fix only, not pushed or deployed.
+
+## Local grouped Chores layout — October 23, 2026
+Approved for local preview, not deployment. Day/Week/All chores, Search, date navigation and person selector form the view controls. Separators distinguish the results and paging. Chore names remain clickable; Claim/Done remains directly beside names. Edit is a consistent right-side accessory. Day view omits repeated row dates; Mine/Unclaimed omit redundant ownership. Page count is centered between paging buttons; Manage chores labels Add/Archived controls. Two chores per page preserve every control within the Discord component budget. Settings Back and unified quiet Undo fixes remain part of this local candidate.

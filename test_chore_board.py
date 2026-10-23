@@ -271,7 +271,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             skip=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Skip just this time')
             event=Interaction();await skip.callback(event);panel=event.wire_result['view']
             self.assertNotIsInstance(panel.source,w.Confirm)
-            undo=panel.children[-1].children[0];self.assertEqual(undo.label,'Undo skip for this occurrence')
+            undo=panel.children[-1].accessory;self.assertEqual(undo.label,'↶ Undo')
             await undo.callback(Interaction());self.assertEqual(d.record(1,day,'day')[1],'claim')
             context=w.recovery.bookmark(panel.source);restored=w.recovery.restore(10,context,None)
             self.assertIsInstance(restored,w.FutureOccurrence)
@@ -392,8 +392,8 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             d.change(10,1,day,'day','skip',d.snapshot(1,day,'day'))
             self.assertIsNotNone(d.latest_undo(10))
             source=w.Browse(10,'pickup',query='dishwasher');panel=w.render(source)
-            undo=panel.children[-1].children[0]
-            self.assertIn('Thu Oct 22',undo.label)
+            undo=panel.children[-1].accessory
+            self.assertIn('Thu Oct 22',panel.children[-1].children[0].content)
             event=Interaction();await undo.callback(event)
             self.assertEqual(event.wire_result['view'].source.state['query'],'dishwasher')
             self.assertIsNone(d.latest_undo(10))
@@ -600,7 +600,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'1.4.0')
+        self.assertEqual(chore_board.APP_VERSION,'1.4.1')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -610,7 +610,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 1.4.0. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 1.4.1. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -4462,8 +4462,8 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(self.ui.ready(1))
             await button.callback(Interaction())
             self.assertEqual(self.db.execute('SELECT COUNT(*) FROM occurrence_skips').fetchone(),(1,))
-            undo=next(c for c in panel.walk_children() if str(getattr(c,'label','')).startswith('Undo skip:'))
-            self.assertIs(panel.children[-1].children[0],undo)
+            undo=next(c for c in panel.walk_children() if str(getattr(c,'label','')).startswith('↶ Undo'))
+            self.assertIs(panel.children[-1].accessory,undo)
             await undo.callback(Interaction(20));self.assertFalse(self.ui.ready(1))
             await asyncio.gather(undo.callback(Interaction()),undo.callback(Interaction()))
             self.assertTrue(self.ui.ready(1))
@@ -6355,17 +6355,17 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                             with self.subTest(area=area,tab=tab,group=group,undos=undo_count):
                                 panel=w.render(w.Browse(10,area,tab=tab,group=group,page=1))
                                 self.assertLessEqual(panel.total_children_count,40)
-                                undos=[b for b in panel.walk_children() if str(getattr(b,'label','')).startswith('Undo skip:')]
-                                self.assertEqual(len(undos),undo_count)
+                                undos=[b for b in panel.walk_children() if str(getattr(b,'label','')).startswith('↶ Undo')]
+                                self.assertEqual(len(undos),1)
                                 self.assertGreater(len(self.chore_button_rows(panel)),0)
                                 self.assertLessEqual(len(self.chore_button_rows(panel)),4)
                                 self.assertTrue(any(isinstance(item,discord.ui.TextDisplay) and item.content.startswith('-# Page ') for item in panel.children))
-                                self.assertTrue(all(button in [b for row in panel.layout_plan.slots['undo'] for b in row.children] for button in undos))
+                                self.assertTrue(all(button in [row.accessory for row in panel.layout_plan.slots['undo']] for button in undos))
                                 panel.to_components()
                 w.render(w.Card(10,2)).to_components()
             panel=w.render(w.Browse(10,'household',tab='all',group='chore',page=1))
             saved=w.recovery.bookmark(panel.source)
-            undo=next(b for b in panel.walk_children() if str(getattr(b,'label','')).startswith('Undo skip:'))
+            undo=next(b for b in panel.walk_children() if str(getattr(b,'label','')).startswith('↶ Undo'))
             event=Interaction();await undo.callback(event)
             restored=w.recovery.restore(10,saved,event.guild)
             self.assertIsInstance(restored,w.Browse)
@@ -6392,6 +6392,59 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PageLayoutError):over.commit(target)
         self.assertFalse(target.children)
         with self.assertRaises(ValueError):over.add_item(discord.ui.Button(label='Keep me'),optional=True)
+
+    async def test_organized_chores_groups_controls_and_keeps_claim_done_visible(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-23T09:00:00'):
+            for n in range(8):self.ui.create_chore('Organized '+str(n),'daily','5','Put things away.')
+            for state in ({'who':'unclaimed'},{'who':'mine'},{'day':'2026-10-19','who':'unclaimed'},{'mode':'week'},{'mode':'all'},{'query':'no matching chore'}):
+                panel=w.render(w.Chores(10,**state))
+                self.assertLessEqual(panel.total_children_count,40)
+                labels=[getattr(c,'label',None) for c in panel.walk_children()]
+                self.assertIn('Day',labels)
+                text=' '.join(c.content for c in panel.walk_children() if isinstance(c,discord.ui.TextDisplay))
+                self.assertIn('Manage chores',text)
+                if state.get('who')=='unclaimed':self.assertNotIn('Needs someone',text)
+                edits=[c for c in panel.walk_children() if isinstance(c,discord.ui.Section) and c.accessory.label=='Edit']
+                if state=={'who':'unclaimed'}:
+                    self.assertEqual(len(edits),2)
+                    self.assertIn('Claim',labels)
+                    wrong=Interaction(20);await self.activate(panel,'Claim',wrong)
+                    self.assertFalse(self.db.execute('SELECT * FROM claims').fetchall())
+                    event=Interaction();await self.activate(panel,'<<',event)
+                    self.assertEqual(self.rendered(event).source.state['day'],'2026-10-22')
+                    event=Interaction();await self.activate(panel,'Next >',event)
+                    self.assertEqual(self.rendered(event).source.page,1)
+                if state=={'who':'mine'}:self.assertIn('Done',labels)
+                panel.to_components()
+
+    async def test_settings_back_restores_origin_and_quiet_undo_selects_latest_action(self):
+        w=self.ui.workspace
+        source=w.Chores(10,mode='all',query='bathroom',who='mine')
+        panel=w.render(source);event=Interaction();await self.activate(panel,'⚙',event)
+        settings=self.rendered(event)
+        for view in (settings.source,w.recovery.restore(10,w.recovery.bookmark(settings.source),None)):
+            event=Interaction();await self.activate(w.render(view),'Back',event)
+            self.assertEqual(self.rendered(event).source.state,source.state)
+        with self.clock('2026-10-23T09:00:00'):
+            card=w.render(w.Card(10,1));event=Interaction();await self.activate(card,'Claim',event)
+            event2=Interaction();await self.activate(self.rendered(event),'Done',event2)
+            done=self.rendered(event2)
+            self.assertEqual(sum(getattr(c,'label',None)=='↶ Undo' for c in done.walk_children()),1)
+            self.assertEqual(done.children[-1].accessory.label,'↶ Undo')
+        with self.clock('2026-10-23T09:01:00'):
+            w.skip_occurrence(10,2,self.ui.snapshot(2))
+            panel=w.render(w.Card(10,2))
+            self.assertEqual(sum(getattr(c,'label',None)=='↶ Undo' for c in panel.walk_children()),1)
+            self.assertIn('Skipped',panel.children[-1].children[0].content)
+            self.assertEqual(panel.children[-1].accessory.style,discord.ButtonStyle.secondary)
+            wrong=Interaction(20);await self.activate(panel,'↶ Undo',wrong)
+            self.assertTrue(wrong.response.payload[1]['ephemeral'])
+            event=Interaction();await self.activate(panel,'↶ Undo',event)
+            card=self.rendered(event)
+            self.assertIn('Done',card.children[-1].children[0].content)
+            event=Interaction();await self.activate(card,'↶ Undo',event)
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(0,))
 
     async def test_compact_advanced_menu_rejects_invalid_choice_and_wrong_account(self):
         w=self.ui.workspace
@@ -6432,8 +6485,8 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(w.ownership(1)[0],'10')
             current=self.rendered(event);event=Interaction();await self.activate(current,'Done',event)
             done=self.rendered(event)
-            undo=next(c for c in done.walk_children() if str(getattr(c,'label','')).startswith('Undo Done'))
-            self.assertIn(undo,done.children[-1].children)
+            undo=next(c for c in done.walk_children() if str(getattr(c,'label','')).startswith('↶ Undo'))
+            self.assertIs(undo,done.children[-1].accessory)
             await undo.callback(Interaction())
             self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(0,))
 
@@ -6463,7 +6516,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             labels=[getattr(c,'label',None) for c in settings.walk_children()]
             for label in ('List length','Chore reminders','Trade alerts'):self.assertIn(label,labels)
             self.assertNotIn('Edit chore',labels)
-            event=Interaction();await self.activate(panel,'<< Prev day',event)
+            event=Interaction();await self.activate(panel,'<<',event)
             self.assertEqual(self.rendered(event).source.state['day'],'2026-10-21')
             event=Interaction();await self.activate(panel,'Edit',event)
             self.assertIn('Change this chore',self.rendered(event).source.embed.title)
@@ -6623,9 +6676,9 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             await self.ui.PersonalView(10,'mine',selected=1).act(Interaction(),'done')
             card=w.render(w.Card(10,1))
             self.assertFalse(any(getattr(c,'label',None)=='Undo completion' for c in card.walk_children()))
-            self.assertEqual(sum(str(getattr(c,'label','')).startswith('Undo Done:') for c in card.walk_children()),1)
+            self.assertEqual(sum(str(getattr(c,'label','')).startswith('↶ Undo') for c in card.walk_children()),1)
             panel=w.render(w.Browse(10,'mine'))
-            undo=next(c for c in panel.walk_children() if str(getattr(c,'label','')).startswith('Undo Done:'))
+            undo=next(c for c in panel.walk_children() if str(getattr(c,'label','')).startswith('↶ Undo'))
             denied=Interaction(20);await undo.callback(denied)
             self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=1').fetchone(),(1,))
             event=Interaction();await asyncio.gather(undo.callback(event),undo.callback(Interaction()))
@@ -6633,7 +6686,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.db.execute("SELECT points,streak,last_completed FROM users WHERE id='10'").fetchone(),before or (0,0,None))
             self.assertIsNotNone(self.db.execute('SELECT undone_at FROM completion_log WHERE id=1').fetchone()[0])
             self.assertIsInstance(self.rendered(event).source,w.Browse)
-            self.assertFalse(any(str(getattr(c,'label','')).startswith('Undo Done:') for c in self.rendered(event).walk_children()))
+            self.assertFalse(any(str(getattr(c,'label','')).startswith('↶ Undo') for c in self.rendered(event).walk_children()))
 
     async def test_bottom_undo_done_revalidates_after_points_change(self):
         w=self.ui.workspace
@@ -6641,7 +6694,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             await self.ui.PersonalView(10,selected=1).act(Interaction(),'claim')
             await self.ui.PersonalView(10,'mine',selected=1).act(Interaction(),'done')
             panel=w.render(w.Card(10,1))
-            undo=next(c for c in panel.walk_children() if str(getattr(c,'label','')).startswith('Undo Done:'))
+            undo=next(c for c in panel.walk_children() if str(getattr(c,'label','')).startswith('↶ Undo'))
             self.db.execute("UPDATE users SET points=points+10 WHERE id='10'");self.db.commit()
             event=Interaction();await undo.callback(event)
             self.assertIn('changed',self.rendered(event).notice)
@@ -6718,7 +6771,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(labels.index('Claim'),labels.index('Skip this occurrence'))
         self.assertLess(labels.index('Skip this occurrence'),labels.index('Need help'))
         self.assertNotIn('Claim → Just this occurrence',w.Guide(10,'Pick up a chore').embed.description)
-        self.assertIn('Undo Done',w.Guide(10,'Undo a mistake').embed.description)
+        self.assertIn('↶ Undo',w.Guide(10,'Undo a mistake').embed.description)
         self.assertNotIn('More actions',w.Guide(10,'Schedules and missed chores').embed.description)
 
 

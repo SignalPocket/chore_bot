@@ -1,5 +1,11 @@
 # Sprig release notes
 
+## 1.4.1
+
+- Group Chores controls, results, paging and management; retain visible Claim/Done and consistent right-side Edit.
+- Settings Back restores the screen and filters that opened it, including after recovery.
+- Replace separate Skip/Done undo buttons with one neutral Undo and a compact action description.
+
 ## 1.4.0
 
 - Combine calendar, household assignments and catalog management in Chores, with Today, Week, All chores, people filters and search.
