@@ -98,3 +98,7 @@ Mine, Available and Everyone highlight the selected view with Discord primary st
 
 ## 2.0.1 — Prepared refresh and scope highlights
 Every workspace page has a compact Refresh button. Daily sheets and work cards now show Home, Refresh, Settings, Help consistently; refresh restores current context without repeating mutations. Mine/Available/Everyone highlight the selected scope. Not deployed.
+
+
+## 2.0.2 — Prepared Done emoji fix
+Replace the Done button’s plain check glyph with the supported check-mark emoji. Discord rejected the prior payload when opening assigned chore details (HTTP 400 / Invalid emoji). No domain or layout changes. Local only.

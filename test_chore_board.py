@@ -597,7 +597,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.0.1')
+        self.assertEqual(chore_board.APP_VERSION,'2.0.2')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -607,7 +607,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.0.1. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.0.2. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -6425,6 +6425,22 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(w.person(10,guild),'Dar')
         picker._values=['invalid'];event=Interaction();event.guild=guild;await picker.callback(event)
         self.assertEqual(w.color_key(10,guild),'none')
+
+    async def test_work_card_done_uses_supported_check_mark_emoji(self):
+        w=self.ui.workspace
+        self.db.execute("UPDATE quests SET assigned_to='10' WHERE id=1");self.db.commit()
+        card=w.render(w.Card(10,1))
+        done=next(c for c in card.walk_children() if isinstance(c,discord.ui.Button) and c.label=='Done')
+        self.assertEqual(done.emoji.name,'✅')
+        def inspect(items):
+            for item in items:
+                self.assertNotEqual(item.get('emoji',{}).get('name'),'✓')
+                inspect(item.get('components',[]))
+                if item.get('accessory'):inspect([item['accessory']])
+                inspect(item.get('options',[]))
+        inspect(card.to_components())
+        event=Interaction();await self.activate(card,'Done',event)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log WHERE quest_id=1').fetchone()[0],1)
 
     async def test_refresh_daily_sheet_and_card_preserves_context_without_mutation(self):
         w=self.ui.workspace

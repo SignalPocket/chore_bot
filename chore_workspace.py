@@ -963,7 +963,7 @@ def install(ns, ui, lock):
             undo_control.style=discord.ButtonStyle.secondary
             frame.add_item(discord.ui.Section(discord.ui.TextDisplay('-# '+description),accessory=undo_control),slot='undo')
 
-    ACTION_ICONS={'Your color':'🎨','Claim':'✋','Done':'✓','Skip':'⏭','Skip this occurrence':'⏭','Need help':'🙋','Stuck / need help':'🙋','Other dates':'📅','Manage chores':'✏️','Settings':'⚙','Chore reminders':'🔔','Trade alerts':'🔁','Add chore':'➕','Archived chores':'🗃️','Back':'↩','Back to list':'↩','Checklist':'☑','Reassign':'👥','Propose trade':'🔁','Completion history':'📜','Change schedule':'📅','Edit chore':'✏️'}
+    ACTION_ICONS={'Your color':'🎨','Claim':'✋','Done':'✅','Skip':'⏭','Skip this occurrence':'⏭','Need help':'🙋','Stuck / need help':'🙋','Other dates':'📅','Manage chores':'✏️','Settings':'⚙','Chore reminders':'🔔','Trade alerts':'🔁','Add chore':'➕','Archived chores':'🗃️','Back':'↩','Back to list':'↩','Checklist':'☑','Reassign':'👥','Propose trade':'🔁','Completion history':'📜','Change schedule':'📅','Edit chore':'✏️'}
     ACTION_ICONS.update({'Signup options':'📅','Sign-up schedule':'📅','Take this week':'✋','Take next week':'✋','Release this week':'↩','Release next week':'↩','Every week · ongoing':'🔁','Choose occurrence':'📅','Duplicate chore':'💠','Estimate / checklist':'☑','Give feedback':'💬','Change regular day':'📅','Move this occurrence':'📅','Cancel occurrence move':'↩','Drop responsibility':'↩','Separate AM and PM sign-ups':'🌗','List length':'📏','Household tools':'🧰','Search':'🔎'})
     def decorate_actions(frame):
         for item in frame.walk_children():
