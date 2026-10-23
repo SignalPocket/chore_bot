@@ -16,7 +16,7 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '1.4.1'
+APP_VERSION = '1.5.0'
 # Keep this to one short sentence describing changes since the previous release.
 RELEASE_SUMMARY = 'Consistent page layouts, easier chore editing, direct chore details, and a Home/Away household overview.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
@@ -297,7 +297,7 @@ def install(namespace):
         def add_dashboard(self,row=4):
             button=discord.ui.Button(label='Dashboard',row=row,style=discord.ButtonStyle.primary)
             async def home(interaction):
-                await workspace.present(interaction,workspace.Dashboard(interaction.user.id,interaction.guild,interaction.user))
+                await workspace.present(interaction,workspace.Chores(interaction.user.id,interaction.guild))
             button.callback=home
             self.add_item(button)
 
@@ -2018,7 +2018,7 @@ def install(namespace):
             text=BOARD_TEXT+'\nThis starter message is public. Its buttons open private controls. Use **/chores** for a fully private panel.'
             await ctx.send(text,view=Launcher(),ephemeral=False,allowed_mentions=discord.AllowedMentions.none())
             return
-        view=workspace.Dashboard(ctx.author.id,ctx.guild,ctx.author)
+        view=workspace.Chores(ctx.author.id,ctx.guild)
         await ctx.send(**workspace.payload(view),ephemeral=True)
 
     @bot.command(name='enableprivatechores')

@@ -1,5 +1,12 @@
 # Sprig release notes
 
+## 1.5.0
+
+- Make the Version A daily sheet the private /chores entry: readable multi-chore text lists and one chore picker.
+- Use compact work cards with protected Claim, Done, Skip, Need help, checklist and quiet Undo.
+- Add native action icons; preserve Prev/Next arrows and personal settings return context.
+- Support longer sheet preferences without expanding legacy dense-button screens beyond their component budgets.
+
 ## 1.4.1
 
 - Group Chores controls, results, paging and management; retain visible Claim/Done and consistent right-side Edit.

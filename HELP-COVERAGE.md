@@ -104,3 +104,8 @@ Give each task a canonical title, purpose, preconditions, shortest path, saved e
 
 ### Prepared 1.3.3 screen simplification
 Chore details keeps Claim/Done, Checklist when present, Skip, Need help and Choose date visible. More options opens coordination/history/feedback; Manage this chore there opens editing. Undo remains last. Manage catalog actions follow content. Page controls use < Prev / Next >; day controls use << Prev day / Next day >>, with no yellow-square emoji. Local candidate, not deployed.
+
+## Version A actual interface — prepared 1.5.0, October 23, 2026
+Local candidate, not deployed. Private /chores opens a text-first daily sheet: Mine / Available / Everyone, a readable multi-chore list, one chooser for the work card, unchanged Prev/Next arrows, Other dates, Manage chores and personal Settings. New-account sheet length defaults to 8; existing saved preferences stay intact; Settings supports 1–10. Legacy dense lists retain their protected capacity cap.
+
+The compact work card keeps Claim, Done, Skip, Need help and required Checklist visible, with native action icons. Other actions uses named guarded callbacks for coordination, editing, dates and history. Help/status warnings and chore instructions remain visible. Back to list preserves the parent context; Settings Back and recovery do likewise. One neutral latest-eligible Undo remains last. Catalog editing, archive/restore, search, and Household tools remain available through Manage chores. Public text-command launcher behavior is preserved; private slash entry uses the new sheet. Prototype HTML remains separate from actual source validation. No push/deployment authorization for 1.5.0.
