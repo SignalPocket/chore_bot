@@ -82,3 +82,7 @@
 ## 1.0
 
 - Existing baseline with visible navigation and versioned update announcements.
+
+
+### Prepared 1.5.0 addition: personal color markers
+Added Settings → Your color, persistent per-account choices and household defaults, with markers beside workspace names. No marker remains available. Lavender uses purple and pink a heart because of Discord emoji limits. Local preparation only.

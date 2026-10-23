@@ -6396,6 +6396,36 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                 event=Interaction();await self.activate(card,'Back',event)
                 self.assertEqual(self.rendered(event).source.state,source.state)
 
+    async def test_person_colors_defaults_saved_choice_privacy_and_back(self):
+        w=self.ui.workspace
+        names={10:'Dar',20:'John',30:'Kas',40:'Z',301104023405199361:'ginaria'}
+        guild=SimpleNamespace(id=1,get_member=lambda uid:SimpleNamespace(display_name=names.get(uid,'Other')))
+        for uid,color in [(10,'lavender'),(20,'blue'),(30,'pink'),(40,'orange'),(301104023405199361,'green')]:
+            self.assertEqual(w.color_key(uid,guild),color)
+            self.assertNotEqual(w.person(uid,guild),names[uid])
+        self.assertEqual(w.color_key(50,guild),'none')
+        settings=w.PersonalSettings(10,guild,lambda:w.Chores(10,guild))
+        panel=w.render(settings);event=Interaction();event.guild=guild
+        await self.activate(panel,'Your color',event)
+        color_panel=self.rendered(event)
+        picker=next(c for c in color_panel.walk_children() if isinstance(c,discord.ui.Select))
+        picker._values=['blue'];wrong=Interaction(20);wrong.guild=guild
+        await picker.callback(wrong)
+        self.assertIsNone(self.db.execute("SELECT color FROM person_colors WHERE user_id='10'").fetchone())
+        event=Interaction();event.guild=guild;await picker.callback(event)
+        self.assertEqual(w.person(10,guild),'🔵 Dar')
+        self.assertEqual(w.color_key(20,guild),'blue')
+        panel=self.rendered(event);self.assertLessEqual(panel.layout_plan.component_count,40)
+        event=Interaction();event.guild=guild;await self.activate(panel,'Back',event)
+        self.assertIsInstance(self.rendered(event).source,w.PersonalSettings)
+        restored=w.recovery.restore(10,color_panel.source.recovery_context,guild)
+        self.assertIsInstance(restored,w.PersonColor)
+        picker=next(c for c in w.render(restored).walk_children() if isinstance(c,discord.ui.Select))
+        picker._values=['none'];event=Interaction();event.guild=guild;await picker.callback(event)
+        self.assertEqual(w.person(10,guild),'Dar')
+        picker._values=['invalid'];event=Interaction();event.guild=guild;await picker.callback(event)
+        self.assertEqual(w.color_key(10,guild),'none')
+
     async def test_version_a_real_eight_row_sheet_icons_repeated_card_render_and_mutations(self):
         w=self.ui.workspace
         with self.clock('2026-10-23T09:00:00'):

@@ -63,6 +63,7 @@ def install(ns, ui, w):
         parent_context = context.get('parent', {'screen': 'dashboard'})
         parent = lambda: restore(owner, parent_context, guild, depth+1)
         if kind=='chores':return w.Chores(owner,guild,**{k:context[k] for k in ('mode','day','who','query','page') if k in context})
+        if kind=='person_color':return w.PersonColor(owner,guild,parent)
         if kind=='personal_settings':return w.PersonalSettings(owner,guild,parent)
         if kind=='page_help':return w.PageHelp(owner,name=context.get('name','Chores'),topic=context.get('topic','Start here'),parent=parent_context,guild=guild,instructions=context.get('instructions'))
         if kind=='occurrence_dates':return w.OccurrenceDates(owner,int(context['qid']),guild,week=context.get('week',0),page=context.get('page',0))

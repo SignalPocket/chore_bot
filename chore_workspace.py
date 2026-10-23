@@ -32,7 +32,17 @@ def install(ns, ui, lock):
     CREATE TABLE IF NOT EXISTS attention_windows(quest_id INTEGER PRIMARY KEY,cycle TEXT NOT NULL,deadline TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS occurrence_skips(id INTEGER PRIMARY KEY AUTOINCREMENT,quest_id INTEGER NOT NULL,actor TEXT NOT NULL,skipped_at TEXT NOT NULL,next_due TEXT NOT NULL,previous_state TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS skip_undo_state(skip_id INTEGER PRIMARY KEY,expected TEXT NOT NULL,previous_policy TEXT NOT NULL,undone_at TEXT);''')
+    db.execute("CREATE TABLE IF NOT EXISTS person_colors(user_id TEXT PRIMARY KEY,color TEXT NOT NULL)")
     db.commit()
+    COLORS={'lavender':('🟣','Lavender'),'blue':('🔵','Blue'),'pink':('🩷','Pink'),'orange':('🟠','Orange'),'green':('🟢','Green'),'yellow':('🟡','Yellow'),'none':('','No marker')}
+    def color_key(uid,guild=None,name=None):
+        saved=db.execute('SELECT color FROM person_colors WHERE user_id=?',(str(uid),)).fetchone()
+        if saved and saved[0] in COLORS:return saved[0]
+        if str(uid)==str(OWNER):return 'green'
+        member=guild.get_member(int(uid)) if guild and uid else None
+        aliases={str(v).strip().casefold() for v in (name,getattr(member,'display_name',None),getattr(member,'name',None)) if v}
+        defaults={'dar':'lavender','john':'blue','kas':'pink','z':'orange','zel':'orange'}
+        return next((defaults[a] for a in defaults if a in aliases),'none')
     def page_size(owner):
         row=db.execute('SELECT list_size FROM workspace_preferences WHERE user_id=?',(str(owner),)).fetchone()
         return min(row[0],5) if row and isinstance(row[0],int) and 1<=row[0]<=10 else 5
@@ -59,7 +69,9 @@ def install(ns, ui, lock):
         if cached is None and guild is None:
             saved=db.execute('SELECT guild_id FROM chore_board WHERE singleton=1').fetchone()
             if saved:cached=name_cache.get((int(saved[0]),str(uid)))
-        return member.display_name if member else (cached[1] if cached else f'<@{uid}>' if uid else 'Needs someone')
+        name=member.display_name if member else (cached[1] if cached else f'<@{uid}>' if uid else 'Needs someone')
+        marker=COLORS[color_key(uid,guild,name)][0] if uid else ''
+        return (marker+' ' if marker else '')+name
 
     async def prime_names(i,ids):
         if not getattr(i.guild,'get_member',None):return
@@ -231,12 +243,30 @@ def install(ns, ui, lock):
             picker.callback=save;self.add_item(picker)
             self.nav()
 
+    class PersonColor(View):
+        def __init__(self,owner,guild=None,back=None):
+            super().__init__(owner)
+            back=back or (lambda:PersonalSettings(owner,guild))
+            self.recovery_context={'screen':'person_color','parent':recovery.bookmark(back())}
+            current=color_key(owner,guild)
+            self.embed=discord.Embed(title='Your color',description='Choose the marker everyone sees beside your name. Saves immediately. Lavender uses a purple dot; pink uses a heart because Discord has no standard pink circle emoji. Names stay visible.',color=0x6B9B77)
+            picker=discord.ui.Select(placeholder='Choose your color',options=[discord.SelectOption(label=label,value=key,emoji=emoji or None,default=key==current) for key,(emoji,label) in COLORS.items()])
+            async def save(i):
+                if not await self.interaction_check(i):return
+                value=picker.values[0] if picker.values else None
+                if value not in COLORS:return await i.response.send_message('Choose one of the listed colors.',ephemeral=True)
+                async with lock:
+                    with db:db.execute('INSERT OR REPLACE INTO person_colors(user_id,color) VALUES(?,?)',(str(owner),value))
+                await present(i,PersonColor(owner,i.guild,back),'Your color is saved. Everyone will see it when they refresh.')
+            picker.callback=save;self.add_item(picker);self.nav(back)
+
     class PersonalSettings(View):
         def __init__(self,owner,guild=None,back=None):
             super().__init__(owner)
             back=back or (lambda:Dashboard(owner,guild))
             self.recovery_context={'screen':'personal_settings','parent':recovery.bookmark(back())}
-            self.embed=discord.Embed(title='Your settings',description='Preferences for your account.',color=0x6B9B77)
+            self.embed=discord.Embed(title='Your settings',description='Preferences for your account.\n'+person(owner,guild),color=0x6B9B77)
+            self.button('Your color',lambda i:present(i,PersonColor(owner,i.guild,lambda:PersonalSettings(owner,i.guild,back))))
             self.button('List length',lambda i:present(i,ListLength(owner)))
             self.button('Chore reminders',lambda i:present(i,ui.planning.Reminders(owner)))
             self.button('Trade alerts',lambda i:present(i,Notifications(owner)))
@@ -922,7 +952,7 @@ def install(ns, ui, lock):
             undo_control.style=discord.ButtonStyle.secondary
             frame.add_item(discord.ui.Section(discord.ui.TextDisplay('-# '+description),accessory=undo_control),slot='undo')
 
-    ACTION_ICONS={'Claim':'✋','Done':'✓','Skip':'⏭','Skip this occurrence':'⏭','Need help':'🙋','Stuck / need help':'🙋','Other dates':'📅','Manage chores':'✏️','Settings':'⚙','Chore reminders':'🔔','Trade alerts':'🔁','Add chore':'➕','Archived chores':'🗃️','Back':'↩','Back to list':'↩','Checklist':'☑','Reassign':'👥','Propose trade':'🔁','Completion history':'📜','Change schedule':'📅','Edit chore':'✏️'}
+    ACTION_ICONS={'Your color':'🎨','Claim':'✋','Done':'✓','Skip':'⏭','Skip this occurrence':'⏭','Need help':'🙋','Stuck / need help':'🙋','Other dates':'📅','Manage chores':'✏️','Settings':'⚙','Chore reminders':'🔔','Trade alerts':'🔁','Add chore':'➕','Archived chores':'🗃️','Back':'↩','Back to list':'↩','Checklist':'☑','Reassign':'👥','Propose trade':'🔁','Completion history':'📜','Change schedule':'📅','Edit chore':'✏️'}
     ACTION_ICONS.update({'Signup options':'📅','Sign-up schedule':'📅','Take this week':'✋','Take next week':'✋','Release this week':'↩','Release next week':'↩','Every week · ongoing':'🔁','Choose occurrence':'📅','Duplicate chore':'💠','Estimate / checklist':'☑','Give feedback':'💬','Change regular day':'📅','Move this occurrence':'📅','Cancel occurrence move':'↩','Drop responsibility':'↩','Separate AM and PM sign-ups':'🌗','List length':'📏','Household tools':'🧰','Search':'🔎'})
     def decorate_actions(frame):
         for item in frame.walk_children():
@@ -2316,7 +2346,7 @@ def install(ns, ui, lock):
         'Day':'Use the calendar', 'Checklist':'Finish a chore',
         'Reminders':'Set reminders', 'HelpStatus':'Report a problem',
         'HelpHistory':'Report a problem', 'NeedsHelp':'Report a problem',
-        'Report':'Workload & pace', 'ListLength':'Change list length',
+        'Report':'Workload & pace', 'PersonColor':'Your color', 'ListLength':'Change list length',
         'ReassignView':'Drop, reassign, or trade', 'DropChoreView':'Drop, reassign, or trade',
         'TradeOfferView':'Drop, reassign, or trade', 'TradeInboxView':'Drop, reassign, or trade',
         'ChooseDayView':'Choose or change a day', 'MissedChoreView':'Schedules and missed chores',
@@ -2387,7 +2417,9 @@ def install(ns, ui, lock):
             self.add_item(picker)
             self.nav()
 
-    result = SimpleNamespace(sheet_size=sheet_size,Chores=Chores,PersonalSettings=PersonalSettings,browse_page_size=browse_page_size,PageHelp=PageHelp,screen_name=screen_name,PAGE_TOPICS=PAGE_TOPICS,ButtonChoices=ButtonChoices,ClaimChoices=ClaimChoices,Repeating=Repeating,OccurrenceDates=OccurrenceDates,FutureOccurrence=FutureOccurrence,FutureSlots=FutureSlots,skip_occurrence=skip_occurrence,undo_skip=undo_skip,undoable_skip=undoable_skip,UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
+    TOPICS['Your color']='Open **Settings → Your color** and choose a marker.\n\nChoosing saves immediately. **No marker** removes it. Everyone sees it on refreshed workspace screens; responsibility and points stay unchanged.'
+
+    result = SimpleNamespace(PersonColor=PersonColor,color_key=color_key,sheet_size=sheet_size,Chores=Chores,PersonalSettings=PersonalSettings,browse_page_size=browse_page_size,PageHelp=PageHelp,screen_name=screen_name,PAGE_TOPICS=PAGE_TOPICS,ButtonChoices=ButtonChoices,ClaimChoices=ClaimChoices,Repeating=Repeating,OccurrenceDates=OccurrenceDates,FutureOccurrence=FutureOccurrence,FutureSlots=FutureSlots,skip_occurrence=skip_occurrence,undo_skip=undo_skip,undoable_skip=undoable_skip,UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
 
     from chore_recovery import install as install_recovery
     recovery = install_recovery(ns, ui, result)
