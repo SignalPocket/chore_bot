@@ -315,6 +315,7 @@ def install(ns, ui, lock):
             self.size=sheet_size(owner)
             self.page=min(self.state['page'],max((len(self.entries)-1)//self.size,0))
             self.state['page']=self.page;self.recovery_context['page']=self.page
+            self.name_ids=[uid for _,_,uid in self.entries[self.page*self.size:(self.page+1)*self.size] if uid]
             self.rebuild=lambda:Chores(owner,guild,**self.state)
 
         def build(self,frame,notice=None):
@@ -331,8 +332,13 @@ def install(ns, ui, lock):
             chunk=self.entries[self.page*self.size:(self.page+1)*self.size]
             lines=[]
             for index,(date,q,uid) in enumerate(chunk,self.page*self.size+1):
-                suffix=' · '+clean(person(uid,self.guild),60) if state['who']=='everyone' and not catalog else ''
-                lines.append(f'**{index}. {clean(q[1],100)}** · {q[3]} pts'+suffix)
+                suffix=''
+                if state['who']=='everyone' and not catalog:
+                    name=person(uid,self.guild) if uid else 'Unclaimed'
+                    if uid and '<@' in name:name=name[:name.index('<@')]+'Assigned'
+                    suffix=' · '+clean(name,60)
+                # A middle dot avoids Discord treating numbered rows as Markdown lists.
+                lines.append(f'{index} · {clean(q[1],100)}'+suffix)
             heading='CHORE CATALOG' if catalog else {'mine':'YOUR CHORES','unclaimed':'AVAILABLE TO CLAIM'}.get(state['who'],'EVERYONE’S CHORES')
             frame.add_item(discord.ui.TextDisplay(('' if catalog else '**'+heading+'**\n\n')+('\n'.join(lines) if lines else 'No chores match this view. Try Everyone or another date.')))
             parent=lambda:self.rebuild()

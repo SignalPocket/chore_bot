@@ -249,3 +249,6 @@ The compact work card keeps Claim, Done, Skip, Need help and required Checklist 
 
 ## Personal name colors
 Settings → Your color saves a personal marker, visible beside your name to everyone on refreshed workspace screens. Defaults: Dar lavender (purple dot), John blue, Kas pink (heart), Z/Zel orange, ginaria green. Discord has no standard lavender/pink circle emoji. Choose another color or No marker. Exact household display names/usernames provide initial defaults only; saved choices belong to Discord account IDs and override defaults. No responsibility, points, list length or notification preferences change.
+
+
+Daily-sheet rows are compact plain text: number · chore · person/color (Everyone). Points remain on the work card. Long titles can still wrap in narrow Discord clients. Existing list-length preference remains; eight is the new-account default.

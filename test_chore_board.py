@@ -597,7 +597,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'1.5.0')
+        self.assertEqual(chore_board.APP_VERSION,'2.0.0')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -607,7 +607,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 1.5.0. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.0.0. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -6425,6 +6425,26 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(w.person(10,guild),'Dar')
         picker._values=['invalid'];event=Interaction();event.guild=guild;await picker.callback(event)
         self.assertEqual(w.color_key(10,guild),'none')
+
+    async def test_compact_sheet_plain_rows_eight_chores_names_and_points_on_card(self):
+        w=self.ui.workspace
+        guild=SimpleNamespace(id=1,get_member=lambda uid:SimpleNamespace(display_name='John'))
+        with self.clock('2026-10-23T09:00:00'):
+            for n in range(10):self.ui.create_chore('Compact chore '+str(n),'daily','5','Instructions here.')
+            self.db.execute("UPDATE quests SET assigned_to='20' WHERE id>3")
+            self.db.execute("UPDATE workspace_preferences SET list_size=8 WHERE user_id='10'");self.db.commit()
+            source=w.Chores(10,guild,who='everyone');panel=w.render(source)
+            text='\n'.join(c.content for c in panel.walk_children() if isinstance(c,discord.ui.TextDisplay))
+            rows=[line for line in text.splitlines() if line[:1].isdigit()]
+            self.assertEqual(len(rows),8)
+            self.assertTrue(all(' · ' in line and '**' not in line and ' pts' not in line and '<@' not in line for line in rows))
+            self.assertIn('🔵 John',text)
+            self.assertIn('Unclaimed',text)
+            self.assertIn('20',source.name_ids)
+            card=w.render(w.Card(10,3,guild=guild))
+            self.assertIn('5 points','\n'.join(c.content for c in card.walk_children() if isinstance(c,discord.ui.TextDisplay)))
+            no_cache=w.render(w.Chores(10,who='everyone'))
+            self.assertNotIn('<@','\n'.join(c.content for c in no_cache.walk_children() if isinstance(c,discord.ui.TextDisplay)))
 
     async def test_version_a_real_eight_row_sheet_icons_repeated_card_render_and_mutations(self):
         w=self.ui.workspace
