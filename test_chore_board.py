@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.0.3')
+        self.assertEqual(chore_board.APP_VERSION,'2.0.4')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.0.3. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.0.4. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -6433,6 +6433,23 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(w.person(10,guild),'Dar')
         picker._values=['invalid'];event=Interaction();event.guild=guild;await picker.callback(event)
         self.assertEqual(w.color_key(10,guild),'none')
+
+    async def test_claim_moves_done_away_from_original_click_position(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-23T10:00:00'):
+            panel=w.render(w.Card(10,1,lambda:w.Chores(10,who='unclaimed')))
+            row=next(c for c in panel.walk_children() if isinstance(c,discord.ui.ActionRow) and any(getattr(b,'label',None)=='Claim' for b in c.children))
+            self.assertEqual([b.label for b in row.children],['Claim','Back to list'])
+            event=Interaction();await self.activate(panel,'Claim',event)
+            claimed=self.rendered(event)
+            row=next(c for c in claimed.walk_children() if isinstance(c,discord.ui.ActionRow) and any(getattr(b,'label',None)=='Done' for b in c.children))
+            self.assertEqual([b.label for b in row.children],['Back to list','Done'])
+            second=Interaction();await row.children[0].callback(second)
+            self.assertIsInstance(self.rendered(second).source,w.Chores)
+            self.assertEqual(w.ownership(1)[0],'10')
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone()[0],0)
+            deliberate=Interaction();await self.activate(claimed,'Done',deliberate)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone()[0],1)
 
     async def test_card_signups_more_back_and_quiet_help_preserve_guarded_actions(self):
         w=self.ui.workspace

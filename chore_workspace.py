@@ -1023,7 +1023,9 @@ def install(ns, ui, lock):
             back=next((b for b in source.children if getattr(b,'label',None)=='Back'),None)
             if back:
                 copy=discord.ui.Button(label='Back to list',style=discord.ButtonStyle.secondary)
-                copy.callback=getattr(back,'_sprig_recovery_callback',back.callback);main.append(copy)
+                copy.callback=getattr(back,'_sprig_recovery_callback',back.callback)
+                if any(b.label=='Done' for b in main):main.insert(0,copy)
+                else:main.append(copy)
             frame.rows(main)
             if signups:frame.add_item(discord.ui.ActionRow(action_picker(source,signups,'Sign up…')))
             if occasional:

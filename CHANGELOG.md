@@ -106,3 +106,7 @@ Replace the Done button’s plain check glyph with the supported check-mark emoj
 
 ## Prepared 2.0.3 chore card
 Claim/Done remain prominent with Back beside them. Sign up… groups available responsibility choices. More… opens a separate screen for occasional tools. Skip and neutral Need help remain visible below the main actions. Discord button sizes are fixed; quieter styling and placement reduce emphasis. Refresh and restart recovery preserve context. Local only, not deployed.
+
+
+## 2.0.4 — Prepared Claim double-click layout fix
+Unclaimed cards show Claim then Back. Cards offering Done show Back then Done, so Done no longer replaces Claim at the same click position. Deliberate completion and points guards are unchanged. Local only.
