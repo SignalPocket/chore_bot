@@ -114,3 +114,11 @@ Unclaimed cards show Claim then Back. Cards offering Done show Back then Done, s
 
 ## 2.0.5 — Prepared inline More menu
 Sign up… and More… are separate native dropdowns directly on the work card. Less-used tools open directly from More without the intermediate page. Existing saved More-page routes still recover safely. Claim/Done and Back positioning, neutral Need help, and guarded actions remain. Local only.
+
+
+## Prepared 2.0.6 — one Chores destination
+Dashboard and new starter messages expose one Chores destination. Older persistent My chores/Pick up chores buttons redirect to Chores → Mine/Available, and older household buttons redirect to Everyone. Existing private legacy callbacks and date/history tools remain available. Default work-card Back opens Chores → Mine. No push or deployment.
+
+
+## Prepared 2.0.6 — inline personal settings
+Your settings contains native color and list-length dropdowns, direct reminder and trade-alert toggles, and Change times opening a small native text-entry modal. Saves return to the same Settings page; Back keeps the opening screen. Reminder times/revisions use existing guarded validation; trade toggles reject stale state. No navigation-only preference buttons. Existing opt-ins are preserved unless the user changes them. Not deployed.

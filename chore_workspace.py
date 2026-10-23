@@ -265,11 +265,57 @@ def install(ns, ui, lock):
             super().__init__(owner)
             back=back or (lambda:Dashboard(owner,guild))
             self.recovery_context={'screen':'personal_settings','parent':recovery.bookmark(back())}
-            self.embed=discord.Embed(title='Your settings',description='Preferences for your account.\n'+person(owner,guild),color=0x6B9B77)
-            self.button('Your color',lambda i:present(i,PersonColor(owner,i.guild,lambda:PersonalSettings(owner,i.guild,back))))
-            self.button('List length',lambda i:present(i,ListLength(owner)))
-            self.button('Chore reminders',lambda i:present(i,ui.planning.Reminders(owner)))
-            self.button('Trade alerts',lambda i:present(i,Notifications(owner)))
+            expected=ui.planning.settings(owner)
+            trade=db.execute('SELECT trade_dm FROM notification_preferences WHERE user_id=?',(str(owner),)).fetchone()
+            trade_on=bool(trade and trade[0])
+            self.embed=discord.Embed(title='Your settings',description='Changes save immediately. Alerts are private DMs.\nReminder times: '+', '.join(json.loads(expected[1]))+' Eastern.',color=0x6B9B77)
+            async def refresh(i,notice=None):
+                if notice and notice.startswith('Chore reminders '):notice='Reminder settings saved.'
+                await present(i,PersonalSettings(owner,i.guild,back),notice)
+            color=discord.ui.Select(placeholder='Your color',row=0,options=[discord.SelectOption(label='Color · '+label,value=key,emoji=emoji or None,default=key==color_key(owner,guild)) for key,(emoji,label) in COLORS.items()])
+            async def save_color(i):
+                if not await self.interaction_check(i):return
+                value=color.values[0] if color.values else None
+                if value not in COLORS:return await i.response.send_message('Choose a listed color.',ephemeral=True)
+                async with lock:
+                    with db:db.execute('INSERT OR REPLACE INTO person_colors VALUES(?,?)',(str(owner),value))
+                await refresh(i,'Color saved.')
+            color.callback=save_color;self.add_item(color)
+            size=discord.ui.Select(placeholder='Chores per page',row=1,options=[discord.SelectOption(label=f'List length · {n} chores',value=str(n),default=n==sheet_size(owner)) for n in range(1,11)])
+            async def save_size(i):
+                if not await self.interaction_check(i):return
+                try:value=int(size.values[0])
+                except (ValueError,IndexError):value=0
+                if not 1<=value<=10:return await i.response.send_message('Choose 1–10 chores.',ephemeral=True)
+                async with lock:
+                    with db:db.execute('INSERT OR REPLACE INTO workspace_preferences VALUES(?,?)',(str(owner),value))
+                await refresh(i,'List length saved.')
+            size.callback=save_size;self.add_item(size)
+            async def reminders(i):
+                if not await self.interaction_check(i):return
+                async with lock:notice=ui.planning.save_reminders(owner,not expected[0],','.join(json.loads(expected[1])),expected)
+                await refresh(i,notice)
+            async def times(i):
+                if not await self.interaction_check(i):return
+                modal=ui.planning.ReminderTimes(owner)
+                async def submit(event):
+                    if not await self.interaction_check(event):return
+                    async with lock:notice=ui.planning.save_reminders(owner,modal.expected[0],modal.times.value,modal.expected)
+                    await refresh(event,notice)
+                modal.on_submit=submit
+                await i.response.send_modal(modal)
+            async def toggle_trade(i):
+                if not await self.interaction_check(i):return
+                async with lock:
+                    current=db.execute('SELECT trade_dm FROM notification_preferences WHERE user_id=?',(str(owner),)).fetchone()
+                    if bool(current and current[0])!=trade_on:notice='Trade alerts changed. Review the current setting.'
+                    else:
+                        with db:db.execute('INSERT OR REPLACE INTO notification_preferences VALUES(?,?)',(str(owner),int(not trade_on)))
+                        notice='Trade alerts '+('off.' if trade_on else 'on · private DMs for new trade proposals.')
+                await refresh(i,notice)
+            self.button('Chore reminders: '+('On' if expected[0] else 'Off'),reminders,row=2)
+            self.button('Change times',times,row=2)
+            self.button('Trade alerts: '+('On' if trade_on else 'Off'),toggle_trade,row=3)
             self.nav(back)
 
     class ChoresSearch(discord.ui.Modal):
@@ -386,8 +432,6 @@ def install(ns, ui, lock):
             def browse(area):
                 saved = memory.get((owner, area), {})
                 return Browse(owner, **dict(saved, area=area), guild=guild)
-            self.button('My chores', lambda i: present(i, browse('mine')), row=0, primary=True)
-            self.button('Pick up chores', lambda i: present(i, browse('pickup')), row=0)
             self.button('Household chores', lambda i: present(i, browse('household')), row=0)
             self.button('Who’s home?', lambda i: present(i, Trips(owner, i.guild)), row=1)
             self.button('Manage chores', lambda i: present(i, Manage(owner, i.guild)), row=1)
@@ -1085,7 +1129,7 @@ def install(ns, ui, lock):
                 if len(value)>budget:value=value[:max(0,budget-1)]+'…'
                 budget-=len(value)
                 return discord.ui.TextDisplay(value)
-            header=text((('**'+str(notice)+'**\n\n') if notice else '')+(('# '+source.page_name+'\n') if embed and embed.title else '')+(embed.description or '' if embed else ''))
+            header=text((('**'+str(notice)+'**\n\n') if notice and not isinstance(source,PersonalSettings) else '')+(('# '+source.page_name+'\n') if embed and embed.title else '')+(embed.description or '' if embed else ''))
             if header and not isinstance(source,Dashboard):frame.heading(header,page_help_button(source))
             if isinstance(source,Dashboard):
                 buttons={item.label:item for item in source.children if isinstance(item,discord.ui.Button)}
@@ -1103,7 +1147,7 @@ def install(ns, ui, lock):
                 review=next((label for label in buttons if label.startswith('Review inbox (')),None)
                 planning=['Who’s home?','Workload & pace',trade]
                 if source.owner!=OWNER:planning.append('Household setup')
-                groups=[('Do chores',['My chores','Pick up chores','Needs attention','Chores']),
+                groups=[('Do chores',['Chores','Needs attention']),
                     ('Plan & coordinate',planning),
                     ('Your activity',['Points & standings','Continue where I left off']),
                     ('Owner tools',[review,'Update announcements','Household setup'] if source.owner==OWNER else [])]
@@ -1371,6 +1415,7 @@ def install(ns, ui, lock):
                 frame.rows([home,refresh,gear,help_control],slot='header')
             attach_quiet_undo(frame,source)
             decorate_actions(frame)
+            if isinstance(source,PersonalSettings) and notice:frame.add_item(discord.ui.TextDisplay('-# '+str(notice)),slot='footer')
             frame.commit(self)
             recovery.attach(self,source,resume=refresh)
 
@@ -1602,7 +1647,7 @@ def install(ns, ui, lock):
             super().__init__(owner)
             ns['reset_due_quests']()
             q = chore(qid)
-            back = back or (lambda: Browse(owner, 'mine', guild=guild))
+            back = back or (lambda: Chores(owner,guild,who='mine'))
             self.guild=guild
             self.qid, self.expected = qid, ui.snapshot(qid)
             self.return_to=lambda:Card(owner,qid,back,guild,offset)
@@ -2204,19 +2249,18 @@ def install(ns, ui, lock):
             self.button('Cancel exception',cancel)
             self.nav(back)
 
-    TOPICS = {'Start here': '**To do a chore:** Open **My chores → Due now**. Use **Done** beside the chore, or open '
+    TOPICS = {'Start here': '**To do a chore:** Open **Chores → Mine**. Use **Done** beside the chore, or open '
                    'its card to read instructions and finish its checklist.\n'
                    '\n'
-                   '**To take a chore:** Open **Pick up chores → Claim** to take just this occurrence. For longer signup options, open its card and use **Signup options**. '
+                   '**To take a chore:** Open **Chores → Available → choose a chore → Claim** to take just this occurrence. For longer signup options, open its card and use **Signup options**. '
                    'The **chore name** opens the same card from any list.\n'
                    '\n'
-                   '**To look ahead:** My chores has **This week**, **Next week**, **Upcoming**, and '
-                   '**Completed**. Under **Plan & coordinate**, use **Household chores** to see everyone’s '
-                   'work or **Calendar** to browse dates.\n'
+                   '**To look ahead:** Open **Chores → Other dates**. Use **Everyone** for household work, '
+                   '**Available** to find chores to claim, and **Manage chores** for editing.\n'
                    '\n'
                    'Choose a topic below for the steps you need.',
      'Pick up a chore': 'Open **Available** on the daily sheet. Choose a chore from the dropdown, read its instructions, then press **✋ Claim**. This takes just this occurrence. The card stays open with **✓ Done** ready when you finish.\n\nUse **Sign up…** for a longer signup or repeating days. Each option names its scope. Weekly signups end Sunday at 6 p.m. Eastern; finishing today does not release the rest of the week.',
-     'Finish a chore': '1. Open **Do chores → My chores → Due now**.\n'
+     'Finish a chore': '1. Open **Chores → Mine → choose a chore**.\n'
                        '2. Read the chore’s instructions. If it has a **Checklist**, check off its steps '
                        'first.\n'
                        '3. Press **Done** when the work is finished.\n'

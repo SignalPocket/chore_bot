@@ -16,7 +16,7 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.0.5'
+APP_VERSION = '2.0.6'
 # Keep this to one short sentence describing changes since the previous release.
 RELEASE_SUMMARY = 'Consistent page layouts, easier chore editing, direct chore details, and a Home/Away household overview.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
@@ -315,10 +315,9 @@ def install(namespace):
         def __init__(self,owner):
             super().__init__(timeout=600)
             self.owner=owner
-            mine=discord.ui.Button(label='My chores',style=discord.ButtonStyle.primary)
+            mine=discord.ui.Button(label='Chores',style=discord.ButtonStyle.primary)
             async def open_mine(interaction):
-                view=PersonalView(owner,'mine')
-                await interaction.response.edit_message(content=None,embed=view.embed,view=view)
+                await workspace.present(interaction,workspace.Chores(owner,interaction.guild,who='mine'))
             mine.callback=open_mine
             self.add_item(mine)
             self.add_dashboard(row=0)
@@ -1919,16 +1918,17 @@ def install(namespace):
             return True
 
     class Launcher(SafeView):
-        def __init__(self,timeout=None):
+        def __init__(self,timeout=None,legacy=False):
             super().__init__(timeout=timeout)
             # Keep both the persistent dashboard and fresh panels in the same order.
             layout=[('My chores',0),('Open chores',0),('Who’s doing what?',0),('Who’s home?',1),('Add chore',1),('Help',1)]
+            if not legacy:layout=[('My chores',0),('Who’s home?',1),('Add chore',1),('Help',1)]
             buttons={item.label:item for item in self.children}
             self.clear_items()
             for label,row in layout:
                 item=buttons[label]
                 item.row=row
-                item.label={'Open chores':'Pick up chores','Who’s doing what?':'Household','Add chore':'Manage chores'}.get(label,label)
+                item.label={'My chores':'My chores' if legacy else 'Chores','Open chores':'Pick up chores','Who’s doing what?':'Household','Add chore':'Manage chores'}.get(label,label)
                 item.style=discord.ButtonStyle.primary if label=='My chores' else discord.ButtonStyle.secondary
                 self.add_item(item)
 
@@ -1939,12 +1939,12 @@ def install(namespace):
             return True
 
         async def open_list(self, interaction, mode):
-            view = workspace.Browse(interaction.user.id,'mine' if mode=='mine' else 'pickup',guild=interaction.guild)
+            view = workspace.Chores(interaction.user.id,interaction.guild,who='mine' if mode=='mine' else 'unclaimed')
             await interaction.response.send_message(**workspace.payload(view),ephemeral=True)
 
         @discord.ui.button(label="Who’s doing what?", custom_id="sprig:responsibilities:v1", row=1)
         async def responsibility_button(self,interaction,button):
-            view=workspace.Browse(interaction.user.id,'household',guild=interaction.guild)
+            view=workspace.Chores(interaction.user.id,interaction.guild,who='everyone')
             await interaction.response.send_message(**workspace.payload(view),ephemeral=True)
 
         @discord.ui.button(label="Reassign",custom_id="sprig:reassign:v1",row=1)
@@ -2104,7 +2104,7 @@ def install(namespace):
 
     async def setup_hook():
         await previous_setup()
-        bot.add_view(Launcher())
+        bot.add_view(Launcher(legacy=True))
         saved=location()
         if saved and saved[2]!='pending':
             # Register the local handler after restarts; do not sync remotely

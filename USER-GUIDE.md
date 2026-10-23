@@ -515,3 +515,11 @@ On the work card, Claim appears before Back; after claiming, Back appears before
 
 
 The current work card has separate Sign up… and More… dropdowns directly below the primary actions. More opens the selected tool directly, without an intermediate tools page.
+
+
+## Prepared 2.0.6 — one Chores destination
+Dashboard and new starter messages expose one Chores destination. Older persistent My chores/Pick up chores buttons redirect to Chores → Mine/Available, and older household buttons redirect to Everyone. Existing private legacy callbacks and date/history tools remain available. Default work-card Back opens Chores → Mine. No push or deployment.
+
+
+## Prepared 2.0.6 — inline personal settings
+Your settings contains native color and list-length dropdowns, direct reminder and trade-alert toggles, and Change times opening a small native text-entry modal. Saves return to the same Settings page; Back keeps the opening screen. Reminder times/revisions use existing guarded validation; trade toggles reject stale state. No navigation-only preference buttons. Existing opt-ins are preserved unless the user changes them. Not deployed.

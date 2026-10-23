@@ -66,7 +66,7 @@ SCREEN_KINDS={
 def page_spec(screen,title,topic='Start here'):
     kind=SCREEN_KINDS.get(screen,PageKind.FORM)
     return PageSpec(kind,title,topic,0x9B59B6 if kind==PageKind.DASHBOARD else 0x6B9B77,
-                    CHORE_ACTIONS if screen=='Card' else (),screen in ('Filters','RemoveChoreView','EditChoreView','Guide'))
+                    CHORE_ACTIONS if screen=='Card' else (),screen in ('PersonalSettings','Filters','RemoveChoreView','EditChoreView','Guide'))
 
 
 def _count(component):

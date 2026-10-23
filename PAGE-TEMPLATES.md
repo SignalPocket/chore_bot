@@ -119,3 +119,7 @@ The compact work card keeps Claim, Done, Skip, Need help and required Checklist 
 
 
 All workspace pages, including daily sheets and work cards, display compact Home / Refresh / Settings / Help. Refresh reloads current state and context without repeating the last mutation. Mine/Available/Everyone show the selected scope in blue. Discord pop-up forms retain their native submit/cancel behavior.
+
+
+## Prepared 2.0.6 — inline personal settings
+Your settings contains native color and list-length dropdowns, direct reminder and trade-alert toggles, and Change times opening a small native text-entry modal. Saves return to the same Settings page; Back keeps the opening screen. Reminder times/revisions use existing guarded validation; trade toggles reject stale state. No navigation-only preference buttons. Existing opt-ins are preserved unless the user changes them. Not deployed.

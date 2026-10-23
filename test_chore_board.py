@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.0.5')
+        self.assertEqual(chore_board.APP_VERSION,'2.0.6')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.0.5. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.0.6. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -2864,7 +2864,8 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('starter message is public',content)
         self.assertIn('Tap **Help**',content)
         self.assertFalse(options['ephemeral'])
-        self.assertIn('Pick up chores',[c.label for c in options['view'].children])
+        self.assertIn('Chores',[c.label for c in options['view'].children])
+        self.assertNotIn('Pick up chores',[c.label for c in options['view'].children])
         self.assertIsNone(options['view'].timeout)
 
     async def test_slash_chores_is_private_and_actions_stay_private(self):
@@ -3015,13 +3016,16 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_roster_launcher_private_and_navigation_refreshes(self):
         with self.clock('2026-10-19T10:00:00'):
             event=Interaction()
-            button=next(c for c in self.ui.Launcher().children if c.label=='Household')
+            button=next(c for c in self.ui.Launcher(legacy=True).children if c.label=='Household')
             await button.callback(event)
             options=event.response.payload[1]
             self.assertTrue(options['ephemeral'])
             view=options['view']
             self.assertTrue(await view.interaction_check(event))
             self.assertFalse(await view.interaction_check(Interaction(20)))
+            self.assertIsInstance(view,self.ui.workspace.Chores)
+            self.assertEqual(view.state['who'],'everyone')
+            view=self.ui.workspace.Browse(10,'household')
             await next(c for c in view.children if getattr(c,'label',None)=='Next week').callback(event)
             self.assertEqual(event.response.payload['view'].state['tab'],'next')
             self.assertIn('Next week',event.response.payload['embed'].description)
@@ -3108,14 +3112,61 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(ids),27)
             self.assertEqual(len(set(ids)),27)
 
+    async def test_inline_personal_settings_save_guard_stale_and_back(self):
+        w=self.ui.workspace;p=self.ui.planning
+        parent=lambda:w.Chores(10,who='everyone')
+        panel=w.render(w.PersonalSettings(10,back=parent))
+        self.assertEqual(sum(isinstance(c,discord.ui.Select) for c in panel.walk_children()),2)
+        self.assertTrue(any(getattr(c,'label',None)=='Back' for c in panel.walk_children()))
+        picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='Chores per page')
+        picker._values=['8'];wrong=Interaction(20);await picker.callback(wrong)
+        self.assertTrue(wrong.response.payload[1]['ephemeral'])
+        event=Interaction();await picker.callback(event)
+        self.assertEqual(w.sheet_size(10),8)
+        panel=self.rendered(event);self.assertIsInstance(panel.source,w.PersonalSettings)
+        picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='Your color')
+        picker._values=['blue'];event=Interaction();await picker.callback(event)
+        self.assertEqual(w.color_key(10),'blue')
+        self.assertIn('Color saved.',self.rendered(event).layout_plan.slots['footer'][0].content)
+        panel=self.rendered(event);before=p.settings(10)
+        label=next(c.label for c in panel.walk_children() if getattr(c,'label','') and c.label.startswith('Chore reminders:'))
+        event=Interaction();await self.activate(panel,label,event)
+        self.assertEqual(p.settings(10)[0],int(not before[0]))
+        stale=Interaction();await self.activate(panel,label,stale)
+        self.assertEqual(p.settings(10)[0],int(not before[0]))
+        panel=self.rendered(event);label=next(c.label for c in panel.walk_children() if getattr(c,'label','') and c.label.startswith('Trade alerts:'))
+        event=Interaction();await self.activate(panel,label,event)
+        self.assertEqual(self.db.execute("SELECT trade_dm FROM notification_preferences WHERE user_id='10'").fetchone()[0],1)
+        panel=self.rendered(event);event=Interaction();await self.activate(panel,'Change times',event)
+        modal=event.response.payload;modal.times._value='09:00, 18:00';event=Interaction();await modal.on_submit(event)
+        self.assertIsInstance(self.rendered(event).source,w.PersonalSettings)
+        self.assertIn('18:00',p.settings(10)[1])
+        panel=self.rendered(event);event=Interaction();await self.activate(panel,'Back',event)
+        self.assertEqual(self.rendered(event).source.state['who'],'everyone')
+
+    async def test_legacy_personal_and_pickup_entries_route_to_combined_chores(self):
+        w=self.ui.workspace
+        dashboard=w.render(w.Dashboard(10))
+        self.assertFalse(any(getattr(c,'label',None) in ('My chores','Pick up chores') for c in dashboard.walk_children()))
+        legacy=self.ui.Launcher(legacy=True)
+        for custom,who in [('sprig:mine:v1','mine'),('sprig:open:v1','unclaimed')]:
+            button=next(c for c in legacy.children if c.custom_id==custom)
+            event=Interaction();await button.callback(event)
+            panel=self.rendered(event)
+            self.assertIsInstance(panel.source,w.Chores)
+            self.assertEqual(panel.source.state['who'],who)
+            self.assertTrue(event.response.wire_payload[1]['ephemeral'])
+        event=Interaction();await self.activate(w.render(w.Card(10,1)),'Back',event)
+        self.assertIsInstance(self.rendered(event).source,w.Chores)
+
     async def test_dashboard_layout_is_consistent_for_saved_and_fresh_panels(self):
-        expected=[('My chores',0),('Pick up chores',0),('Household',0),('Who’s home?',1),('Manage chores',1),('Help',1)]
+        expected=[('Chores',0),('Who’s home?',1),('Manage chores',1),('Help',1)]
         for timeout in [None,600]:
             view=self.ui.Launcher(timeout=timeout)
             self.assertEqual([(c.label,c.row) for c in view.children],expected)
-            self.assertEqual([c.label for c in view.children if c.style==discord.ButtonStyle.primary],['My chores'])
-            self.assertTrue(all(c.style==discord.ButtonStyle.secondary for c in view.children if c.label!='My chores'))
-            self.assertEqual(len({c.custom_id for c in view.children}),6)
+            self.assertEqual([c.label for c in view.children if c.style==discord.ButtonStyle.primary],['Chores'])
+            self.assertTrue(all(c.style==discord.ButtonStyle.secondary for c in view.children if c.label!='Chores'))
+            self.assertEqual(len({c.custom_id for c in view.children}),4)
 
     async def test_reassign_occurrence_retains_points_history_and_blocks_stale(self):
         with self.clock('2026-10-20T10:00:00'):
@@ -5704,7 +5755,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             labels=[c.label for c in panel.walk_children() if isinstance(c,discord.ui.Button)]
             self.assertEqual(labels[:4],['🏠','↻','⚙','?'])
             self.assertEqual(len(labels),len(set(labels)))
-            for label in ('My chores','Pick up chores','Needs attention','Chores','Points & standings'):self.assertIn(label,labels)
+            for label in ('Needs attention','Chores','Points & standings'):self.assertIn(label,labels)
             for label in ('Calendar','Household chores','Manage chores','List length','Chore reminders','Trade alerts'):self.assertNotIn(label,labels)
             self.assertEqual('Update announcements' in labels,owner==301104023405199361)
             self.assertLessEqual(panel.total_children_count,40)
@@ -5931,7 +5982,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         options = event.response.payload[1]
         self.assertTrue(options['ephemeral'])
         guide = str(options['embed'].to_dict())
-        for phrase in ['My chores','Due now','Upcoming','Completed','Pick up chores','Household','same card']:
+        for phrase in ['Chores','Mine','Available','Everyone','Other dates']:
             self.assertIn(phrase, guide)
         self.assertEqual([line for line in self.db.iterdump() if 'workspace_' not in line], before)
 
@@ -6413,9 +6464,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotEqual(w.person(uid,guild),names[uid])
         self.assertEqual(w.color_key(50,guild),'none')
         settings=w.PersonalSettings(10,guild,lambda:w.Chores(10,guild))
-        panel=w.render(settings);event=Interaction();event.guild=guild
-        await self.activate(panel,'Your color',event)
-        color_panel=self.rendered(event)
+        color_panel=w.render(w.PersonColor(10,guild,lambda:settings))
         picker=next(c for c in color_panel.walk_children() if isinstance(c,discord.ui.Select))
         picker._values=['blue'];wrong=Interaction(20);wrong.guild=guild
         await picker.callback(wrong)
@@ -6840,7 +6889,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         w=self.ui.workspace;p=self.ui.planning
         with self.clock('2026-10-22T10:00:00'):
             labels={getattr(c,'label',None) for c in w.render(w.PersonalSettings(10)).walk_children()}
-            self.assertIn('Chore reminders',labels);self.assertIn('Trade alerts',labels)
+            self.assertTrue(any(label and label.startswith('Chore reminders:') for label in labels));self.assertTrue(any(label and label.startswith('Trade alerts:') for label in labels))
             self.assertNotIn('Notifications',labels);self.assertNotIn('Reminders',labels)
             original=p.settings(10)
             panel=w.render(w.Notifications(10));await self.activate(panel,'Turn trade DMs on',Interaction())
