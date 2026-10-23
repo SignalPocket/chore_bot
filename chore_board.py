@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.1.0'
+APP_VERSION = '2.1.1'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'Clearer chore cards, grouped action menus, and household help reporting for unfinished chores.'
+RELEASE_SUMMARY = 'One described Actions menu on chore cards, with everyday controls kept visible.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 

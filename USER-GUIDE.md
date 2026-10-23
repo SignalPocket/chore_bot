@@ -546,3 +546,7 @@ More orders related tools under People, Schedule, Edit, Review and History prefi
 
 ## Prepared 2.1.0 — household help reporting
 Any authorized household member may report Stuck, Need supplies or Need help on an unfinished, non-archived chore, including unclaimed or not-yet-due work. Reporting does not claim/complete/reassign the chore or award points, and sends no automatic DM. Shared-note history, validation and stale-state guards remain. Completed/archived/unavailable chores explain why reporting is closed. Includes pending native card and organized-menu refinements. Local only, not deployed.
+
+
+## Prepared 2.1.1 — single chore Actions menu
+Chore cards combine signups and occasional tools in one Actions dropdown. Signups come first, followed by People, Schedule, Edit, Review and History; all choices retain icons, descriptions and original guarded callbacks. Claim/Done and Back remain outside the menu with existing double-click safety positions. Completed chores explain why Claim and Done are unavailable. Local review only, not deployed.

@@ -1035,13 +1035,13 @@ def install(ns, ui, lock):
         'Completion history':('History · Completions','See past work.')}
     SIGNUP_DESCRIPTIONS={'Take this week':'Take responsibility for this household week.','Take next week':'Take responsibility for the next household week.','Release this week':'Release this week; keep later signups.','Release next week':'Release only the next household week.','Every week · ongoing':'Keep responsibility until you release it.','Sign-up schedule':'Choose repeating weekdays or shifts.'}
     def action_picker(source,actions,placeholder):
-        grouped=placeholder in ('More…','Choose a tool…')
+        grouped=placeholder in ('Actions…','More…','Choose a tool…')
         if grouped:
-            ranks={label:n for n,label in enumerate(MENU_DETAILS)}
+            ranks={label:n for n,label in enumerate(list(SIGNUP_DESCRIPTIONS)+list(MENU_DETAILS))}
             actions=sorted(actions,key=lambda b:ranks.get(b.label,len(ranks)))
         options=[]
         for n,b in enumerate(actions):
-            label,description=MENU_DETAILS.get(b.label,('Other · '+b.label,'Open this chore tool.')) if grouped else (b.label,SIGNUP_DESCRIPTIONS.get(b.label))
+            label,description=(('Sign up · '+b.label,SIGNUP_DESCRIPTIONS[b.label]) if b.label in SIGNUP_DESCRIPTIONS else MENU_DETAILS.get(b.label,('Other · '+b.label,'Open this chore tool.'))) if grouped else (b.label,SIGNUP_DESCRIPTIONS.get(b.label))
             options.append(discord.SelectOption(label=label[:100],value=str(n),description='Unavailable right now' if b.disabled else description,emoji=ACTION_ICONS.get(b.label)))
         picker=discord.ui.Select(placeholder=placeholder,options=options)
         async def choose(i):
@@ -1076,6 +1076,7 @@ def install(ns, ui, lock):
             card=discord.ui.Container(accent_colour=0x6B9B77)
             card.add_item(discord.ui.TextDisplay('## '+clean(q[1],100)))
             card.add_item(discord.ui.TextDisplay(status+f' · {q[3]} points · '+due_text(q)))
+            if q[5]:card.add_item(discord.ui.TextDisplay('-# This occurrence is complete, so Claim and Done are unavailable.'))
             card.add_item(discord.ui.Separator())
             card.add_item(discord.ui.TextDisplay('**To do**\n'+clean(q[8] or 'No extra instructions.',1200)))
             frame.add_item(card)
@@ -1102,8 +1103,7 @@ def install(ns, ui, lock):
                 else:main.append(copy)
             frame.add_item(discord.ui.TextDisplay('-# ACTIONS'),slot='actions')
             frame.rows(main)
-            if signups:frame.add_item(discord.ui.ActionRow(action_picker(source,signups,'Sign up…')))
-            if occasional:frame.add_item(discord.ui.ActionRow(action_picker(source,occasional,'More…')))
+            if signups or occasional:frame.add_item(discord.ui.ActionRow(action_picker(source,signups+occasional,'Actions…')))
             secondary.sort(key=lambda b:{'Skip':0,'Need help':1}.get(b.label,2))
             frame.rows(secondary)
         if not q or ui.is_archived(source.qid):
@@ -2295,7 +2295,7 @@ def install(ns, ui, lock):
                    '**Available** to find chores to claim, and **Manage chores** for editing.\n'
                    '\n'
                    'Choose a topic below for the steps you need.',
-     'Pick up a chore': 'Open **Available** on the daily sheet. Choose a chore from the dropdown, read its instructions, then press **✋ Claim**. This takes just this occurrence. The card stays open with **✓ Done** ready when you finish.\n\nUse **Sign up…** for a longer signup or repeating days. Each option names its scope. Weekly signups end Sunday at 6 p.m. Eastern; finishing today does not release the rest of the week.',
+     'Pick up a chore': 'Open **Available** on the daily sheet. Choose a chore from the dropdown, read its instructions, then press **✋ Claim**. This takes just this occurrence. The card stays open with **✓ Done** ready when you finish.\n\nUse **Actions… → Sign up** for a longer signup or repeating days. Each option names its scope. Weekly signups end Sunday at 6 p.m. Eastern; finishing today does not release the rest of the week.',
      'Finish a chore': '1. Open **Chores → Mine → choose a chore**.\n'
                        '2. Read the chore’s instructions. If it has a **Checklist**, check off its steps '
                        'first.\n'
@@ -2512,7 +2512,7 @@ def install(ns, ui, lock):
                 description=getattr(getattr(source,'embed',None),'description',None) or ''
                 actions=[getattr(item,'label','') for item in source.children if isinstance(item,discord.ui.Button) and item.label not in ('Back','Dashboard')]
                 instructions=(description+'\n\n' if description else '')+'Use '+(', '.join('**'+label+'**' for label in actions) if actions else 'the choices on this screen')+' to continue. Back returns without confirming an action; Dashboard opens the main menu.'
-            if kind=='Card':instructions='Read this chore’s instructions. **Claim** takes this occurrence; after claiming, **Done** completes it. **Skip** skips only this occurrence without points. **Need help** records a problem; required checklist steps must be finished before Done.\n\nUse **Sign up…** for responsibility choices and **More…** for reassigning, trades, editing, dates and history. **Back to list** returns to the sheet and preserves its view. One small **↶ Undo** names your latest reversible Done or Skip at the bottom.'
+            if kind=='Card':instructions='Read this chore’s instructions. **Claim** takes this occurrence; after claiming, **Done** completes it. **Skip** skips only this occurrence without points. **Need help** records a problem; required checklist steps must be finished before Done.\n\nUse **Actions…** for signups, reassigning, trades, editing, dates and history. Each choice includes its scope or description. **Back to list** returns to the sheet and preserves its view. One small **↶ Undo** names your latest reversible Done or Skip at the bottom.'
             elif kind=='Attention':instructions='This list combines **Overdue**, **Needs someone**, and **Blocked** work. A chore appears once even when several labels apply. Due today does not automatically mean overdue.\n\nPress **Details** beside a chore to inspect or act. Back returns to this list page; Refresh reads the latest state.'
             elif kind=='Confirm':instructions='Read the proposed change above before confirming. Back leaves it unsaved. Opening Help never confirms or repeats the action.'
             elif kind=='ButtonChoices':instructions='Press a choice to select it. If several choices are allowed, toggle them and press Apply. Back returns without applying these choices.'

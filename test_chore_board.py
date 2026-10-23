@@ -457,8 +457,8 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(row.children[1].callback(first),row.children[1].callback(second))
             self.assertEqual(w.ownership(1),('10','occurrence'))
             panel=self.rendered(first);self.assertIsInstance(panel.source,w.Card)
-            self.assertTrue(any(isinstance(c,discord.ui.Select) and c.placeholder=='Sign up…' for c in panel.walk_children()))
-            self.assertTrue(any(isinstance(c,discord.ui.Select) and c.placeholder=='More…' for c in panel.walk_children()))
+            self.assertTrue(any(isinstance(c,discord.ui.Select) and c.placeholder=='Actions…' for c in panel.walk_children()))
+            self.assertTrue(any(isinstance(c,discord.ui.Select) and c.placeholder=='Actions…' for c in panel.walk_children()))
             self.assertFalse(any(getattr(c,'label',None)=='Just this occurrence' for c in panel.walk_children()))
             done=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Done')
             await done.callback(Interaction())
@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.1.0')
+        self.assertEqual(chore_board.APP_VERSION,'2.1.1')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.1.0. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.1.1. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -3143,7 +3143,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_more_menu_groups_describes_and_routes_original_actions(self):
         w=self.ui.workspace
         panel=w.render(w.Card(10,1))
-        menu=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='More…')
+        menu=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='Actions…')
         self.assertTrue(all(o.description and o.emoji for o in menu.options))
         labels=[o.label for o in menu.options]
         self.assertIn('People · Reassign',labels)
@@ -3151,6 +3151,9 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('History · Completions',labels)
         self.assertEqual(len(set(o.value for o in menu.options)),len(menu.options))
         self.assertEqual(len(menu.options),len(menu._sprig_menu_actions))
+        self.assertLessEqual(len(menu.options),25)
+        self.assertEqual(sum(isinstance(c,discord.ui.Select) for c in panel.walk_children()),1)
+        self.assertTrue(labels[0].startswith('Sign up · '))
         self.assertLess(labels.index('People · Reassign'),labels.index('Edit · Chore details'))
         self.assertLess(labels.index('Edit · Chore details'),labels.index('History · Completions'))
         event=Interaction();await self.activate(panel,'Completion history',event)
@@ -3159,6 +3162,10 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(self.rendered(event).source,self.ui.EditChoreView)
         wrong=Interaction(20);await self.activate(panel,'Completion history',wrong)
         self.assertTrue(wrong.response.payload[1]['ephemeral'])
+
+        self.db.execute('UPDATE quests SET completed=1 WHERE id=1');self.db.commit()
+        closed=w.render(w.Card(10,1))
+        self.assertIn('Claim and Done are unavailable',' '.join(c.content for c in closed.walk_children() if isinstance(c,discord.ui.TextDisplay)))
 
     async def test_chore_details_groups_task_content_in_native_card(self):
         w=self.ui.workspace
@@ -6422,8 +6429,8 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             for qid in (1,2):
                 source=w.Card(10,qid);panel=w.render(source)
                 menus=[c for c in panel.walk_children() if isinstance(c,discord.ui.Select)]
-                self.assertEqual(sum(c.placeholder=='More…' for c in menus),1)
-                self.assertTrue(all(c.placeholder in ('Sign up…','More…') for c in menus))
+                self.assertEqual(sum(c.placeholder=='Actions…' for c in menus),1)
+                self.assertTrue(all(c.placeholder=='Actions…' for c in menus))
                 actions=self.wire_actions(panel)
                 self.assertIn('Edit chore',[c.label for c in actions])
                 self.assertNotIn('Edit chore',[getattr(c,'label',None) for c in panel.walk_children()])
@@ -6634,10 +6641,10 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         help_button=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Need help')
         self.assertEqual(help_button.style,discord.ButtonStyle.secondary)
         self.assertNotIn(help_button,list(main.children))
-        menu=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='Sign up…')
-        self.assertEqual(menu.placeholder,'Sign up…')
+        menu=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='Actions…')
+        self.assertEqual(menu.placeholder,'Actions…')
         self.assertNotIn('Edit chore',[o.label for o in menu.options])
-        more=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='More…')
+        more=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='Actions…')
         self.assertIn('Edit · Chore details',[o.label for o in more.options])
         self.assertFalse(any(getattr(c,'label',None)=='More…' for c in panel.walk_children()))
         wrong=Interaction(20);await self.activate(panel,'Completion history',wrong)
@@ -7067,7 +7074,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_final_polish_help_matches_visible_card_and_attention_controls(self):
         w=self.ui.workspace
-        for source,words in ((w.Card(10,1),('Sign up','More','Back to list','Undo')), (w.Attention(10),('Overdue','Needs someone','Blocked','Details'))):
+        for source,words in ((w.Card(10,1),('Actions','signups','Back to list','Undo')), (w.Attention(10),('Overdue','Needs someone','Blocked','Details'))):
             panel=w.render(source);help_button=next(c for c in panel.walk_children() if getattr(c,'label',None)=='?')
             event=Interaction();await help_button.callback(event)
             help_view=self.rendered(event).source
