@@ -512,3 +512,6 @@ Claim/Done remain prominent with Back beside them. Sign up… groups available r
 
 
 On the work card, Claim appears before Back; after claiming, Back appears before Done. This moves Done away from the original click position.
+
+
+The current work card has separate Sign up… and More… dropdowns directly below the primary actions. More opens the selected tool directly, without an intermediate tools page.

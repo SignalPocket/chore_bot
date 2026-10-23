@@ -110,3 +110,7 @@ Claim/Done remain prominent with Back beside them. Sign up… groups available r
 
 ## 2.0.4 — Prepared Claim double-click layout fix
 Unclaimed cards show Claim then Back. Cards offering Done show Back then Done, so Done no longer replaces Claim at the same click position. Deliberate completion and points guards are unchanged. Local only.
+
+
+## 2.0.5 — Prepared inline More menu
+Sign up… and More… are separate native dropdowns directly on the work card. Less-used tools open directly from More without the intermediate page. Existing saved More-page routes still recover safely. Claim/Done and Back positioning, neutral Need help, and guarded actions remain. Local only.

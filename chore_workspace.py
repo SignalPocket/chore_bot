@@ -1028,11 +1028,7 @@ def install(ns, ui, lock):
                 else:main.append(copy)
             frame.rows(main)
             if signups:frame.add_item(discord.ui.ActionRow(action_picker(source,signups,'Sign up…')))
-            if occasional:
-                more=discord.ui.Button(label='More…',style=discord.ButtonStyle.secondary)
-                more.callback=lambda i:present(i,ChoreMore(source.owner,source))
-                more._sprig_more_actions=tuple(occasional)
-                secondary.append(more)
+            if occasional:frame.add_item(discord.ui.ActionRow(action_picker(source,occasional,'More…')))
             secondary.sort(key=lambda b:{'Skip':0,'Need help':1}.get(b.label,2))
             frame.rows(secondary)
         if not q or ui.is_archived(source.qid):

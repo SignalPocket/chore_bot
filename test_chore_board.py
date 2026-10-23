@@ -458,7 +458,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(w.ownership(1),('10','occurrence'))
             panel=self.rendered(first);self.assertIsInstance(panel.source,w.Card)
             self.assertTrue(any(isinstance(c,discord.ui.Select) and c.placeholder=='Sign up…' for c in panel.walk_children()))
-            self.assertIn('More…',[c.label for c in self.wire_actions(panel)])
+            self.assertTrue(any(isinstance(c,discord.ui.Select) and c.placeholder=='More…' for c in panel.walk_children()))
             self.assertFalse(any(getattr(c,'label',None)=='Just this occurrence' for c in panel.walk_children()))
             done=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Done')
             await done.callback(Interaction())
@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.0.4')
+        self.assertEqual(chore_board.APP_VERSION,'2.0.5')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.0.4. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.0.5. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -6246,8 +6246,8 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             for qid in (1,2):
                 source=w.Card(10,qid);panel=w.render(source)
                 menus=[c for c in panel.walk_children() if isinstance(c,discord.ui.Select)]
-                self.assertLessEqual(len(menus),1)
-                if menus:self.assertEqual(menus[0].placeholder,'Sign up…')
+                self.assertEqual(sum(c.placeholder=='More…' for c in menus),1)
+                self.assertTrue(all(c.placeholder in ('Sign up…','More…') for c in menus))
                 actions=self.wire_actions(panel)
                 self.assertIn('Edit chore',[c.label for c in actions])
                 self.assertNotIn('Edit chore',[getattr(c,'label',None) for c in panel.walk_children()])
@@ -6460,20 +6460,17 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         help_button=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Need help')
         self.assertEqual(help_button.style,discord.ButtonStyle.secondary)
         self.assertNotIn(help_button,list(main.children))
-        menu=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select))
+        menu=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='Sign up…')
         self.assertEqual(menu.placeholder,'Sign up…')
         self.assertNotIn('Edit chore',[o.label for o in menu.options])
-        event=Interaction(20);await self.activate(panel,'More…',event)
-        self.assertTrue(event.response.payload[1]['ephemeral'])
-        event=Interaction();await self.activate(panel,'More…',event)
-        more=self.rendered(event);self.assertIsInstance(more.source,w.ChoreMore)
-        self.assertIn('Edit chore',[c.label for c in self.wire_actions(more)])
-        restored=w.recovery.restore(10,more.source.recovery_context,Interaction().guild)
-        self.assertIsInstance(restored,w.ChoreMore)
-        event=Interaction();await self.activate(more,'Back',event)
-        self.assertEqual(self.rendered(event).source.qid,1)
-        card=self.rendered(event)
-        event=Interaction();await self.activate(card,'Back',event)
+        more=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select) and c.placeholder=='More…')
+        self.assertIn('Edit chore',[o.label for o in more.options])
+        self.assertFalse(any(getattr(c,'label',None)=='More…' for c in panel.walk_children()))
+        wrong=Interaction(20);await self.activate(panel,'Completion history',wrong)
+        self.assertTrue(wrong.response.payload[1]['ephemeral'])
+        event=Interaction();await self.activate(panel,'Completion history',event)
+        self.assertIsInstance(self.rendered(event).source,w.History)
+        event=Interaction();await self.activate(panel,'Back',event)
         self.assertEqual(self.rendered(event).source.state['who'],'everyone')
 
     async def test_work_card_done_uses_supported_check_mark_emoji(self):

@@ -256,3 +256,6 @@ Daily-sheet rows are compact plain text: number · chore · person/color (Everyo
 
 ## Prepared 2.0.3 chore card
 Claim/Done remain prominent with Back beside them. Sign up… groups available responsibility choices. More… opens a separate screen for occasional tools. Skip and neutral Need help remain visible below the main actions. Discord button sizes are fixed; quieter styling and placement reduce emphasis. Refresh and restart recovery preserve context. Local only, not deployed.
+
+
+The current work card has separate Sign up… and More… dropdowns directly below the primary actions. More opens the selected tool directly, without an intermediate tools page.
