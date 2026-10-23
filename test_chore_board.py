@@ -597,7 +597,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.0.0')
+        self.assertEqual(chore_board.APP_VERSION,'2.0.1')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -607,7 +607,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.0.0. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.0.1. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -4230,7 +4230,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                     panel=w.render(source);panel.to_components()
                     self.assertTrue(all(isinstance(c,(discord.ui.Select,discord.ui.UserSelect)) for c in panel.walk_children() if isinstance(c,(discord.ui.Select,discord.ui.UserSelect))))
                     self.assertLessEqual(len(list(panel.walk_children())),40)
-                    self.assertEqual(sum(getattr(c,'label',None)=='↻' for c in panel.walk_children()),0 if isinstance(source,w.Card) else 1)
+                    self.assertEqual(sum(getattr(c,'label',None)=='↻' for c in panel.walk_children()),1)
             panel=w.render(w.Card(10,1));labels=[getattr(c,'label',None) for c in self.wire_actions(panel)]
             for label in ('Reassign','Edit chore','Duplicate chore','Give feedback','Sign-up schedule'):
                 self.assertIn(label,labels)
@@ -5049,7 +5049,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_workspace_polish_shared_screens_have_single_refresh_and_navigation_row(self):
         w=self.ui.workspace
         with self.clock('2026-10-21T10:00:00'):
-            screens=[w.Card(10,1),w.Manage(10),w.Guide(10),w.Notifications(10),
+            screens=[w.Chores(10),w.Chores(10,who='everyone'),w.Chores(10,mode='all'),w.PersonalSettings(10),w.PersonColor(10),w.ListLength(10),w.Card(10,1),w.Manage(10),w.Guide(10),w.Notifications(10),
                 w.Attention(10),w.Trips(10),w.History(10,1,lambda:w.Card(10,1)),
                 w.Inbox(301104023405199361),w.ResetPoints(301104023405199361),
                 w.ResetHistory(301104023405199361),self.ui.planning.Reminders(10),
@@ -5059,7 +5059,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                     original=[c for c in source.children if isinstance(c,discord.ui.Button) and c.label not in ('↻','Refresh / Resume')]
                     panel=w.render(source)
                     buttons=[c for c in panel.walk_children() if isinstance(c,discord.ui.Button)]
-                    self.assertEqual(sum(c.label=='↻' for c in buttons),0 if isinstance(source,w.Card) else 1)
+                    self.assertEqual(sum(c.label=='↻' for c in buttons),1)
                     self.assertFalse(any(c.label=='Refresh / Resume' for c in buttons))
                     calendar_week=getattr(source,'recovery_context',{}).get('screen')=='calendar' and source.recovery_context['mode']=='week'
                     if isinstance(source,w.Card):
@@ -6426,6 +6426,35 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         picker._values=['invalid'];event=Interaction();event.guild=guild;await picker.callback(event)
         self.assertEqual(w.color_key(10,guild),'none')
 
+    async def test_refresh_daily_sheet_and_card_preserves_context_without_mutation(self):
+        w=self.ui.workspace
+        for n in range(12):self.ui.create_chore('Refresh '+str(n),'daily','5','Instructions')
+        source=w.Chores(10,who='everyone',page=1)
+        panel=w.render(source)
+        self.assertEqual([c.label for c in panel.walk_children() if isinstance(c,discord.ui.Button) and c.label in ('🏠','↻','⚙','?')][:4],['🏠','↻','⚙','?'])
+        before=self.db.execute('SELECT * FROM quests ORDER BY id').fetchall()
+        event=Interaction();await self.activate(panel,'↻',event)
+        self.assertEqual(self.rendered(event).source.state,source.state)
+        self.assertEqual(self.db.execute('SELECT * FROM quests ORDER BY id').fetchall(),before)
+        card=w.render(w.Card(10,1,lambda:source))
+        self.assertEqual(sum(getattr(c,'label',None)=='↻' for c in card.walk_children()),1)
+        event=Interaction();await self.activate(card,'↻',event)
+        self.assertEqual(self.rendered(event).source.qid,1)
+        self.assertEqual(self.db.execute('SELECT * FROM quests ORDER BY id').fetchall(),before)
+
+    async def test_chore_sheet_highlights_only_selected_scope(self):
+        w=self.ui.workspace
+        for who,label in [('mine','Mine'),('unclaimed','Available'),('everyone','Everyone')]:
+            panel=w.render(w.Chores(10,who=who))
+            tabs=[c for c in panel.walk_children() if isinstance(c,discord.ui.Button) and c.label in ('Mine','Available','Everyone')]
+            self.assertEqual(len(tabs),3)
+            self.assertEqual([c.label for c in tabs if c.style==discord.ButtonStyle.primary],[label])
+            self.assertTrue(all(c.style==discord.ButtonStyle.secondary for c in tabs if c.label!=label))
+        panel=w.render(w.Chores(10))
+        event=Interaction();await self.activate(panel,'Everyone',event)
+        tabs=[c for c in self.rendered(event).walk_children() if isinstance(c,discord.ui.Button) and c.label in ('Mine','Available','Everyone')]
+        self.assertEqual([c.label for c in tabs if c.style==discord.ButtonStyle.primary],['Everyone'])
+
     async def test_compact_sheet_plain_rows_eight_chores_names_and_points_on_card(self):
         w=self.ui.workspace
         guild=SimpleNamespace(id=1,get_member=lambda uid:SimpleNamespace(display_name='John'))
@@ -6531,7 +6560,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             for source in sources:
                 panel=w.render(source)
                 labels=[c.label for c in panel.walk_children() if getattr(c,'label',None)]
-                self.assertEqual(labels[:1] if isinstance(source,(w.Chores,w.Card)) else labels[:4],['?'] if isinstance(source,(w.Chores,w.Card)) else ['🏠','↻','⚙','?'])
+                self.assertEqual(labels[:4],['🏠','↻','⚙','?'])
                 self.assertLessEqual(panel.total_children_count,40)
                 panel.to_components()
             settings=w.render(w.ListLength(10))

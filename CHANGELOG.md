@@ -90,3 +90,11 @@ Added Settings → Your color, persistent per-account choices and household defa
 
 ## 2.0.0 — Compact Discord rows
 Daily-sheet rows use plain titles and middle-dot numbering, omit list points, and retain color markers and eight-row preference. Resolve visible account names before rendering; unresolved names use Assigned instead of mention chips. Full points and instructions remain on the work card. Reviewed through a private Discord preview.
+
+
+### Pending scope highlight fix
+Mine, Available and Everyone highlight the selected view with Discord primary style; other scope controls stay neutral. Local only, not deployed.
+
+
+## 2.0.1 — Prepared refresh and scope highlights
+Every workspace page has a compact Refresh button. Daily sheets and work cards now show Home, Refresh, Settings, Help consistently; refresh restores current context without repeating mutations. Mine/Available/Everyone highlight the selected scope. Not deployed.

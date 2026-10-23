@@ -502,3 +502,6 @@ Settings → Your color saves a personal marker, visible beside your name to eve
 
 
 Daily-sheet rows are compact plain text: number · chore · person/color (Everyone). Points remain on the work card. Long titles can still wrap in narrow Discord clients. Existing list-length preference remains; eight is the new-account default.
+
+
+All workspace pages, including daily sheets and work cards, display compact Home / Refresh / Settings / Help. Refresh reloads current state and context without repeating the last mutation. Mine/Available/Everyone show the selected scope in blue. Discord pop-up forms retain their native submit/cancel behavior.

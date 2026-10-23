@@ -327,7 +327,12 @@ def install(ns, ui, lock):
             title='CHORE CATALOG' if catalog else ('TODAY' if day==timing.now().date() else day.strftime('%A').upper())+' · '+day.strftime('%B %d')
             frame.heading(discord.ui.TextDisplay('# '+title+('\n'+str(notice) if notice else '')),page_help_button(self))
             if not catalog:
-                frame.rows([button(label,lambda i,who=who:present(i,target(i,who=who,page=0))) for label,who in [('Mine','mine'),('Available','unclaimed'),('Everyone','everyone')]])
+                tabs=[]
+                for label,who in [('Mine','mine'),('Available','unclaimed'),('Everyone','everyone')]:
+                    tab=button(label,lambda i,who=who:present(i,target(i,who=who,page=0)))
+                    tab.style=discord.ButtonStyle.primary if state['who']==who else discord.ButtonStyle.secondary
+                    tabs.append(tab)
+                frame.rows(tabs)
             frame.add_item(discord.ui.Separator(),optional=True)
             chunk=self.entries[self.page*self.size:(self.page+1)*self.size]
             lines=[]
@@ -1030,8 +1035,15 @@ def install(ns, ui, lock):
                 self.page_spec=page_spec('Card' if isinstance(source,Card) else 'Browse','Work card' if isinstance(source,Card) else 'Daily sheet','Finish a chore' if isinstance(source,Card) else 'Start here')
                 frame=self.layout_plan=PagePlan(self.page_spec)
                 refresh=work_card(frame,source,notice) if isinstance(source,Card) else source.build(frame,notice)
+                section=frame.slots['header'][0]
+                frame.slots['header']=[section.children[0]]
+                refresh.label='↻'
+                home=discord.ui.Button(label='🏠',style=discord.ButtonStyle.primary)
+                home.callback=lambda i:present(i,Dashboard(source.owner,i.guild,i.user))
+                gear=discord.ui.Button(label='⚙',style=discord.ButtonStyle.secondary)
+                gear.callback=lambda i:present(i,PersonalSettings(source.owner,i.guild,lambda:recovery.restore(source.owner,recovery.bookmark(source),i.guild)))
+                frame.rows([home,refresh,gear,section.accessory],slot='header')
                 attach_quiet_undo(frame,source)
-                decorate_actions(frame)
                 decorate_actions(frame)
                 frame.commit(self)
                 recovery.attach(self,source,resume=refresh)
