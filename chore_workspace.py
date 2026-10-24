@@ -405,7 +405,8 @@ def install(ns, ui, lock):
                     lines.append('-# '+' · '.join(labels+([clean(person(uid,self.guild),60)] if uid else [])))
             heading='CHORE CATALOG' if catalog else {'mine':'YOUR CHORES','unclaimed':'AVAILABLE TO CLAIM','attention':'NEEDS ATTENTION'}.get(state['who'],'EVERYONE’S CHORES')
             listing=discord.ui.Container(accent_colour=0x6B9B77)
-            listing.add_item(discord.ui.TextDisplay('**'+heading+'**\n\n'+('\n'.join(lines) if lines else 'All clear. No chores match this view. Try Everyone or another date.')))
+            empty='You’re caught up ✅' if state['who']=='mine' and not catalog and not state['query'] else 'All clear. No chores match this view. Try Everyone or another date.'
+            listing.add_item(discord.ui.TextDisplay('**'+heading+'**\n\n'+('\n'.join(lines) if lines else empty)))
             frame.add_item(listing)
             parent=lambda:self.rebuild()
             if chunk:
@@ -1159,6 +1160,7 @@ def install(ns, ui, lock):
                 else:main.append(copy)
             if not q[5]:frame.add_item(discord.ui.TextDisplay('-# ACTIONS'),slot='actions')
             frame.rows(main)
+            if any(b.label=='Claim' for b in main):frame.add_item(discord.ui.TextDisplay('-# Just this occurrence'))
             if signups or occasional:frame.add_item(discord.ui.ActionRow(action_picker(source,signups+occasional,'Actions…')))
             secondary.sort(key=lambda b:{'Skip':0,'Need help':1}.get(b.label,2))
             if not q[5]:frame.rows(secondary)

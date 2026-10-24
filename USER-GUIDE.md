@@ -573,3 +573,7 @@ Chores uses one compact native list card with Mine, Available, Everyone and Need
 Completed work leaves today’s active lists; Undo restores it and future occurrences remain projected normally. The immediate Done receipt shows the checked name, points, return date, Back to chores and quiet Undo; reopening retains details/tools. Claim/Back and Back/Done positions keep double-click safety. One described Actions menu retains signup and advanced callbacks. Settings remains direct controls behind the gear with visible Back. Manage chores uses an eight-item catalog card with a direct native edit-form chooser and management actions below content; Household tools remains available. Notices sit below paging, not above the title. No live preferences, points, schedules or announcement choices are changed by preparing this interface. Local only, not pushed/deployed.
 
 Catalog editing opens the existing prefilled native form directly and returns to the same catalog context after saving. Cancel leaves the catalog in place; validation and stale-snapshot checks still apply.
+
+
+## Prepared 2.2.1 — caught up and Claim scope
+Unfiltered empty Mine says “You’re caught up ✅”. Empty searches keep the no-match explanation. Work cards show “Just this occurrence” directly below the Claim row; Done cards do not show this cue. Claim, signup and completion behavior is unchanged. Local review only, not deployed.
