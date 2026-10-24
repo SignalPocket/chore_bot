@@ -269,7 +269,7 @@ def install(ns, ui, lock):
             expected=ui.planning.settings(owner)
             trade=db.execute('SELECT trade_dm FROM notification_preferences WHERE user_id=?',(str(owner),)).fetchone()
             trade_on=bool(trade and trade[0])
-            self.embed=discord.Embed(title='Your settings',description='Changes save immediately. Alerts are private DMs.\nReminder times: '+', '.join(json.loads(expected[1]))+' Eastern.',color=0x6B9B77)
+            self.embed=discord.Embed(title='Settings',description='Changes save immediately.\nReminder times: '+', '.join(json.loads(expected[1]))+' Eastern.',color=0x6B9B77)
             async def refresh(i,notice=None):
                 if notice and notice.startswith('Chore reminders '):notice='Reminder settings saved.'
                 await present(i,PersonalSettings(owner,i.guild,back),notice)
@@ -332,8 +332,9 @@ def install(ns, ui, lock):
     class Chores(View):
         def __init__(self,owner,guild=None,mode='today',day=None,who='mine',query='',page=0):
             super().__init__(owner)
+            ns['reset_due_quests']()
             day=datetime.fromisoformat(day).date() if isinstance(day,str) else day or timing.now().date()
-            mode=mode if mode in ('today','week','all') else 'today'
+            mode=mode if mode in ('today','date','week','all') else 'today'
             self.guild=guild
             self.state=dict(mode=mode,day=day.isoformat(),who=str(who),query=str(query).strip()[:100],page=max(0,int(page)))
             self.recovery_context=dict(screen='chores',**self.state)
@@ -349,15 +350,19 @@ def install(ns, ui, lock):
                 if mode=='week':
                     self.entries.extend((None,chore(q[0]),uid) for q,uid in ui.planning.project(start,flexible=True))
                 # Flexible and overdue work remains findable on Today.
-                if mode=='today' and day==timing.now().date():
+                if mode in ('today','date') and day==timing.now().date():
                     seen={q[0] for _,q,_ in self.entries}
                     for qid, in db.execute('SELECT id FROM quests ORDER BY name COLLATE NOCASE,id'):
                         q=chore(qid)
                         if qid not in seen and not ui.is_archived(qid) and not q[5] and ready(qid):self.entries.append((day,q,ownership(qid)[0]))
+            self.attention={r[0][0]:r for r in attention_rows()} if who=='attention' and day==timing.now().date() else {}
+            if who=='attention' and day==timing.now().date():
+                self.entries=[(day,r[0],ownership(r[0][0])[0]) for r in self.attention.values()]
             def matches(entry):
                 _,q,uid=entry
+                if mode in ('today','date') and day==timing.now().date() and q[5]:return False
                 person_id=str(owner) if who=='mine' else str(who)
-                return (who=='everyone' or (who=='unclaimed' and not uid) or str(uid)==person_id) and (not query or query.casefold() in ' '.join(str(q[n] or '') for n in (1,8,9)).casefold())
+                return (who=='everyone' or (who=='attention' and (q[0] in self.attention or (day!=timing.now().date() and not uid))) or (who=='unclaimed' and not uid) or str(uid)==person_id) and (not query or query.casefold() in ' '.join(str(q[n] or '') for n in (1,8,9)).casefold())
             self.entries=[entry for entry in self.entries if matches(entry)]
             self.size=sheet_size(owner)
             self.page=min(self.state['page'],max((len(self.entries)-1)//self.size,0))
@@ -371,16 +376,19 @@ def install(ns, ui, lock):
             def button(label,callback,disabled=False):
                 item=discord.ui.Button(label=label,style=discord.ButtonStyle.secondary,disabled=disabled);item.callback=callback;return item
             catalog=state['mode']=='all'
-            title='CHORE CATALOG' if catalog else ('TODAY' if day==timing.now().date() else day.strftime('%A').upper())+' · '+day.strftime('%B %d')
-            frame.heading(discord.ui.TextDisplay('# '+title+('\n'+str(notice) if notice else '')),page_help_button(self))
+            title='Manage chores' if catalog else 'Chores'
+            frame.heading(discord.ui.TextDisplay('# '+title),page_help_button(self))
             if not catalog:
                 tabs=[]
-                for label,who in [('Mine','mine'),('Available','unclaimed'),('Everyone','everyone')]:
+                for label,who in [('Mine','mine'),('Available','unclaimed'),('Everyone','everyone'),('Needs attention','attention')]:
                     tab=button(label,lambda i,who=who:present(i,target(i,who=who,page=0)))
                     tab.style=discord.ButtonStyle.primary if state['who']==who else discord.ButtonStyle.secondary
                     tabs.append(tab)
                 frame.rows(tabs)
-            frame.add_item(discord.ui.Separator(),optional=True)
+            if not catalog:
+                frame.add_item(discord.ui.TextDisplay('-# '+('Today · ' if state['mode']=='today' else '')+day.strftime('%A, %B %d')))
+                if state['mode']=='date':
+                    frame.rows([button('<< Prev day',lambda i:present(i,target(i,day=(day-timedelta(days=1)).isoformat(),page=0))),button('Today',lambda i:present(i,target(i,day=timing.now().date().isoformat(),page=0))),button('Next day >>',lambda i:present(i,target(i,day=(day+timedelta(days=1)).isoformat(),page=0)))])
             chunk=self.entries[self.page*self.size:(self.page+1)*self.size]
             lines=[]
             for index,(date,q,uid) in enumerate(chunk,self.page*self.size+1):
@@ -391,8 +399,14 @@ def install(ns, ui, lock):
                     suffix=' · '+clean(name,60)
                 # A middle dot avoids Discord treating numbered rows as Markdown lists.
                 lines.append(f'{index} · {clean(q[1],100)}'+suffix)
-            heading='CHORE CATALOG' if catalog else {'mine':'YOUR CHORES','unclaimed':'AVAILABLE TO CLAIM'}.get(state['who'],'EVERYONE’S CHORES')
-            frame.add_item(discord.ui.TextDisplay(('' if catalog else '**'+heading+'**\n\n')+('\n'.join(lines) if lines else 'No chores match this view. Try Everyone or another date.')))
+                if state['who']=='attention':
+                    row=self.attention.get(q[0])
+                    labels=(['Overdue'] if row and row[1] else [])+(['Needs someone'] if not uid else [])+(['Blocked · '+row[3][4]] if row and row[3] else [])
+                    lines.append('-# '+' · '.join(labels+([clean(person(uid,self.guild),60)] if uid else [])))
+            heading='CHORE CATALOG' if catalog else {'mine':'YOUR CHORES','unclaimed':'AVAILABLE TO CLAIM','attention':'NEEDS ATTENTION'}.get(state['who'],'EVERYONE’S CHORES')
+            listing=discord.ui.Container(accent_colour=0x6B9B77)
+            listing.add_item(discord.ui.TextDisplay('**'+heading+'**\n\n'+('\n'.join(lines) if lines else 'All clear. No chores match this view. Try Everyone or another date.')))
+            frame.add_item(listing)
             parent=lambda:self.rebuild()
             if chunk:
                 picker=discord.ui.Select(placeholder='Choose a chore to edit…' if catalog else 'Choose a chore…',options=[discord.SelectOption(label=clean(q[1],100),value=str(n)) for n,(_,q,_) in enumerate(chunk)])
@@ -403,21 +417,33 @@ def install(ns, ui, lock):
                         if not 0<=index<len(chunk):raise ValueError('Invalid choice')
                         date,q,_=chunk[index]
                     except (ValueError,IndexError):return await i.response.send_message('Choose a chore from this sheet.',ephemeral=True)
-                    if catalog:return await present(i,CardActions(owner,Card(owner,q[0],parent,i.guild),'Change this chore'))
+                    if catalog:
+                        modal=ui.EditChoreModal(owner,q[0],q[2],ui.snapshot(q[0]))
+                        async def save(event):
+                            if not await self.interaction_check(event):return
+                            async with lock:
+                                result=ui.update_chore(q[0],modal.name.value,modal.frequency,modal.points.value,modal.notes.value,modal.expected,modal.room.value)
+                            await present(event,self.rebuild(),result)
+                        modal.on_submit=save
+                        return await i.response.send_modal(modal)
                     if date is not None and date!=timing.now().date():
                         offered=ui.dated.slots(q[0])
                         if len(offered)>1:return await present(i,FutureSlots(owner,q[0],date,i.guild,parent))
                         if offered and date>=timing.now().date():return await present(i,FutureOccurrence(owner,q[0],date,offered[0],i.guild,parent))
-                        return await present(i,ui.planning.Day(owner,date,guild=i.guild))
+                        return await present(i,ui.planning.Day(owner,date,mine=state['who']=='mine',guild=i.guild))
                     await present(i,Card(owner,q[0],parent,i.guild))
                 picker.callback=choose;frame.add_item(discord.ui.ActionRow(picker))
             count=max((len(self.entries)-1)//self.size+1,1)
             frame.add_item(discord.ui.TextDisplay(f'-# {self.page*self.size+1 if chunk else 0}–{self.page*self.size+len(chunk)} of {len(self.entries)} · Page {self.page+1} of {count}'))
             frame.rows([button('< Prev',lambda i:present(i,target(i,page=self.page-1)),self.page==0),button('Next >',lambda i:present(i,target(i,page=self.page+1)),self.page+1>=count)])
+            if notice:frame.add_item(discord.ui.TextDisplay('-# '+str(notice)))
             if catalog:
-                frame.rows([button('Add chore',lambda i:present(i,adapt(ui.AddChoreMenu(owner),owner,parent))),button('Archived chores',lambda i:present(i,adapt(ui.RemoveChoreView(owner,removed=True),owner,parent))),button('Household tools',lambda i:present(i,Dashboard(owner,i.guild,i.user))),button('Search',lambda i:i.response.send_modal(ChoresSearch(self))),button('Back to list',lambda i:present(i,target(i,mode='today',who='mine',page=0)))])
+                frame.rows([button('Add chore',lambda i:present(i,adapt(ui.AddChoreMenu(owner),owner,parent))),button('Archived chores',lambda i:present(i,adapt(ui.RemoveChoreView(owner,removed=True),owner,parent))),button('Search',lambda i:i.response.send_modal(ChoresSearch(self)))])
+                frame.rows([button('Back to chores',lambda i:present(i,target(i,mode='today',day=timing.now().date().isoformat(),who='mine',query='',page=0))),button('Household tools',lambda i:present(i,Dashboard(owner,i.guild,i.user)))])
             else:
-                frame.rows([button('Other dates',lambda i:present(i,ui.planning.Calendar(owner,i.guild,day=day,mine=state['who']=='mine'))),button('Manage chores',lambda i:present(i,target(i,mode='all',who='everyone',query='',page=0))),button('Settings',lambda i:present(i,PersonalSettings(owner,i.guild,parent)))])
+                navigation=[button('Back to today',lambda i:present(i,target(i,mode='today',day=timing.now().date().isoformat(),page=0))),button('Week calendar',lambda i:present(i,ui.planning.Calendar(owner,i.guild,day=day,mine=state['who']=='mine')))] if state['mode']=='date' else [button('Other dates',lambda i:present(i,target(i,mode='date',page=0)))]
+                navigation.append(button('Manage chores',lambda i:present(i,target(i,mode='all',who='everyone',query='',page=0))))
+                frame.rows(navigation)
             refresh=button('Refresh',lambda i:present(i,target(i)))
             # A refresh action lives with contextual help instead of a permanent toolbar.
             return refresh
@@ -435,12 +461,12 @@ def install(ns, ui, lock):
                 return Browse(owner, **dict(saved, area=area), guild=guild)
             self.button('Household chores', lambda i: present(i, browse('household')), row=0)
             self.button('Who’s home?', lambda i: present(i, Trips(owner, i.guild)), row=1)
-            self.button('Manage chores', lambda i: present(i, Manage(owner, i.guild)), row=1)
+            self.button('Manage chores', lambda i: present(i, Chores(owner,i.guild,mode='all',who='everyone')), row=1)
             self.button('Help', lambda i: present(i, Guide(owner)), row=1)
             self.button(f'Trades ({incoming} incoming)', lambda i: present(i, adapt(ui.TradeInboxView(owner), owner)), row=2)
             self.button('Chores',lambda i:present(i,Chores(owner,i.guild)),row=3)
-            self.button('Calendar',lambda i:present(i,ui.planning.Day(owner,ui.timing.now().date(),guild=i.guild)),row=3)
-            self.button('Needs attention',lambda i:present(i,Attention(owner,i.guild)),row=0)
+            self.button('Calendar',lambda i:present(i,Chores(owner,i.guild,mode='date',who='everyone')),row=3)
+            self.button('Needs attention',lambda i:present(i,Chores(owner,i.guild,who='attention')),row=0)
             self.button('Chore reminders',lambda i:present(i,ui.planning.Reminders(owner)),row=3)
             self.button('Trade alerts', lambda i: present(i, Notifications(owner)), row=2)
             self.button('List length',lambda i:present(i,ListLength(owner)),row=1)
@@ -1008,7 +1034,7 @@ def install(ns, ui, lock):
             undo_control.style=discord.ButtonStyle.secondary
             frame.add_item(discord.ui.Section(discord.ui.TextDisplay('-# '+description),accessory=undo_control),slot='undo')
 
-    ACTION_ICONS={'Your color':'🎨','Claim':'✋','Done':'✅','Skip':'⏭','Skip this occurrence':'⏭','Need help':'🙋','Stuck / need help':'🙋','Other dates':'📅','Manage chores':'✏️','Settings':'⚙','Chore reminders':'🔔','Trade alerts':'🔁','Add chore':'➕','Archived chores':'🗃️','Back':'↩','Back to list':'↩','Checklist':'☑','Reassign':'👥','Propose trade':'🔁','Completion history':'📜','Change schedule':'📅','Edit chore':'✏️'}
+    ACTION_ICONS={'Your color':'🎨','Claim':'✋','Done':'✅','Skip':'⏭','Skip this occurrence':'⏭','Need help':'🙋','Stuck / need help':'🙋','Other dates':'📅','Manage chores':'✏️','Settings':'⚙','Chore reminders':'🔔','Trade alerts':'🔁','Add chore':'➕','Archived chores':'🗃️','Back':'↩','Back to list':'↩','Back to chores':'↩','Checklist':'☑','Reassign':'👥','Propose trade':'🔁','Completion history':'📜','Change schedule':'📅','Edit chore':'✏️'}
     ACTION_ICONS.update({'Signup options':'📅','Sign-up schedule':'📅','Take this week':'✋','Take next week':'✋','Release this week':'↩','Release next week':'↩','Every week · ongoing':'🔁','Choose occurrence':'📅','Duplicate chore':'💠','Estimate / checklist':'☑','Give feedback':'💬','Change regular day':'📅','Move this occurrence':'📅','Cancel occurrence move':'↩','Drop responsibility':'↩','Separate AM and PM sign-ups':'🌗','List length':'📏','Household tools':'🧰','Search':'🔎'})
     def decorate_actions(frame):
         for item in frame.walk_children():
@@ -1078,7 +1104,20 @@ def install(ns, ui, lock):
 
     def work_card(frame,source,notice=None):
         q=chore(source.qid)
-        frame.heading(discord.ui.TextDisplay('# Chore details' if q else '# Chore unavailable'),page_help_button(source))
+        just_finished=bool(q and q[5] and not ui.is_archived(source.qid) and 'completed quest #' in str(notice or source.embed.description or ''))
+        frame.heading(discord.ui.TextDisplay('# Done' if just_finished else '# Chore details' if q else '# Chore unavailable'),page_help_button(source))
+        if just_finished:
+            card=discord.ui.Container(accent_colour=0x6B9B77)
+            card.add_item(discord.ui.TextDisplay('## ✅ '+clean(q[1],100)))
+            card.add_item(discord.ui.TextDisplay(f'Done — nice work! · +{q[3]} points'))
+            card.add_item(discord.ui.TextDisplay('-# '+due_text(q).replace('Completed · returns ','Returns ').replace('Completed · does not repeat','Does not repeat')))
+            frame.add_item(card)
+            back=next((b for b in source.children if getattr(b,'label',None)=='Back'),None)
+            if back:
+                button=discord.ui.Button(label='Back to chores',style=discord.ButtonStyle.primary)
+                button.callback=getattr(back,'_sprig_recovery_callback',back.callback)
+                frame.rows([button])
+            return discord.ui.Button(label='Refresh')
         if not q or ui.is_archived(source.qid):
             frame.add_item(discord.ui.TextDisplay('This chore is archived or unavailable.'))
         else:
@@ -1086,15 +1125,21 @@ def install(ns, ui, lock):
             status=('Yours' if str(uid)==str(source.owner) else clean(person(uid,getattr(source,'guild',None)),80))
             card=discord.ui.Container(accent_colour=0x6B9B77)
             card.add_item(discord.ui.TextDisplay('## '+clean(q[1],100)))
-            card.add_item(discord.ui.TextDisplay(status+f' · {q[3]} points · '+due_text(q)))
-            if q[5]:card.add_item(discord.ui.TextDisplay('-# This occurrence is complete, so Claim and Done are unavailable.'))
-            card.add_item(discord.ui.Separator())
-            card.add_item(discord.ui.TextDisplay('**To do**\n'+clean(q[8] or 'No extra instructions.',1200)))
+            if q[5]:
+                card.add_item(discord.ui.TextDisplay('### ✅ Done — nice work!'))
+                card.add_item(discord.ui.Separator())
+                instructions=clean(q[8] or 'No extra instructions.',1200)
+                card.add_item(discord.ui.TextDisplay('**Completed**\n'+'\n'.join('-# '+line for line in instructions.splitlines())))
+                card.add_item(discord.ui.TextDisplay('-# '+(due_text(q).replace('Completed · returns ','Returns ').replace('Completed · does not repeat','Does not repeat'))))
+            else:
+                card.add_item(discord.ui.TextDisplay(status+f' · {q[3]} points · '+due_text(q)))
+                card.add_item(discord.ui.Separator())
+                card.add_item(discord.ui.TextDisplay('**To do**\n'+clean(q[8] or 'No extra instructions.',1200)))
             frame.add_item(card)
             if notice or source.embed.description:
                 message=str(notice or source.embed.description)
-                if q[5] and 'completed quest #' in message:message=f'✓ Marked done · +{q[3]} points'
-                frame.add_item(discord.ui.TextDisplay('-# '+message),slot='undo')
+                if q[5] and 'completed quest #' in message:message=''
+                if message:frame.add_item(discord.ui.TextDisplay('-# '+message),slot='undo')
             for field in source.embed.fields:
                 if field.name.startswith('⚠'):card.add_item(discord.ui.TextDisplay('**'+field.name+'**\n'+field.value))
             controls=[b for b in source.children if isinstance(b,discord.ui.Button) and b.label not in ('Back','Dashboard','Refresh','Refresh / Resume')]
@@ -1108,15 +1153,15 @@ def install(ns, ui, lock):
                 else:occasional.append(item)
             back=next((b for b in source.children if getattr(b,'label',None)=='Back'),None)
             if back:
-                copy=discord.ui.Button(label='Back to list',style=discord.ButtonStyle.secondary)
+                copy=discord.ui.Button(label='Back to chores',style=discord.ButtonStyle.primary if q[5] else discord.ButtonStyle.secondary)
                 copy.callback=getattr(back,'_sprig_recovery_callback',back.callback)
                 if any(b.label=='Done' for b in main):main.insert(0,copy)
                 else:main.append(copy)
-            frame.add_item(discord.ui.TextDisplay('-# ACTIONS'),slot='actions')
+            if not q[5]:frame.add_item(discord.ui.TextDisplay('-# ACTIONS'),slot='actions')
             frame.rows(main)
             if signups or occasional:frame.add_item(discord.ui.ActionRow(action_picker(source,signups+occasional,'Actions…')))
             secondary.sort(key=lambda b:{'Skip':0,'Need help':1}.get(b.label,2))
-            frame.rows(secondary)
+            if not q[5]:frame.rows(secondary)
         if not q or ui.is_archived(source.qid):
             back=next((b for b in source.children if getattr(b,'label',None)=='Back'),None)
             if back:
@@ -1172,7 +1217,9 @@ def install(ns, ui, lock):
                 budget-=len(value)
                 return discord.ui.TextDisplay(value)
             header=text((('**'+str(notice)+'**\n\n') if notice and not isinstance(source,PersonalSettings) else '')+(('# '+source.page_name+'\n') if embed and embed.title else '')+(embed.description or '' if embed else ''))
+            if isinstance(source,PersonalSettings):header=text('# '+source.page_name)
             if header and not isinstance(source,Dashboard):frame.heading(header,page_help_button(source))
+            if isinstance(source,PersonalSettings):frame.add_item(discord.ui.TextDisplay('-# '+str(embed.description).replace('\n','\n-# ')))
             if isinstance(source,Dashboard):
                 buttons={item.label:item for item in source.children if isinstance(item,discord.ui.Button)}
                 heading=text((('**'+str(notice)+'**\n\n') if notice else '')+'# '+embed.title+'\n'+embed.footer.text)
@@ -2296,16 +2343,7 @@ def install(ns, ui, lock):
             self.button('Cancel exception',cancel)
             self.nav(back)
 
-    TOPICS = {'Start here': '**To do a chore:** Open **Chores → Mine**. Use **Done** beside the chore, or open '
-                   'its card to read instructions and finish its checklist.\n'
-                   '\n'
-                   '**To take a chore:** Open **Chores → Available → choose a chore → Claim** to take just this occurrence. For longer signup options, open its card and use **Signup options**. '
-                   'The **chore name** opens the same card from any list.\n'
-                   '\n'
-                   '**To look ahead:** Open **Chores → Other dates**. Use **Everyone** for household work, '
-                   '**Available** to find chores to claim, and **Manage chores** for editing.\n'
-                   '\n'
-                   'Choose a topic below for the steps you need.',
+    TOPICS = {'Start here': 'Open **Chores** and choose **Mine**, **Available**, **Everyone**, or **Needs attention**.\n\nChoose a chore from the list dropdown to read instructions, **Claim** it, or mark it **Done**. The work card keeps everyday controls visible; **Actions…** holds signups and occasional tools.\n\n**Other dates** keeps your selected view, with day arrows and **Week calendar** for the week/month overview. **Manage chores** edits the catalog. The **gear** opens your personal Settings.\n\nAfter Done, use **Back to chores** when ready; the small **Undo** reverses your latest eligible action.',
      'Pick up a chore': 'Open **Available** on the daily sheet. Choose a chore from the dropdown, read its instructions, then press **✋ Claim**. This takes just this occurrence. The card stays open with **✓ Done** ready when you finish.\n\nUse **Actions… → Sign up** for a longer signup or repeating days. Each option names its scope. Weekly signups end Sunday at 6 p.m. Eastern; finishing today does not release the rest of the week.',
      'Finish a chore': '1. Open **Chores → Mine → choose a chore**.\n'
                        '2. Read the chore’s instructions. If it has a **Checklist**, check off its steps '
@@ -2315,8 +2353,8 @@ def install(ns, ui, lock):
                        'The points go to the Discord account that completes it. A repeating chore can become '
                        'due again; marking it Done completes only its current occurrence.\n'
                        '\n'
-                       'If something is stopping you, open its card and use **Stuck / need help** instead.',
-     'Drop, reassign, or trade': 'Open the chore card, then the action buttons.\n'
+                       'After Done, the short confirmation stays until you choose **Back to chores**. **Undo** restores the work and removes its points. If something is stopping you, use **Need help** instead.',
+     'Drop, reassign, or trade': 'Open the chore card, then **Actions…**.\n'
                                  '\n'
                                  '**Drop responsibility** gives up your responsibility without completing the '
                                  'work. **Reassign** gives it to another person. Check whether the '
@@ -2523,7 +2561,8 @@ def install(ns, ui, lock):
                 description=getattr(getattr(source,'embed',None),'description',None) or ''
                 actions=[getattr(item,'label','') for item in source.children if isinstance(item,discord.ui.Button) and item.label not in ('Back','Dashboard')]
                 instructions=(description+'\n\n' if description else '')+'Use '+(', '.join('**'+label+'**' for label in actions) if actions else 'the choices on this screen')+' to continue. Back returns without confirming an action; Dashboard opens the main menu.'
-            if kind=='Card':instructions='Read this chore’s instructions. **Claim** takes this occurrence; after claiming, **Done** completes it. **Skip** skips only this occurrence without points. **Need help** records a problem; required checklist steps must be finished before Done.\n\nUse **Actions…** for signups, reassigning, trades, editing, dates and history. Each choice includes its scope or description. **Back to list** returns to the sheet and preserves its view. One small **↶ Undo** names your latest reversible Done or Skip at the bottom.'
+            if kind=='Card':instructions='Read this chore’s instructions. **Claim** takes this occurrence; after claiming, **Done** completes it. **Skip** skips only this occurrence without points. **Need help** records a problem; required checklist steps must be finished before Done.\n\nUse **Actions…** for signups, reassigning, trades, editing, dates and history. Each choice includes its scope or description. **Back to chores** returns to the sheet and preserves its view. One small **↶ Undo** names your latest reversible Done or Skip at the bottom.'
+            elif kind=='Chores':instructions=TOPICS['Start here']+'\n\n**Needs attention** combines Overdue, Needs someone and Blocked work today. On other dates it shows projected unclaimed work; current help and overdue labels are not carried into future occurrences.'
             elif kind=='Attention':instructions='This list combines **Overdue**, **Needs someone**, and **Blocked** work. A chore appears once even when several labels apply. Due today does not automatically mean overdue.\n\nPress **Details** beside a chore to inspect or act. Back returns to this list page; Refresh reads the latest state.'
             elif kind=='Confirm':instructions='Read the proposed change above before confirming. Back leaves it unsaved. Opening Help never confirms or repeats the action.'
             elif kind=='ButtonChoices':instructions='Press a choice to select it. If several choices are allowed, toggle them and press Apply. Back returns without applying these choices.'

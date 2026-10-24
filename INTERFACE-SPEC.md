@@ -294,3 +294,18 @@ Successful Confirm drop now opens Chores directly with a short result notice. Th
 
 ### Action-first labels in local 2.1.2
 Approved menu refinement: action names lead; categories move into the retained descriptions. People/Schedule choices use a native category icon plus a distinct action icon in the label where useful; other choices retain one icon. Related ordering and original callbacks unchanged. Refreshed actual-source approximate local review; 9 focused menu/drop tests passed (sprig-action-labels-focused.json), narrow overflow none. Includes pending direct-drop return. No push/deployment. Full exact-source release testing remains required.
+
+
+## Prepared 2.1.3 — finished chore cards
+Completed chore cards show Done — nice work!, Completed instructions in secondary text and a quiet next-return line. Back to chores is the primary button; the existing latest-eligible Undo stays small and neutral at the bottom. Claim/Done/Skip/Need help controls are absent from completed cards; the described Actions menu retains occasional tools. Active chore cards and completion/points/schedule/undo rules are unchanged. Local review only.
+
+
+### Short Done confirmation in local 2.1.3
+Approved refinement: immediately after a successful completion, show only the checked chore name, Done — nice work!, awarded points and quiet return date, with primary Back to chores and the existing quiet Undo. No instructions or Actions menu in this immediate receipt. Reopening the chore still exposes completed details/tools. No automatic navigation or domain changes. Two focused completion/menu tests passed, including real completion, Undo and reopened tools (sprig-short-done-focused.json). Actual-source approximate preview refreshed: completion uses 15 components, narrow overflow none, image inspected. No push/deployment; full final-source testing remains required.
+
+
+## Prepared 2.2.0 — consistent main chore screens
+Chores uses one compact native list card with Mine, Available, Everyone and Needs attention in a fixed toolbar. Eight items remain the default; existing personal list-length settings are preserved. Other dates uses the same four views and day arrows, preserving scope through paging, Back, Settings and recovery. Existing week/month Calendar remains available under Week calendar. On future dates Needs attention shows projected unclaimed work; current-day overdue/help labels are never projected into the future. Today uses the existing attention classification and normal schedule reset rules.
+Completed work leaves today’s active lists; Undo restores it and future occurrences remain projected normally. The immediate Done receipt shows the checked name, points, return date, Back to chores and quiet Undo; reopening retains details/tools. Claim/Back and Back/Done positions keep double-click safety. One described Actions menu retains signup and advanced callbacks. Settings remains direct controls behind the gear with visible Back. Manage chores uses an eight-item catalog card with a direct native edit-form chooser and management actions below content; Household tools remains available. Notices sit below paging, not above the title. No live preferences, points, schedules or announcement choices are changed by preparing this interface. Local only, not pushed/deployed.
+
+Catalog editing opens the existing prefilled native form directly and returns to the same catalog context after saving. Cancel leaves the catalog in place; validation and stale-snapshot checks still apply.
