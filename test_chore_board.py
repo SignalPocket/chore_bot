@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.4.0')
+        self.assertEqual(chore_board.APP_VERSION,'2.5.0')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.4.0. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.5.0. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -2660,8 +2660,8 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(w.HouseholdColors(10,guild).identities,{'kas':'20','zel':'30'})
         panel=w.render(w.HouseholdColors(10,guild));panel.to_components();self.assertLessEqual(panel.total_children_count,40)
         recovered=w.recovery.restore(10,{'screen':'household_colors'},guild)
-        self.assertIsInstance(recovered,w.HouseholdColors)
-        self.assertEqual(recovered.identities,{'kas':'20','zel':'30'})
+        self.assertIsInstance(recovered,w.People)
+        self.assertEqual(dict(self.db.execute('SELECT role,user_id FROM household_identities')),{'kas':'20','zel':'30'})
 
     async def test_household_colors_preserve_custom_and_reject_stale_wrong_duplicate_bot(self):
         w=self.ui.workspace;guild=SimpleNamespace(id=1)
@@ -2687,10 +2687,64 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_household_setup_opens_colors_without_saving_attendance(self):
         w=self.ui.workspace;event=Interaction();event.user.guild_permissions=SimpleNamespace(manage_guild=True)
         setup=w.render(w.adapt(self.ui.HouseholdSetup(10),10))
-        await self.activate(setup,'Household colors',event)
-        self.assertIsInstance(self.rendered(event).source,w.HouseholdColors)
+        await self.activate(setup,'Manage people',event)
+        self.assertIsInstance(self.rendered(event).source,w.People)
         self.assertFalse(self.db.execute('SELECT * FROM alternating_members').fetchall())
         self.assertFalse(self.db.execute('SELECT * FROM household_identities').fetchall())
+
+    async def test_generic_people_profiles_five_accounts_preserve_history_and_schedules(self):
+        w=self.ui.workspace;guild=SimpleNamespace(id=1)
+        members={uid:SimpleNamespace(id=uid,bot=False,guild=guild,display_name='Discord '+str(uid),name='user'+str(uid)) for uid in (10,20,30,40,50)}
+        guild.get_member=lambda uid:members.get(uid)
+        self.db.executemany('INSERT OR IGNORE INTO users(id,points) VALUES(?,?)',[(str(uid),uid) for uid in members])
+        self.db.execute("INSERT INTO alternating_members VALUES('20')")
+        self.db.execute("INSERT INTO person_colors VALUES('30','blue')");self.db.commit()
+        before=(self.db.execute('SELECT * FROM users').fetchall(),self.db.execute('SELECT * FROM alternating_members').fetchall(),self.db.execute('SELECT * FROM quests').fetchall())
+        for uid,name,color,icon in ((10,'Katie','green','🌿'),(20,'Kas','pink','🌸'),(30,'Zel','orange','🌙'),(40,'Dar','lavender','⭐'),(50,'John','blue','🍃')):
+            self.assertIn('saved',w.save_profile(uid,name,icon,color,(None,('blue',)) if uid==30 else (None,None)))
+        self.assertEqual(before,(self.db.execute('SELECT * FROM users').fetchall(),self.db.execute('SELECT * FROM alternating_members').fetchall(),self.db.execute('SELECT * FROM quests').fetchall()))
+        for uid in members:
+            members[uid].display_name='Renamed Discord account'
+            self.assertNotIn('Renamed Discord account',w.person(uid,guild))
+        self.assertIn('John',w.person(50,None));self.assertIn('🍃',w.person(50,None))
+        self.assertEqual(w.color_key(30,None),'orange')
+        people=w.People(10,guild);self.assertEqual(set(people.name_ids),{'10','20','30','40','50'})
+        self.assertEqual(w.People(10,guild,query='John').name_ids,['50'])
+        self.assertFalse(self.db.execute('SELECT * FROM reminder_settings').fetchall())
+        for source in (people,w.PersonProfile(10,'50',guild)):
+            panel=w.render(source);panel.to_components();self.assertLessEqual(panel.total_children_count,40)
+            recovered=w.recovery.restore(10,w.recovery.bookmark(source),guild)
+            self.assertEqual(w.recovery.bookmark(recovered),w.recovery.bookmark(source))
+
+    async def test_generic_profile_edit_permissions_stale_and_atomic_rollback(self):
+        w=self.ui.workspace;source=w.PersonProfile(10,'20')
+        modal=w.ProfileModal(source);modal.name._value='A new name';modal.icon._value='🌿'
+        event=Interaction(20);event.user.guild_permissions=SimpleNamespace(manage_guild=True)
+        await modal.on_submit(event);self.assertFalse(self.db.execute('SELECT * FROM household_profiles').fetchall())
+        event=Interaction();event.user.guild_permissions=SimpleNamespace(manage_guild=False)
+        await modal.on_submit(event);self.assertFalse(self.db.execute('SELECT * FROM household_profiles').fetchall())
+        event.user.guild_permissions.manage_guild=True
+        await modal.on_submit(event);self.assertEqual(self.db.execute("SELECT display_name,icon FROM household_profiles WHERE user_id='20'").fetchone(),('A new name','🌿'))
+        await modal.on_submit(event);self.assertEqual(self.db.execute("SELECT revision FROM household_profiles WHERE user_id='20'").fetchone(),(1,))
+        expected=(None,None)
+        self.db.execute("CREATE TRIGGER block_profile_color BEFORE INSERT ON person_colors WHEN NEW.user_id='30' BEGIN SELECT RAISE(ABORT,'test failure'); END;");self.db.commit()
+        with self.assertRaises(sqlite3.IntegrityError):w.save_profile('30','Test','🌙','orange',expected)
+        self.assertIsNone(self.db.execute("SELECT * FROM household_profiles WHERE user_id='30'").fetchone())
+        self.assertIn('Choose',w.save_profile('30','bad\nname','','blue',expected))
+
+    async def test_generic_person_calendar_keeps_person_on_day_and_week(self):
+        w=self.ui.workspace
+        self.db.execute("UPDATE quests SET assigned_to='20' WHERE id=1");self.db.commit()
+        with self.clock('2026-11-08T09:00:00'):
+            event=Interaction();event.user.guild_permissions=SimpleNamespace(manage_guild=True)
+            panel=w.render(w.PersonProfile(10,'20',event.guild))
+            await self.activate(panel,'Calendar',event);calendar=self.rendered(event)
+            self.assertEqual(calendar.source.state['who'],'20')
+            self.assertTrue(all(uid=='20' for _,_,uid in calendar.source.entries))
+            event=Interaction();await self.activate(calendar,'Week view',event)
+            self.assertEqual(self.rendered(event).source.state['who'],'20')
+            self.assertEqual(self.rendered(event).source.state['mode'],'week')
+            self.assertTrue(all(uid=='20' for _,_,uid in self.rendered(event).source.entries))
 
     async def test_household_setup_requires_admin_and_selection(self):
         view = self.ui.HouseholdSetup(10)

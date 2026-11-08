@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.4.0'
+APP_VERSION = '2.5.0'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'Household setup can save Kas and Zel account colors by Discord ID.'
+RELEASE_SUMMARY = 'Generic household setup manages people, names, colors, icons and individual calendars and schedules.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 
@@ -1205,29 +1205,20 @@ def install(namespace):
     class HouseholdSetup(SafeView):
         def __init__(self, owner):
             super().__init__(timeout=600)
-            self.owner = owner
-            self.members = None
-            select = discord.ui.UserSelect(placeholder="Select Kas and Zel's two Discord accounts", min_values=2, max_values=2)
-            async def choose(interaction):
-                if any(m.bot for m in select.values):
-                    await interaction.response.send_message("Select two people, not bot accounts.", ephemeral=True)
-                    return
-                self.members = [str(m.id) for m in select.values]
-                names = ', '.join(discord.utils.escape_markdown(m.display_name) for m in select.values)
-                await interaction.response.edit_message(content=f"Alternating-week people: **{names}**.\nAway Oct 18–25, 2026; home Oct 25–Nov 1. Switch Sunday 6 p.m. Eastern.\nTap Save to confirm these accounts.", view=self, allowed_mentions=discord.AllowedMentions.none())
-            select.callback = choose
-            self.add_item(select)
-            button = discord.ui.Button(label="Save household", style=discord.ButtonStyle.success)
-            button.callback = self.save
-            self.add_item(button)
-            colors=discord.ui.Button(label='Household colors',row=1)
-            async def open_colors(i):
+            self.owner=owner
+            self.members=None  # Retain compatibility with the historical setup API.
+            self.embed=discord.Embed(title='Household setup',description='Manage each person’s Discord account, display name, color, icon, regular schedule and date exceptions.',color=0x6B9B77)
+            self.recovery_context={'screen':'household_setup'}
+            async def people(i):
                 if not await self.interaction_check(i):return
-                await workspace.present(i,workspace.HouseholdColors(self.owner,i.guild))
-            colors.callback=open_colors;self.add_item(colors)
+                await workspace.present(i,workspace.People(owner,i.guild))
+            async def calendar(i):
+                if not await self.interaction_check(i):return
+                await workspace.present(i,workspace.Chores(owner,i.guild,mode='date',who='everyone'))
+            for label,callback in (('Manage people',people),('Household calendar',calendar)):
+                button=discord.ui.Button(label=label,style=discord.ButtonStyle.primary if label=='Manage people' else discord.ButtonStyle.secondary)
+                button.callback=callback;self.add_item(button)
             self.add_dashboard()
-            if hasattr(self,'embed'):
-                self.embed.color=0x6B9B77
 
         async def interaction_check(self, interaction):
             if interaction.user.id != self.owner or not allowed(interaction) or not interaction.user.guild_permissions.manage_guild:
@@ -2005,7 +1996,7 @@ def install(namespace):
             if not interaction.user.guild_permissions.manage_guild:
                 await interaction.response.send_message("Household setup is for server administrators.", ephemeral=True)
                 return
-            await interaction.response.send_message("Select Kas and Zel's Discord accounts, then Save. Weeks switch Sunday at 6 p.m. Eastern; Oct 18, 2026 starts an away week.", view=HouseholdSetup(interaction.user.id), ephemeral=True)
+            await interaction.response.send_message("Manage people, personal calendars, colors, icons and home/away schedules.", view=HouseholdSetup(interaction.user.id), ephemeral=True)
 
         @discord.ui.button(label="Add chore", style=discord.ButtonStyle.success, custom_id="sprig:add:v1")
         async def add_button(self, interaction, button):

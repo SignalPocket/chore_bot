@@ -605,3 +605,12 @@ When Reassign opens from a chore, Confirm reassignment returns directly to the o
 ## Prepared 2.4.0 — household account colors
 
 Open Household tools → Household setup → Household colors. Select Kas’s and Zel’s Discord accounts separately. Keep current color preserves each saved marker; if none is saved, Kas defaults to pink and Zel to orange. You can explicitly choose another color or No marker, then Save colors. The choices are stored by Discord account ID and survive nickname changes. Saving household colors does not change home/away schedules or alternating-week membership. Individuals retain their own name-marker settings. Expired setup screens reopen saved settings; unsaved selections are not applied.
+
+
+## Prepared 2.5.0 — generic household setup
+
+Household setup → Manage people lists known household accounts. Use Find or add a Discord account for someone missing from the list. Open a person to change their display name, icon, or color/marker; these are saved against their Discord ID. Blank display name uses the Discord name. Clear the icon to remove it; No marker hides the color marker. Existing personal marker choices remain editable through Settings.
+
+Each person has Regular schedule, Trips and date exceptions, and Calendar. Regular schedule offers always home/away, selected weekdays, or alternating cycle A/B. Cycles retain the existing Sunday 6 p.m. Eastern handoff; cycle A is home on the week beginning October 25, 2026, and cycle B on the week beginning October 18. Existing household defaults and historical alternating membership are preserved unless explicitly edited. Day/week calendar switches keep the selected person. Household calendar shows everyone. Profile setup does not rewrite assignments, scores, attendance or reminder preferences.
+
+Household setup is administered through Manage Server access. Routine attendance and personal settings keep their existing permissions. Saved profiles and navigation survive restart; unsaved modal/draft edits are never replayed.

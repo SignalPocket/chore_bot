@@ -1,3 +1,9 @@
+# 2.5.0 — 2026-11-08
+
+- Replace name-specific Household setup controls with Manage people and Household calendar. Any household Discord account can have a saved display name, independent icon and marker, personal schedule, trips/exceptions and filtered day/week calendar.
+- Keep existing accounts, scores, assignments, saved colors, rotation defaults and exception history. Legacy role mappings remain readable for compatibility and old setup bookmarks open the generic People list.
+- Admin-only profile edits validate fields, reject stale settings, and save identity/marker changes atomically. Personal calendar day/week switches keep the selected person.
+
 # 2.4.0 — 2026-11-08
 
 - Household setup → Household colors lets an administrator identify Kas and Zel by Discord account and save account-bound markers. Defaults are Kas pink and Zel orange. Existing saved markers are preserved unless explicitly changed. Identity/color setup is separate from attendance, so saving colors does not modify rotation or exceptions.

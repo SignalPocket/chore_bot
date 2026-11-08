@@ -34,6 +34,7 @@ def install(ns, ui, lock):
     CREATE TABLE IF NOT EXISTS skip_undo_state(skip_id INTEGER PRIMARY KEY,expected TEXT NOT NULL,previous_policy TEXT NOT NULL,undone_at TEXT);''')
     db.execute("CREATE TABLE IF NOT EXISTS person_colors(user_id TEXT PRIMARY KEY,color TEXT NOT NULL)")
     db.execute("CREATE TABLE IF NOT EXISTS household_identities(role TEXT PRIMARY KEY CHECK(role IN ('kas','zel')),user_id TEXT UNIQUE NOT NULL)")
+    db.execute("CREATE TABLE IF NOT EXISTS household_profiles(user_id TEXT PRIMARY KEY,display_name TEXT NOT NULL DEFAULT '',icon TEXT NOT NULL DEFAULT '',revision INTEGER NOT NULL DEFAULT 0)")
     db.commit()
     COLORS={'lavender':('🟣','Lavender'),'blue':('🔵','Blue'),'pink':('🩷','Pink'),'orange':('🟠','Orange'),'green':('🟢','Green'),'yellow':('🟡','Yellow'),'red':('🔴','Red'),'white':('⚪','White'),'black':('⚫','Black'),'brown':('🟤','Brown'),'star':('🌟','Star'),'flower':('🌸','Flower'),'leaf':('🍃','Leaf'),'moon':('🌙','Moon'),'paws':('🐾','Paw prints'),'none':('','No marker')}
     def color_key(uid,guild=None,name=None):
@@ -71,8 +72,11 @@ def install(ns, ui, lock):
             saved=db.execute('SELECT guild_id FROM chore_board WHERE singleton=1').fetchone()
             if saved:cached=name_cache.get((int(saved[0]),str(uid)))
         name=member.display_name if member else (cached[1] if cached else f'<@{uid}>' if uid else 'Needs someone')
+        profile=db.execute('SELECT display_name,icon FROM household_profiles WHERE user_id=?',(str(uid),)).fetchone() if uid else None
         marker=COLORS[color_key(uid,guild,name)][0] if uid else ''
-        return (marker+' ' if marker else '')+name
+        if profile and profile[0]:name=profile[0]
+        icon=profile[1] if profile else ''
+        return ' '.join(v for v in (marker,icon,name) if v)
 
     async def prime_names(i,ids):
         if not getattr(i.guild,'get_member',None):return
@@ -244,6 +248,100 @@ def install(ns, ui, lock):
                 await present(i,ListLength(owner),'List length saved for your account.')
             picker.callback=save;self.add_item(picker)
             self.nav()
+
+    class HouseholdAdmin(View):
+        async def interaction_check(self,i):
+            if not await super().interaction_check(i):return False
+            if not getattr(getattr(i.user,'guild_permissions',None),'manage_guild',False):
+                await i.response.send_message('Household setup is managed by a server administrator.',ephemeral=True)
+                return False
+            return True
+
+    def profile_snapshot(uid):
+        return (db.execute('SELECT display_name,icon,revision FROM household_profiles WHERE user_id=?',(str(uid),)).fetchone(),
+                db.execute('SELECT color FROM person_colors WHERE user_id=?',(str(uid),)).fetchone())
+
+    def save_profile(uid,name,icon,color,expected):
+        uid=str(uid);name=str(name).strip();icon=str(icon).strip()
+        if not uid.isdecimal() or len(name)>60 or len(icon)>16 or any(ord(c)<32 for c in name+icon) or color not in COLORS:
+            return 'Choose a listed color, a single-line name up to 60 characters, and an icon up to 16 characters.'
+        if profile_snapshot(uid)!=expected:return 'This person’s settings changed. Reopen their profile before saving.'
+        with db:
+            row=expected[0];revision=(row[2] if row else 0)+1
+            db.execute('INSERT INTO household_profiles VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET display_name=excluded.display_name,icon=excluded.icon,revision=excluded.revision',(uid,name,icon,revision))
+            db.execute('INSERT INTO person_colors VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET color=excluded.color',(uid,color))
+            db.execute('INSERT OR IGNORE INTO users(id) VALUES(?)',(uid,))
+        return 'Person settings saved. Refresh chore lists to see the changes.'
+
+    class People(HouseholdAdmin):
+        def __init__(self,owner,guild=None,page=0,query=''):
+            super().__init__(owner);self.guild=guild;query=str(query).strip()[:100]
+            known=household_people(owner,guild)
+            known=sorted([uid for uid in known if not query or query.casefold() in person(uid,guild).casefold() or query in uid],key=lambda uid:(person(uid,guild).casefold(),int(uid)))
+            size=page_size(owner);page=min(max(int(page),0),max((len(known)-1)//size,0))
+            self.recovery_context={'screen':'people','page':page,'query':query}
+            self.rebuild=lambda:People(owner,guild,page,query)
+            self.name_ids=known[page*size:(page+1)*size]
+            self.embed=discord.Embed(title='People',description='Choose a person to manage their name, color, icon, regular home/away schedule, date exceptions, or calendar. Add anyone through the Discord account picker.',color=0x6B9B77)
+            for index,uid in enumerate(self.name_ids):
+                self.embed.add_field(name=clean(person(uid,guild),100),value=f'Discord ID {uid} · '+ui.attendance.describe(uid),inline=False)
+                self.button('Open '+clean(person(uid,guild),45)+' · '+uid,lambda i,uid=uid:present(i,PersonProfile(owner,uid,i.guild,page,query)),row=index//5)
+            picker=discord.ui.UserSelect(placeholder='Find or add a Discord account',row=2)
+            async def choose(i):
+                if not await self.interaction_check(i):return
+                member=picker.values[0]
+                if member.bot or getattr(getattr(member,'guild',None),'id',None)!=i.guild_id:
+                    return await i.response.send_message('Choose a person in this household server.',ephemeral=True)
+                await present(i,PersonProfile(owner,str(member.id),i.guild,page,query))
+            picker.callback=choose;self.add_item(picker)
+            self.button('Search people',lambda i:i.response.send_modal(PeopleSearch(self)),row=3)
+            self.button('Previous',lambda i:present(i,People(owner,i.guild,page-1,query)),row=3,disabled=page==0)
+            self.button('Next',lambda i:present(i,People(owner,i.guild,page+1,query)),row=3,disabled=(page+1)*size>=len(known))
+            self.embed.set_footer(text=f'Page {page+1} · {len(known)} people')
+            self.nav(lambda:adapt(ui.HouseholdSetup(owner),owner))
+
+    class PeopleSearch(discord.ui.Modal):
+        def __init__(self,source):
+            super().__init__(title='Find a person');self.source=source
+            self.term=discord.ui.TextInput(label='Name or Discord account ID',required=False,max_length=100,default=source.recovery_context['query']);self.add_item(self.term)
+        async def on_submit(self,i):
+            if not await self.source.interaction_check(i):return
+            await present(i,People(self.source.owner,i.guild,query=self.term.value))
+
+    class ProfileModal(discord.ui.Modal):
+        def __init__(self,source):
+            super().__init__(title='Person name and icon');self.source=source
+            profile=source.expected[0]
+            self.name=discord.ui.TextInput(label='Display name (blank uses Discord name)',required=False,max_length=60,default=profile[0] if profile else '')
+            self.icon=discord.ui.TextInput(label='Icon or emoji (optional)',required=False,max_length=16,default=profile[1] if profile else '')
+            self.add_item(self.name);self.add_item(self.icon)
+        async def on_submit(self,i):
+            source=self.source
+            if not await source.interaction_check(i):return
+            async with lock:notice=save_profile(source.uid,self.name.value,self.icon.value,source.color,source.expected)
+            await present(i,PersonProfile(source.owner,source.uid,i.guild,source.page,source.query),notice)
+
+    class PersonProfile(HouseholdAdmin):
+        def __init__(self,owner,uid,guild=None,page=0,query=''):
+            super().__init__(owner);uid=str(uid);self.uid=uid;self.page=page;self.query=query
+            self.expected=profile_snapshot(uid);self.color=color_key(uid,guild)
+            self.recovery_context={'screen':'person_profile','uid':uid,'page':page,'query':query}
+            self.rebuild=lambda:PersonProfile(owner,uid,guild,page,query)
+            self.name_ids=[uid]
+            self.embed=discord.Embed(title='Person settings',description=clean(person(uid,guild),150)+f'\nDiscord account ID: {uid}',color=0x6B9B77)
+            self.embed.add_field(name='Regular schedule',value=ui.attendance.describe(uid),inline=False)
+            self.button('Name and icon',lambda i:i.response.send_modal(ProfileModal(self)),row=0)
+            picker=discord.ui.Select(placeholder='Color or marker',row=1,options=[discord.SelectOption(label=label,value=key,emoji=emoji or None,default=key==self.color) for key,(emoji,label) in COLORS.items()])
+            async def choose_color(i):
+                if not await self.interaction_check(i):return
+                profile=self.expected[0]
+                async with lock:notice=save_profile(uid,profile[0] if profile else '',profile[1] if profile else '',picker.values[0],self.expected)
+                await present(i,PersonProfile(owner,uid,i.guild,page,query),notice)
+            picker.callback=choose_color;self.add_item(picker)
+            self.button('Regular schedule',lambda i:present(i,UsualSchedule(owner,[uid],i.guild)),row=2)
+            self.button('Trips and date exceptions',lambda i:present(i,Trips(owner,i.guild,[uid])),row=2)
+            self.button('Calendar',lambda i:present(i,Chores(owner,i.guild,mode='date',who=uid)),row=2)
+            self.nav(lambda:People(owner,guild,page,query))
 
     def household_color_snapshot():
         return (db.execute('SELECT role,user_id FROM household_identities ORDER BY role').fetchall(),
@@ -447,7 +545,8 @@ def install(ns, ui, lock):
             def button(label,callback,disabled=False):
                 item=discord.ui.Button(label=label,style=discord.ButtonStyle.secondary,disabled=disabled);item.callback=callback;return item
             catalog=state['mode']=='all'
-            title='Manage chores' if catalog else 'Chores'
+            personal=state['who'] not in ('mine','unclaimed','everyone','attention')
+            title='Manage chores' if catalog else clean(person(state['who'],self.guild),80)+' · Calendar' if personal else 'Chores'
             frame.heading(discord.ui.TextDisplay('# '+title),page_help_button(self))
             if not catalog:
                 tabs=[]
@@ -475,6 +574,7 @@ def install(ns, ui, lock):
                     labels=(['Overdue'] if row and row[1] else [])+(['Needs someone'] if not uid else [])+(['Blocked · '+row[3][4]] if row and row[3] else [])
                     lines.append('-# '+' · '.join(labels+([clean(person(uid,self.guild),60)] if uid else [])))
             heading='CHORE CATALOG' if catalog else {'mine':'YOUR CHORES','unclaimed':'AVAILABLE TO CLAIM','attention':'NEEDS ATTENTION'}.get(state['who'],'EVERYONE’S CHORES')
+            if personal and not catalog:heading=clean(person(state['who'],self.guild),80)+' — CHORES'
             listing=discord.ui.Container(accent_colour=0x6B9B77)
             empty='You’re caught up ✅' if state['who']=='mine' and not catalog and not state['query'] else 'All clear. No chores match this view. Try Everyone or another date.'
             listing.add_item(discord.ui.TextDisplay('**'+heading+'**\n\n'+('\n'.join(lines) if lines else empty)))
@@ -524,6 +624,8 @@ def install(ns, ui, lock):
                 frame.rows([button('Back to chores',lambda i:present(i,target(i,mode='today',day=timing.now().date().isoformat(),who='mine',query='',page=0))),button('Household tools',lambda i:present(i,Dashboard(owner,i.guild,i.user)))])
             else:
                 navigation=[button('Back to today',lambda i:present(i,target(i,mode='today',day=timing.now().date().isoformat(),page=0))),button('Week calendar',lambda i:present(i,ui.planning.Calendar(owner,i.guild,day=day,mine=state['who']=='mine')))] if state['mode']=='date' else [button('Other dates',lambda i:present(i,target(i,mode='date',page=0)))]
+                if personal:
+                    navigation=[button('Day view',lambda i:present(i,target(i,mode='date',page=0))),button('Week view',lambda i:present(i,target(i,mode='week',page=0))),button('Person settings',lambda i:present(i,PersonProfile(owner,state['who'],i.guild)))]
                 if state['who']=='mine':navigation.append(button('Quick Done',lambda i:present(i,Browse(owner,area='mine',tab='due',guild=i.guild))))
                 navigation.append(button('Manage chores',lambda i:present(i,target(i,mode='all',who='everyone',query='',page=0))))
                 frame.rows(navigation)
@@ -2303,7 +2405,7 @@ def install(ns, ui, lock):
             # Accounts are keyed by Discord ID; never replace existing scores or preferences.
             with db:db.executemany('INSERT OR IGNORE INTO users(id) VALUES(?)',[(uid,) for uid in members])
             ids.update(members)
-        for query in ('SELECT id FROM users','SELECT user_id FROM alternating_members',
+        for query in ('SELECT id FROM users','SELECT user_id FROM household_profiles','SELECT user_id FROM person_colors','SELECT user_id FROM household_identities','SELECT user_id FROM alternating_members',
                       'SELECT user_id FROM availability_defaults','SELECT user_id FROM availability_exceptions',
                       'SELECT user_id FROM claims','SELECT user_id FROM week_signups',
                       'SELECT user_id FROM repeating_signups','SELECT assigned_to FROM quests WHERE assigned_to IS NOT NULL'):
@@ -2404,7 +2506,7 @@ def install(ns, ui, lock):
             back=lambda:UsualSchedule(owner,people,guild,mode,days,expected,roster_page)
             self.embed=discord.Embed(title='Usual schedule',description='Set the default for the selected people. Date overrides still win. This does not move chores or give them to someone else.',color=0x6B9B77)
             self.embed.add_field(name='Current defaults',value='\n'.join(clean(person(uid,guild),70)+' · '+ui.attendance.describe(uid) for uid in people) or 'Choose people in Who’s home?',inline=False)
-            modes=[('Use household default','household'),('Home every day','home'),('Away every day','away'),('Home on selected weekdays','weekly'),('Alternating: same weeks as Kas/Zel','same'),('Alternating: opposite weeks','opposite')]
+            modes=[('Use household default','household'),('Home every day','home'),('Away every day','away'),('Home on selected weekdays','weekly'),('Alternating: cycle A','same'),('Alternating: cycle B','opposite')]
             picker=discord.ui.Select(placeholder='Choose their usual schedule',row=0,options=[discord.SelectOption(label=label,value=value,default=value==mode) for label,value in modes])
             async def choose(i):await present(i,UsualSchedule(owner,people,i.guild,picker.values[0],days,expected,roster_page))
             picker.callback=choose;self.add_item(picker)
@@ -2689,7 +2791,7 @@ def install(ns, ui, lock):
 
     TOPICS['Your color']='Open **Settings → Your color** and choose a marker.\n\nChoosing saves immediately. **No marker** removes it. Everyone sees it on refreshed workspace screens; responsibility and points stay unchanged.'
 
-    result = SimpleNamespace(HouseholdColors=HouseholdColors,ChoreMore=ChoreMore,PersonColor=PersonColor,color_key=color_key,sheet_size=sheet_size,Chores=Chores,PersonalSettings=PersonalSettings,browse_page_size=browse_page_size,PageHelp=PageHelp,screen_name=screen_name,PAGE_TOPICS=PAGE_TOPICS,ButtonChoices=ButtonChoices,ClaimChoices=ClaimChoices,Repeating=Repeating,OccurrenceDates=OccurrenceDates,FutureOccurrence=FutureOccurrence,FutureSlots=FutureSlots,skip_occurrence=skip_occurrence,undo_skip=undo_skip,undoable_skip=undoable_skip,UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
+    result = SimpleNamespace(People=People,PersonProfile=PersonProfile,save_profile=save_profile,ProfileModal=ProfileModal,HouseholdColors=HouseholdColors,ChoreMore=ChoreMore,PersonColor=PersonColor,color_key=color_key,sheet_size=sheet_size,Chores=Chores,PersonalSettings=PersonalSettings,browse_page_size=browse_page_size,PageHelp=PageHelp,screen_name=screen_name,PAGE_TOPICS=PAGE_TOPICS,ButtonChoices=ButtonChoices,ClaimChoices=ClaimChoices,Repeating=Repeating,OccurrenceDates=OccurrenceDates,FutureOccurrence=FutureOccurrence,FutureSlots=FutureSlots,skip_occurrence=skip_occurrence,undo_skip=undo_skip,undoable_skip=undoable_skip,UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
 
     from chore_recovery import install as install_recovery
     recovery = install_recovery(ns, ui, result)

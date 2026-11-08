@@ -55,11 +55,11 @@ class HouseholdAvailability:
         days=json.loads(saved[1]) if weekdays is None else list(weekdays)
         if mode=='household':
             rotating=self.db.execute('SELECT 1 FROM alternating_members WHERE user_id=?',(str(user_id),)).fetchone()
-            return 'Household default: alternating Kas/Zel weeks' if rotating else 'Household default: home every day'
+            return 'Household default: alternating cycle A' if rotating else 'Household default: home every day'
         if mode=='home':return 'Home every day'
         if mode=='away':return 'Away every day'
-        if mode=='same':return 'Alternating weeks: home on Kas/Zel home weeks'
-        if mode=='opposite':return 'Alternating weeks: home on opposite weeks'
+        if mode=='same':return 'Alternating cycle A (home Oct 25 week)'
+        if mode=='opposite':return 'Alternating cycle B (home Oct 18 week)'
         labels=('Mon','Tue','Wed','Thu','Fri','Sat','Sun')
         return 'Home: '+(', '.join(labels[d] for d in sorted(days)) if days else 'no regular days')+'; away on other weekdays'
 
