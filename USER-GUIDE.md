@@ -600,3 +600,8 @@ Every week · ongoing can be assigned even when the selected person is away now,
 ## Prepared 2.3.2 — reassignment returns to your place
 
 When Reassign opens from a chore, Confirm reassignment returns directly to the original list or calendar view and shows the saved result there. Selected scope/date, search, filters and page are retained, subject to normal page clamping if the list shrinks. Cancel returns there without saving. Expired controls recover the original location without replaying the old assignment. Legacy standalone reassignment keeps its existing fallback.
+
+
+## Prepared 2.4.0 — household account colors
+
+Open Household tools → Household setup → Household colors. Select Kas’s and Zel’s Discord accounts separately. Keep current color preserves each saved marker; if none is saved, Kas defaults to pink and Zel to orange. You can explicitly choose another color or No marker, then Save colors. The choices are stored by Discord account ID and survive nickname changes. Saving household colors does not change home/away schedules or alternating-week membership. Individuals retain their own name-marker settings. Expired setup screens reopen saved settings; unsaved selections are not applied.

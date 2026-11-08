@@ -33,6 +33,7 @@ def install(ns, ui, lock):
     CREATE TABLE IF NOT EXISTS occurrence_skips(id INTEGER PRIMARY KEY AUTOINCREMENT,quest_id INTEGER NOT NULL,actor TEXT NOT NULL,skipped_at TEXT NOT NULL,next_due TEXT NOT NULL,previous_state TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS skip_undo_state(skip_id INTEGER PRIMARY KEY,expected TEXT NOT NULL,previous_policy TEXT NOT NULL,undone_at TEXT);''')
     db.execute("CREATE TABLE IF NOT EXISTS person_colors(user_id TEXT PRIMARY KEY,color TEXT NOT NULL)")
+    db.execute("CREATE TABLE IF NOT EXISTS household_identities(role TEXT PRIMARY KEY CHECK(role IN ('kas','zel')),user_id TEXT UNIQUE NOT NULL)")
     db.commit()
     COLORS={'lavender':('🟣','Lavender'),'blue':('🔵','Blue'),'pink':('🩷','Pink'),'orange':('🟠','Orange'),'green':('🟢','Green'),'yellow':('🟡','Yellow'),'red':('🔴','Red'),'white':('⚪','White'),'black':('⚫','Black'),'brown':('🟤','Brown'),'star':('🌟','Star'),'flower':('🌸','Flower'),'leaf':('🍃','Leaf'),'moon':('🌙','Moon'),'paws':('🐾','Paw prints'),'none':('','No marker')}
     def color_key(uid,guild=None,name=None):
@@ -243,6 +244,76 @@ def install(ns, ui, lock):
                 await present(i,ListLength(owner),'List length saved for your account.')
             picker.callback=save;self.add_item(picker)
             self.nav()
+
+    def household_color_snapshot():
+        return (db.execute('SELECT role,user_id FROM household_identities ORDER BY role').fetchall(),
+                db.execute('SELECT user_id,color FROM person_colors ORDER BY user_id').fetchall())
+
+    class HouseholdColors(View):
+        def __init__(self,owner,guild=None,identities=None,colors=None,expected=None):
+            super().__init__(owner)
+            self.guild=guild
+            self.identities=dict(db.execute('SELECT role,user_id FROM household_identities')) if identities is None else dict(identities)
+            self.colors=dict(colors or {'kas':'keep','zel':'keep'})
+            self.expected=household_color_snapshot() if expected is None else expected
+            self.recovery_context={'screen':'household_colors'}
+            self.embed=discord.Embed(title='Household colors',description='Choose Kas and Zel by their Discord accounts. Keep current color preserves a saved choice; otherwise Kas starts pink and Zel orange. Save colors once when ready.',color=0x6B9B77)
+            for index,(role,label) in enumerate((('kas','Kas'),('zel','Zel'))):
+                uid=self.identities.get(role)
+                self.embed.add_field(name=label,value=(clean(person(uid,guild),100)+f' · ID {uid}') if uid else 'Choose the Discord account below.',inline=False)
+                picker=discord.ui.UserSelect(placeholder=label+' — Discord account',row=index)
+                if uid:picker.default_values=[discord.SelectDefaultValue(id=int(uid),type=discord.SelectDefaultValueType.user)]
+                async def choose(i,role=role,picker=picker):
+                    if not await self.interaction_check(i):return
+                    member=picker.values[0]
+                    if member.bot or getattr(getattr(member,'guild',None),'id',None)!=i.guild_id:
+                        return await i.response.send_message('Choose a person in this household server.',ephemeral=True)
+                    identities=dict(self.identities);identities[role]=str(member.id)
+                    await present(i,HouseholdColors(owner,i.guild,identities,self.colors,self.expected))
+                picker.callback=choose;self.add_item(picker)
+                color=discord.ui.Select(placeholder=label+' — color',row=index+2,options=[discord.SelectOption(label='Keep current color / use default',value='keep',default=self.colors.get(role)=='keep')]+[discord.SelectOption(label=name,value=key,emoji=emoji or None,default=self.colors.get(role)==key) for key,(emoji,name) in COLORS.items()])
+                async def choose_color(i,role=role,picker=color):
+                    if not await self.interaction_check(i):return
+                    value=picker.values[0]
+                    if value!='keep' and value not in COLORS:return await i.response.send_message('Choose a listed color.',ephemeral=True)
+                    colors=dict(self.colors);colors[role]=value
+                    await present(i,HouseholdColors(owner,i.guild,self.identities,colors,self.expected))
+                color.callback=choose_color;self.add_item(color)
+            self.button('Save colors',self.save,row=4,primary=True)
+            self.nav(lambda:adapt(ui.HouseholdSetup(owner),owner))
+
+        async def interaction_check(self,i):
+            if not await super().interaction_check(i):return False
+            if not getattr(getattr(i.user,'guild_permissions',None),'manage_guild',False):
+                await i.response.send_message('Household colors are managed by a server administrator.',ephemeral=True)
+                return False
+            return True
+
+        async def save(self,i):
+            if not await self.interaction_check(i):return
+            ids=[self.identities.get(role) for role in ('kas','zel')]
+            if any(not uid or not str(uid).isdecimal() for uid in ids) or ids[0]==ids[1]:
+                return await i.response.send_message('Choose two different Discord accounts for Kas and Zel.',ephemeral=True)
+            for uid in ids:
+                member=i.guild.get_member(int(uid))
+                if member is None and hasattr(i.guild,'fetch_member'):
+                    try:member=await i.guild.fetch_member(int(uid))
+                    except discord.HTTPException:member=None
+                if member is None or getattr(member,'bot',True) or getattr(getattr(member,'guild',None),'id',None)!=i.guild_id:
+                    return await i.response.send_message('Choose current household members before saving colors.',ephemeral=True)
+            async with lock:
+                if household_color_snapshot()!=self.expected:
+                    return await present(i,HouseholdColors(self.owner,i.guild),'Household accounts or colors changed. Review the current settings.')
+                if any(self.colors.get(role)!='keep' and self.colors.get(role) not in COLORS for role in ('kas','zel')):
+                    return await i.response.send_message('Choose a listed color.',ephemeral=True)
+                with db:
+                    db.execute('DELETE FROM household_identities')
+                    for role,uid,default in zip(('kas','zel'),ids,('pink','orange')):
+                        db.execute('INSERT INTO household_identities VALUES(?,?)',(role,uid))
+                        value=self.colors.get(role,'keep')
+                        if value=='keep':db.execute('INSERT OR IGNORE INTO person_colors VALUES(?,?)',(uid,default))
+                        else:db.execute('INSERT OR REPLACE INTO person_colors VALUES(?,?)',(uid,value))
+            await present(i,HouseholdColors(self.owner,i.guild),'Household colors saved. Refresh chore lists to see them.')
 
     class PersonColor(View):
         def __init__(self,owner,guild=None,back=None):
@@ -2618,7 +2689,7 @@ def install(ns, ui, lock):
 
     TOPICS['Your color']='Open **Settings → Your color** and choose a marker.\n\nChoosing saves immediately. **No marker** removes it. Everyone sees it on refreshed workspace screens; responsibility and points stay unchanged.'
 
-    result = SimpleNamespace(ChoreMore=ChoreMore,PersonColor=PersonColor,color_key=color_key,sheet_size=sheet_size,Chores=Chores,PersonalSettings=PersonalSettings,browse_page_size=browse_page_size,PageHelp=PageHelp,screen_name=screen_name,PAGE_TOPICS=PAGE_TOPICS,ButtonChoices=ButtonChoices,ClaimChoices=ClaimChoices,Repeating=Repeating,OccurrenceDates=OccurrenceDates,FutureOccurrence=FutureOccurrence,FutureSlots=FutureSlots,skip_occurrence=skip_occurrence,undo_skip=undo_skip,undoable_skip=undoable_skip,UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
+    result = SimpleNamespace(HouseholdColors=HouseholdColors,ChoreMore=ChoreMore,PersonColor=PersonColor,color_key=color_key,sheet_size=sheet_size,Chores=Chores,PersonalSettings=PersonalSettings,browse_page_size=browse_page_size,PageHelp=PageHelp,screen_name=screen_name,PAGE_TOPICS=PAGE_TOPICS,ButtonChoices=ButtonChoices,ClaimChoices=ClaimChoices,Repeating=Repeating,OccurrenceDates=OccurrenceDates,FutureOccurrence=FutureOccurrence,FutureSlots=FutureSlots,skip_occurrence=skip_occurrence,undo_skip=undo_skip,undoable_skip=undoable_skip,UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
 
     from chore_recovery import install as install_recovery
     recovery = install_recovery(ns, ui, result)

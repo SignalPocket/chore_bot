@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.3.2'
+APP_VERSION = '2.4.0'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'Confirming reassignment returns directly to your original chore list and page.'
+RELEASE_SUMMARY = 'Household setup can save Kas and Zel account colors by Discord ID.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 
@@ -1220,6 +1220,11 @@ def install(namespace):
             button = discord.ui.Button(label="Save household", style=discord.ButtonStyle.success)
             button.callback = self.save
             self.add_item(button)
+            colors=discord.ui.Button(label='Household colors',row=1)
+            async def open_colors(i):
+                if not await self.interaction_check(i):return
+                await workspace.present(i,workspace.HouseholdColors(self.owner,i.guild))
+            colors.callback=open_colors;self.add_item(colors)
             self.add_dashboard()
             if hasattr(self,'embed'):
                 self.embed.color=0x6B9B77

@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.3.2')
+        self.assertEqual(chore_board.APP_VERSION,'2.4.0')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.3.2. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.4.0. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -2642,6 +2642,55 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         with self.clock('2026-10-25T18:00:00'):
             self.assertIn(1, [r[0] for r in self.ui.rows(20, 'mine')])
             self.assertIsNone(self.db.execute('SELECT user_id FROM claims WHERE quest_id = 1').fetchone())
+
+    async def test_household_colors_save_ids_defaults_and_survive_nickname_change(self):
+        w=self.ui.workspace;guild=SimpleNamespace(id=1)
+        members={uid:SimpleNamespace(id=uid,bot=False,guild=guild,display_name='Unrelated nickname',name='account_'+str(uid)) for uid in (20,30)}
+        guild.get_member=lambda uid:members.get(uid)
+        event=Interaction();event.guild=guild;event.user.guild_permissions=SimpleNamespace(manage_guild=True)
+        source=w.HouseholdColors(10,guild,{'kas':'20','zel':'30'})
+        before=(self.db.execute('SELECT * FROM alternating_members').fetchall(),self.db.execute('SELECT * FROM availability_defaults').fetchall())
+        await source.save(event)
+        self.assertEqual(dict(self.db.execute('SELECT role,user_id FROM household_identities')),{'kas':'20','zel':'30'})
+        self.assertEqual(dict(self.db.execute('SELECT user_id,color FROM person_colors')),{'20':'pink','30':'orange'})
+        members[20].display_name='Changed again';members[30].display_name='Changed too'
+        self.assertEqual(w.color_key(20,guild),'pink');self.assertEqual(w.color_key(30,None),'orange')
+        self.assertEqual(before,(self.db.execute('SELECT * FROM alternating_members').fetchall(),self.db.execute('SELECT * FROM availability_defaults').fetchall()))
+        self.assertFalse(self.db.execute('SELECT * FROM reminder_settings').fetchall())
+        self.assertEqual(w.HouseholdColors(10,guild).identities,{'kas':'20','zel':'30'})
+        panel=w.render(w.HouseholdColors(10,guild));panel.to_components();self.assertLessEqual(panel.total_children_count,40)
+        recovered=w.recovery.restore(10,{'screen':'household_colors'},guild)
+        self.assertIsInstance(recovered,w.HouseholdColors)
+        self.assertEqual(recovered.identities,{'kas':'20','zel':'30'})
+
+    async def test_household_colors_preserve_custom_and_reject_stale_wrong_duplicate_bot(self):
+        w=self.ui.workspace;guild=SimpleNamespace(id=1)
+        members={uid:SimpleNamespace(id=uid,bot=uid==40,guild=guild,display_name='Person') for uid in (20,30,40)}
+        guild.get_member=lambda uid:members.get(uid)
+        def event(uid=10,admin=True):
+            i=Interaction(uid);i.guild=guild;i.user.guild_permissions=SimpleNamespace(manage_guild=admin);return i
+        self.db.execute("INSERT INTO person_colors VALUES('20','blue')");self.db.commit()
+        source=w.HouseholdColors(10,guild,{'kas':'20','zel':'30'})
+        for i in (event(20),event(admin=False)):
+            await source.save(i);self.assertFalse(self.db.execute('SELECT * FROM household_identities').fetchall())
+        await w.HouseholdColors(10,guild,{'kas':'20','zel':'20'}).save(event())
+        self.assertFalse(self.db.execute('SELECT * FROM household_identities').fetchall())
+        await w.HouseholdColors(10,guild,{'kas':'20','zel':'40'}).save(event())
+        self.assertFalse(self.db.execute('SELECT * FROM household_identities').fetchall())
+        await source.save(event());self.assertEqual(w.color_key(20),'blue');self.assertEqual(w.color_key(30),'orange')
+        stale=w.HouseholdColors(10,guild,colors={'kas':'pink','zel':'keep'})
+        self.db.execute("UPDATE person_colors SET color='green' WHERE user_id='20'");self.db.commit()
+        await stale.save(event());self.assertEqual(w.color_key(20),'green')
+        fresh=w.HouseholdColors(10,guild,colors={'kas':'pink','zel':'keep'})
+        await fresh.save(event());self.assertEqual(w.color_key(20),'pink')
+
+    async def test_household_setup_opens_colors_without_saving_attendance(self):
+        w=self.ui.workspace;event=Interaction();event.user.guild_permissions=SimpleNamespace(manage_guild=True)
+        setup=w.render(w.adapt(self.ui.HouseholdSetup(10),10))
+        await self.activate(setup,'Household colors',event)
+        self.assertIsInstance(self.rendered(event).source,w.HouseholdColors)
+        self.assertFalse(self.db.execute('SELECT * FROM alternating_members').fetchall())
+        self.assertFalse(self.db.execute('SELECT * FROM household_identities').fetchall())
 
     async def test_household_setup_requires_admin_and_selection(self):
         view = self.ui.HouseholdSetup(10)

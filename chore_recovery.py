@@ -65,6 +65,7 @@ def install(ns, ui, w):
         if kind=='reassign':return parent()
         if kind=='chores':return w.Chores(owner,guild,**{k:context[k] for k in ('mode','day','who','query','page') if k in context})
         if kind=='chore_more':return w.ChoreMore(owner,w.Card(owner,int(context['qid']),parent,guild,int(context.get('offset',0))))
+        if kind=='household_colors':return w.HouseholdColors(owner,guild)
         if kind=='person_color':return w.PersonColor(owner,guild,parent)
         if kind=='personal_settings':return w.PersonalSettings(owner,guild,parent)
         if kind=='page_help':return w.PageHelp(owner,name=context.get('name','Chores'),topic=context.get('topic','Start here'),parent=parent_context,guild=guild,instructions=context.get('instructions'))

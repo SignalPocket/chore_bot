@@ -1,3 +1,7 @@
+# 2.4.0 — 2026-11-08
+
+- Household setup → Household colors lets an administrator identify Kas and Zel by Discord account and save account-bound markers. Defaults are Kas pink and Zel orange. Existing saved markers are preserved unless explicitly changed. Identity/color setup is separate from attendance, so saving colors does not modify rotation or exceptions.
+
 # 2.3.2 — 2026-11-08
 
 - Reassignment opened from a chore remembers the original list/calendar date, scope, filters, and page. Confirm and Cancel return there directly with the result. Expired controls recover that origin without replaying the assignment.
