@@ -101,6 +101,17 @@ class HouseholdAvailability:
         home=((start.date()-datetime(2026,10,18).date()).days//7)%2==1
         return not home if mode=='opposite' else home
 
+    def during(self,user_id,start,end):
+        """Any home time in a half-open occurrence, including Sunday 18:00."""
+        cursor=start.astimezone(self.timezone)
+        end=end.astimezone(self.timezone)
+        while cursor<end:
+            if self.at(user_id,cursor):return True
+            midnight=(cursor+timedelta(days=1)).replace(hour=0,minute=0,second=0,microsecond=0)
+            handoff=cursor.replace(hour=18,minute=0,second=0,microsecond=0)
+            cursor=min(midnight,handoff) if cursor<handoff else midnight
+        return False
+
     def week(self,user_id,start):
         result=[]
         for offset in range(8):
@@ -126,4 +137,4 @@ class HouseholdAvailability:
             return 'Those dates overlap an existing exception. Cancel that exception first, then add the replacement.'
         with self.db:
             self.db.execute('INSERT INTO availability_exceptions(user_id,start_date,end_date,state,note) VALUES(?,?,?,?,?)',(str(user_id),start,end,state,note.strip()[:300]))
-        return 'Saved. Full calendar days are '+state+' in Eastern time; the usual schedule resumes afterward. Existing responsibilities were kept—review any coverage warnings.'
+        return 'Saved. Full calendar days are '+state+' in Eastern time; the usual schedule resumes afterward. Existing responsibilities stay saved and pause while away.'

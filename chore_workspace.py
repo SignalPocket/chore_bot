@@ -54,10 +54,40 @@ def install(ns, ui, lock):
         return row[0] if row and isinstance(row[0],int) and 1<=row[0]<=10 else 8
 
     original_ready = timing.ready
-    def ready(qid):
+    def ready(qid, initialize=True):
         if ui.dated.skipped(qid):return False
         move = db.execute('SELECT day FROM occurrence_moves WHERE quest_id=?', (qid,)).fetchone()
-        return timing.now().date().isoformat() >= move[0] if move else original_ready(qid)
+        if initialize:
+            due=original_ready(qid) if not move else timing.now().date().isoformat()>=move[0]
+        else:
+            state=timing.state(qid)
+            q=chore(qid)
+            now=timing.now()
+            due=not state or now>=datetime.fromisoformat(state[0])
+            if not state and q:
+                if q[2] in SCHEDULED:due=now>=timing.next_due(now,q[2])
+                elif q[2]=='daily-am':due=now.hour<12
+                elif q[2]=='daily-pm':due=now.hour>=12
+            if move:due=now.date().isoformat()>=move[0]
+        if not due:return False
+        uid=ownership(qid)[0]
+        if not uid:return True
+        now=timing.now()
+        if not ui.attendance.at(uid,now):return False
+        q=chore(qid)
+        start=now.replace(hour=0,minute=0,second=0,microsecond=0)
+        if q[2] in SCHEDULED:
+            for offset in range(29):
+                candidate=start-timedelta(days=offset)
+                if timing.matches(candidate.date(),q[2]):
+                    start=candidate
+                    break
+            else:return False
+        elif q[2] not in ('daily','twice-daily',*DAILY_SHIFTS):
+            return True
+        if q[2]=='daily-pm' or (q[2]=='twice-daily' and now.hour>=12):start=start.replace(hour=12)
+        end=(start.replace(hour=0)+timedelta(days=1)) if q[2]!='daily-am' and not (q[2]=='twice-daily' and now.hour<12) else start.replace(hour=12)
+        return ui.attendance.during(uid,start,end)
     timing.ready = ui.ready = ready
     memory = {}
     name_cache = {}
@@ -111,6 +141,8 @@ def install(ns, ui, lock):
         return (recurring,'repeating') if recurring else (None,None)
 
     def due_text(q):
+        uid=ownership(q[0])[0]
+        if uid and not ui.attendance.at(uid,timing.now()):return 'Paused while away; responsibility saved'
         move = db.execute('SELECT day FROM occurrence_moves WHERE quest_id=?', (q[0],)).fetchone()
         if move:
             when = datetime.fromisoformat(move[0])
@@ -529,7 +561,7 @@ def install(ns, ui, lock):
                 self.entries=[(day,r[0],ownership(r[0][0])[0]) for r in self.attention.values()]
             def matches(entry):
                 _,q,uid=entry
-                if mode in ('today','date') and day==timing.now().date() and q[5]:return False
+                if mode in ('today','date') and day==timing.now().date() and (q[5] or (uid and not ready(q[0]))):return False
                 person_id=str(owner) if who=='mine' else str(who)
                 return (who=='everyone' or (who=='attention' and (q[0] in self.attention or (day!=timing.now().date() and not uid))) or (who=='unclaimed' and not uid) or str(uid)==person_id) and (not query or query.casefold() in ' '.join(str(q[n] or '') for n in (1,8,9)).casefold())
             self.entries=[entry for entry in self.entries if matches(entry)]
@@ -697,6 +729,7 @@ def install(ns, ui, lock):
             q=chore(qid)
             if q[5] or ui.is_archived(qid):continue
             due=ready(qid)
+            if ownership(qid)[0] and not ui.attendance.at(ownership(qid)[0],timing.now()):continue
             deadline=attention_deadline(q)
             overdue=due and deadline is not None and timing.now()>=deadline
             unclaimed=due and not ownership(qid)[0]
@@ -2690,9 +2723,9 @@ def install(ns, ui, lock):
 
     TOPICS['Trips and traded days']='Open **Plan & coordinate → Who’s home?** to see scheduled Home/Away statuses now. Choose **Change** beside a person or select anyone below. **Mark home / Mark away** sets a single date or a trip; Quick dates includes home or away today, tomorrow, and the weekend. Preview the dates before saving.\n\nChoose **Usual schedule** to change a person’s normal arrangement: home daily, away daily, selected weekdays, or alternating weeks. Review & save shows who changes. Use household default restores Kas/Zel’s alternating weeks and everyone else’s home-every-day default.\n\nA dated override always wins. When it ends, the person’s usual schedule resumes. Kas/Zel’s alternating handoff stays Sunday at 6 p.m. Changing attendance keeps chores assigned; review coverage or use Reassign when needed.'
 
-    TOPICS['Workload & pace']='Earned averages use recorded completions through yesterday, excluding undone work. Resets of the points balance do not erase this work. Days before the first recorded completion are unavailable, not invented zeros; today is shown separately.\n\nThe plan covers the next 7, 28, or 90 full days. It uses current assignments and dated week signups; unknown owners stay Unclaimed. Daily/fixed-day chores count scheduled occurrences. Flexible weekly/monthly points are prorated across their period, without choosing a weekday. Moved work counts once before its normal schedule resumes. Undated one-time work is separate. This estimates responsibility, assuming recurring work gets finished on time; it is not guaranteed future earnings.\n\nDaily rates use calendar days; weekly means 7 days and monthly means 30 days. Per home-day uses the saved rotation and exceptions, with Sunday split at 6 p.m. Old attendance edits can change that historical comparison. Away coverage remains in the plan so it is visible. Points measure the household’s chosen effort values, not hours worked.'
+    TOPICS['Workload & pace']='Earned averages use recorded completions through yesterday, excluding undone work. Resets of the points balance do not erase this work. Days before the first recorded completion are unavailable, not invented zeros; today is shown separately.\n\nThe plan covers the next 7, 28, or 90 full days. It uses current assignments and dated week signups; unknown owners stay Unclaimed. Daily/fixed-day chores count scheduled occurrences. Flexible weekly/monthly points are prorated across their period, without choosing a weekday. Moved work counts once before its normal schedule resumes. Undated one-time work is separate. This estimates responsibility, assuming recurring work gets finished on time; it is not guaranteed future earnings.\n\nDaily rates use calendar days; weekly means 7 days and monthly means 30 days. Per home-day uses the saved rotation and exceptions, with Sunday split at 6 p.m. Old attendance edits can change that historical comparison. Away occurrences are excluded from their plan. Saved responsibilities resume when home; missed away occurrences do not accumulate. Points measure the household’s chosen effort values, not hours worked.'
 
-    TOPICS['Repeating days']='Open a daily chore by its name button, then Sign-up schedule. Saved slots are preselected. Toggle the exact weekday/AM/PM buttons you want, then Save repeating days once.\n\nRepeats apply only when home, using usual attendance and exceptions. Away slots need coverage; the signup returns when you are home. Opposite home weeks may share a slot. If attendance changes create an overlap, it stays unclaimed until covered or corrected. Unselect slots and Save to release them. Clear selection and Save releases all your recurring slots; other people stay unchanged. Skip, occurrence Reassign, and accepted Trade preserve the repeating schedule. Whole-week/ongoing assignments cannot override repeating days. Points go to whoever completes each occurrence.'
+    TOPICS['Repeating days']='Open a daily chore by its name button, then Sign-up schedule. Saved slots are preselected. Toggle the exact weekday/AM/PM buttons you want, then Save repeating days once.\n\nRepeats apply only when home, using usual attendance and exceptions. Your away slots pause; the signup returns when you are home. Opposite home weeks may share a slot. If attendance changes create an overlap, it stays unclaimed until covered or corrected. Unselect slots and Save to release them. Clear selection and Save releases all your recurring slots; other people stay unchanged. Skip, occurrence Reassign, and accepted Trade preserve the repeating schedule. Whole-week/ongoing assignments cannot override repeating days. Points go to whoever completes each occurrence.'
 
     TOPICS['Future occurrences']='A chore name always opens Chore details. In This week, Next week, or Upcoming, use Choose date beside the name, or Choose occurrence on the card, to select an exact date and AM/PM slot. Or open Calendar → a day → a chore.\n\n**Claim just this time** reserves only that occurrence, when you are home. **Skip just this time** takes effect immediately, awards no points, and keeps later repeats and saved signups.\n\n**Undo skip for this occurrence** is at the bottom until that occurrence ends, if its record remains unchanged. Release a dated claim with **Drop this dated claim**. Flexible weekly/monthly chores need a regular day before they have dated occurrences. Future work cannot be completed early.'
     TOPICS['Change list length']='Open **Settings → List length** and choose **1–10 items per page**. \n\nNew accounts default to **8** on the daily sheet; your existing preference is preserved. Legacy dense button lists may show fewer rows to stay inside Discord limits. This changes display only, never chores or points.'

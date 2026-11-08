@@ -1,3 +1,8 @@
+# 2.6.0 - 2026-11-08
+
+- Pause assigned chores while their person is away across shared due checks, daily lists, attention, reminders and point forecasts. Preserve assignments, points and history. Resume eligible work at home, including the Sunday 6 p.m. handoff; omit morning and fixed-day occurrences missed entirely while away.
+- Replace dense workload arrows with Due now, Completed today and Planned per week. More detail contains clearly labeled historical averages and forecast totals; navigation and recovery preserve the chosen detail level.
+
 # 2.5.1 — 2026-11-08
 
 - Points & standings now includes the shared known-household roster, not just existing score rows. Missing scores display zero; existing points/streaks/history remain unchanged. Reading standings does not register accounts or mutate household records. Preserve ranking ties, pagination, personal markers and private controls.

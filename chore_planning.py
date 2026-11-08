@@ -254,6 +254,11 @@ def install(ns, ui, w, lock):
                 if q[2]=='one-time' and q[5]:continue
             elif not dated(q,day):continue
             uid=owner_on(q,day)
+            start=datetime.combine(day,datetime.min.time(),tzinfo=ns['QUEST_TIMEZONE'])
+            end=start+timedelta(days=7 if flexible else 1)
+            if not flexible and q[2]=='daily-am':end=start.replace(hour=12)
+            elif not flexible and q[2]=='daily-pm':start=start.replace(hour=12)
+            if uid and not ui.attendance.during(uid,start,end):continue
             if owner is not None and uid!=str(owner) and not any((ui.dated.owner(q[0],datetime.combine(day,datetime.min.time(),tzinfo=ns['QUEST_TIMEZONE']).replace(hour=h)) or ui.repeating.owner(q[0],datetime.combine(day,datetime.min.time(),tzinfo=ns['QUEST_TIMEZONE']).replace(hour=h)))==str(owner) for h in (0,12)):continue
             result.append((q,uid))
         return result

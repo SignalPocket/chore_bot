@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.5.1'
+APP_VERSION = '2.6.0'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'Points and standings includes all known household people, including zero-point accounts.'
+RELEASE_SUMMARY = 'Chores pause while away, resume when home, and workload summaries are easier to read.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 
@@ -116,7 +116,7 @@ def install(namespace):
             away=[when for when,home in days if not home] if week_status(user_id,offset)!='home' else []
         if not away:
             return ''
-        return 'Check coverage: away '+', '.join(f'{day_badge(WEEKDAYS[when.weekday()])} {when:%b %d}' for when in away)
+        return 'Paused while away: '+', '.join(f'{day_badge(WEEKDAYS[when.weekday()])} {when:%b %d}' for when in away)
 
     def can_take_week(user_id,qid,offset):
         days=attendance.week(user_id,week_start(offset))

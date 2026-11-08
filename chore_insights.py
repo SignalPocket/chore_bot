@@ -47,6 +47,8 @@ def install(ns, ui, w):
         ids.update(str(uid) for uid, in db.execute('SELECT DISTINCT user_id FROM availability_exceptions'))
         ids.update(str(uid) for uid, in db.execute('SELECT DISTINCT user_id FROM repeating_signups'))
         ids.update(str(uid) for uid, in db.execute("SELECT DISTINCT actor FROM dated_occurrences WHERE state='claim'"))
+        ids.update(str(uid) for uid, in db.execute('SELECT user_id FROM household_profiles'))
+        ids.update(str(uid) for uid, in db.execute('SELECT user_id FROM person_colors'))
         stats = {uid: dict(earned=0, today=0, planned=0.0, away=0.0, backlog=0, past_home=0.0, future_home=0.0) for uid in ids}
         home_cache = {}
 
@@ -86,8 +88,12 @@ def install(ns, ui, w):
             if uid is None:
                 unclaimed += amount
             else:
-                stats[uid]['planned'] += amount
-                if not at(uid, when):stats[uid]['away'] += amount
+                frequency=q[2]
+                if frequency in ('daily','twice-daily',*DAILY_SHIFTS) or frequency in SCHEDULED or single:
+                    end=when+timedelta(hours=12) if frequency in ('daily-am','twice-daily') else midnight(when.date()+timedelta(days=1))
+                    home=ui.attendance.during(uid,when,end)
+                else:home=at(uid,when)
+                if home:stats[uid]['planned'] += amount
 
         for q in quests:
             qid, _, frequency, points, _, completed, _, reset = q
@@ -99,7 +105,7 @@ def install(ns, ui, w):
                 earliest = max(earliest, local(reset))
             moved = moves.get(qid) if not completed else None
             due_start = max(earliest, midnight(moved)) if moved else earliest
-            if not completed and due_start <= now:
+            if not completed and due_start <= now and ui.ready(qid,initialize=False):
                 uid = owner(q, now, True)
                 if uid is None:unclaimed_due += points
                 else:stats[uid]['backlog'] += points
@@ -152,21 +158,21 @@ def install(ns, ui, w):
     def rate(value, multiplier=1):
         return number(None if value is None else value*multiplier)
 
-    async def show(i, owner, days=28, page=0, order='planned'):
+    async def show(i, owner, days=28, page=0, order='planned', detail=False):
         if not await w.View(owner).interaction_check(i):return
         if not i.response.is_done():await i.response.defer()
-        await w.present(i, Report(owner, i.guild, days, page, order))
+        await w.present(i, Report(owner, i.guild, days, page, order, detail))
 
-    def methods(owner, guild, days=28, page=0, order='planned'):
+    def methods(owner, guild, days=28, page=0, order='planned', detail=False):
         guide=w.Guide(owner,'Workload & pace')
         for item in list(guide.children):
             if isinstance(item,discord.ui.Button) and item.label=='Dashboard':guide.remove_item(item)
-        guide.recovery_context={'screen':'insights_help','days':days,'page':page,'order':order}
-        guide.nav(lambda:Report(owner,guild,days,page,order))
+        guide.recovery_context={'screen':'insights_help','days':days,'page':page,'order':order,'detail':detail}
+        guide.nav(lambda:Report(owner,guild,days,page,order,detail))
         return guide
 
     class Report(w.View):
-        def __init__(self, owner, guild=None, days=28, page=0, order='planned'):
+        def __init__(self, owner, guild=None, days=28, page=0, order='planned', detail=False):
             super().__init__(owner)
             if order not in ('planned','earned','name'):order='planned'
             data = calculate(days)
@@ -177,36 +183,41 @@ def install(ns, ui, w):
                         (lambda item: (-item[1]['earned'], item[0])) if order=='earned' else
                         (lambda item: (w.person(item[0],guild).casefold(),item[0])))
             page = min(max(0,page),max(0,(len(people)-1)//size))
-            self.recovery_context={'screen':'insights','days':days,'page':page,'order':order}
+            self.recovery_context={'screen':'insights','days':days,'page':page,'order':order,'detail':detail}
             self.paging_labels=('Previous','Next')
             chunk=people[page*size:(page+1)*size]
             self.name_ids=[uid for uid,_ in chunk]
-            self.rebuild=lambda:Report(owner,guild,days,page,order)
+            self.rebuild=lambda:Report(owner,guild,days,page,order,detail)
             history=(f'{data["past_start"]:%b %d}–{data["past_end"]-timedelta(days=1):%b %d} · {data["observed"]} recorded day(s)'
                      if data['observed'] else 'No completed days of recorded history yet')
             self.embed=discord.Embed(title='Workload & pace',description=
-                '**Earned → planned** points per day, week, and 30-day month.\n'
-                f'Past: {history}. Today is shown separately.\n'
-                f'Plan: {data["future_start"]:%b %d}–{data["future_end"]-timedelta(days=1):%b %d} · {days} days. '
-                f'Unclaimed: **{number(data["unclaimed"])}** projected points.\n'
-                f'Due unclaimed: {data["unclaimed_due"]} pts · Undated one-time work: {data["unplaced"]} pts.',color=0x6B9B77)
+                f'Plan: {data["future_start"]:%b %d}–{data["future_end"]-timedelta(days=1):%b %d} ({days} days).\n'
+                'Recurring chores pause while someone is away. Saved responsibilities resume when home; missed away occurrences do not pile up.\n'
+                f'Unclaimed due now: **{data["unclaimed_due"]} points**.\n'
+                + (f'History: {history}. Today is separate.\nUnclaimed planned work: {number(data["unclaimed"])} points. Undated one-time work: {data["unplaced"]} points.' if detail else ''),
+                color=0x6B9B77)
             for uid,value in chunk:
-                actual, planned=value['earned_daily'], value['planned_daily']
-                share=value['planned']/data['planned_total']*100 if data['planned_total'] else 0
-                self.embed.add_field(name=w.clean(w.person(uid,guild),100),value=
-                    f'Day **{rate(actual)} → {rate(planned)}** · Week **{rate(actual,7)} → {rate(planned,7)}** · Month **{rate(actual,30)} → {rate(planned,30)}**\n'
-                    f'Per home-day **{number(value["earned_home"])} → {number(value["planned_home"])}** · Today {value["today"]} pts\n'
-                    f'Planned share {number(share)}% · Away coverage {number(value["away"])} pts · Due now {value["backlog"]} pts',inline=False)
+                text=(f'Due now: **{value["backlog"]} points**\n'
+                      f'Completed today: **{value["today"]} points**\n'
+                      f'Planned per week: **{rate(value["planned_daily"],7)} points**')
+                if detail:
+                    share=value['planned']/data['planned_total']*100 if data['planned_total'] else 0
+                    text+=(f'\nCompleted per week (past): {rate(value["earned_daily"],7)} points'
+                           f'\nPlanned total (next {days} days): {number(value["planned"])} points'
+                           f'\nPer home-day — completed: {number(value["earned_home"])}; planned: {number(value["planned_home"])}'
+                           f'\nShare of planned household points: {number(share)}%')
+                self.embed.add_field(name=w.clean(w.person(uid,guild),100),value=text,inline=False)
             if not chunk:self.embed.add_field(name='No people recorded yet',value='People appear once they have chores, signups, completion history, or an alternating schedule.')
             self.embed.set_footer(text=f'Page {page+1} of {max(1,(len(people)-1)//size+1)} · {len(people)} people · Eastern time')
             picker=discord.ui.Select(placeholder=f'Compare past / next {days} days',options=[discord.SelectOption(label=f'Past / next {n} days',value=str(n),default=n==days) for n in (7,28,90)],row=0)
-            async def choose(i):await show(i,owner,int(picker.values[0]),0,order)
+            async def choose(i):await show(i,owner,int(picker.values[0]),0,order,detail)
             picker.callback=choose;self.add_item(picker)
+            self.button('Less detail' if detail else 'More detail',lambda i:show(i,owner,days,page,order,not detail),row=1)
             next_order={'planned':'earned','earned':'name','name':'planned'}[order]
-            self.button('Sort: '+{'planned':'Planned load','earned':'Earned pace','name':'Name'}[order],lambda i:show(i,owner,days,0,next_order),row=1)
-            self.button('How this is calculated',lambda i:w.present(i,methods(owner,i.guild,days,page,order)),row=1)
-            if page:self.button('Previous',lambda i:show(i,owner,days,page-1,order),row=2)
-            if (page+1)*size<len(people):self.button('Next',lambda i:show(i,owner,days,page+1,order),row=2)
+            self.button('Sort: '+{'planned':'Planned load','earned':'Earned pace','name':'Name'}[order],lambda i:show(i,owner,days,0,next_order,detail),row=1)
+            self.button('How this is calculated',lambda i:w.present(i,methods(owner,i.guild,days,page,order,detail)),row=1)
+            if page:self.button('Previous',lambda i:show(i,owner,days,page-1,order,detail),row=2)
+            if (page+1)*size<len(people):self.button('Next',lambda i:show(i,owner,days,page+1,order,detail),row=2)
             self.nav()
 
     return SimpleNamespace(Report=Report,calculate=calculate,show=show,methods=methods)

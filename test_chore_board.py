@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.5.1')
+        self.assertEqual(chore_board.APP_VERSION,'2.6.0')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.5.1. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.6.0. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -3976,7 +3976,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             await self.app.bot.get_command('done').callback(ctx,1)
             self.assertIn('away',messages[-1])
             self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone()[0],50)
-            self.assertIn('Check coverage',self.ui.coverage_warning(1,10))
+            self.assertIn('Paused while away',self.ui.coverage_warning(1,10))
 
     async def test_partial_week_signup_matches_actual_due_day(self):
         self.db.execute("INSERT INTO alternating_members VALUES('10')")
@@ -3990,7 +3990,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             bad=self.db.execute("SELECT id FROM quests WHERE name='Friday pickup'").fetchone()[0]
             self.assertIn('signed up',self.ui.signup(10,good,self.ui.week_key()))
             self.assertIn('away on a scheduled',self.ui.signup(10,bad,self.ui.week_key()))
-            self.assertIn('Check coverage',self.ui.signup(10,1,self.ui.week_key()))
+            self.assertIn('Paused while away',self.ui.signup(10,1,self.ui.week_key()))
 
     async def test_exception_overlap_duplicate_and_invalid_dates_are_rejected(self):
         a=self.ui.attendance
@@ -4059,7 +4059,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.ui.signup(10,1,self.ui.week_key())
             self.ui.attendance.add(10,'2026-10-21','2026-10-22','away')
             view=self.ui.ResponsibilityView(10,Interaction().guild)
-            self.assertIn('Check coverage',str(view.embed.to_dict()))
+            self.assertIn('Paused while away',str(view.embed.to_dict()))
             weekly=self.ui.WeeklyView(10)
             self.assertIn('Partly home',weekly.embed.description)
             self.assertIn('Away',str(weekly.embed.to_dict()))
@@ -5213,8 +5213,8 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.ui.attendance.add(10,'2026-10-20','2026-10-20','away')
             away=w.render(w.Browse(10,'mine'))
             buttons=[c for c in away.walk_children() if getattr(c,'label',None)=='Done']
-            self.assertTrue(buttons)
-            self.assertTrue(all(button.disabled for button in buttons))
+            self.assertEqual(buttons,[])
+            self.assertFalse(away.source.quick_rows)
 
 
     async def test_v2_early_and_next_week_rows_offer_details_not_done(self):
@@ -5769,7 +5769,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.dm.send.assert_not_awaited()
             self.assertNotEqual(self.ui.reassign_snapshot(1),old)
             self.assertEqual(self.ui.insights.calculate(7)['people']['10']['future_home'],0)
-            self.assertGreater(self.ui.insights.calculate(7)['people']['10']['planned'],0)
+            self.assertEqual(self.ui.insights.calculate(7)['people']['10']['planned'],0)
 
     def workload_clear(self):
         for table in ('quests','claims','week_signups','alternating_members','archived_chores','availability_exceptions','occurrence_moves','chore_timing','completion_log','users'):
@@ -5784,6 +5784,57 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     def workload_completion(self,uid,points,stamp,undone=None,qid=1):
         self.db.execute("INSERT INTO completion_log(quest_id,user_id,chore_name,points,completed_at,before_state,after_state,undone_at) VALUES(?,?,?, ?,?,'{}','{}',?)",(qid,str(uid),'Recorded work',points,stamp,undone))
         self.db.commit()
+
+    async def test_away_pause_due_reminders_forecast_and_sunday_return(self):
+        self.workload_clear()
+        with self.clock('2026-11-08T09:00:00'):
+            self.db.execute("INSERT INTO alternating_members VALUES('20')")
+            daily=self.workload_chore('daily',5,20)
+            am=self.workload_chore('daily-am',3,20)
+            pm=self.workload_chore('daily-pm',4,20)
+            friday=self.workload_chore('friday',7,20)
+            self.db.executemany('INSERT OR REPLACE INTO chore_timing VALUES(?,?)',[(am,'2026-11-08T00:00:00-05:00'),(pm,'2026-11-08T12:00:00-05:00'),(friday,'2026-11-06T00:00:00-05:00')])
+            self.db.commit()
+            self.assertFalse(self.ui.ready(daily))
+            self.assertEqual(self.ui.insights.calculate(7)['people']['20']['backlog'],0)
+            self.assertFalse(any(row[0][0]==daily for row in self.ui.workspace.attention_rows()))
+            self.assertFalse(any(q[0]==daily for q,uid in self.ui.planning.project(datetime(2026,11,16).date())))
+            self.assertFalse(self.ui.workspace.Chores(20,who='mine').entries)
+            self.assertEqual(self.db.execute('SELECT assigned_to FROM quests WHERE id=?',(daily,)).fetchone(),('20',))
+        with self.clock('2026-11-08T18:01:00'):
+            self.assertTrue(self.ui.ready(daily))
+            self.assertTrue(self.ui.ready(pm))
+            self.assertFalse(self.ui.ready(am))
+            self.assertFalse(self.ui.ready(friday))
+            data=self.ui.insights.calculate(7)
+            self.assertEqual(data['people']['20']['backlog'],9)
+            report=self.ui.insights.Report(20)
+            self.assertNotIn('Away coverage',str(report.embed.to_dict()))
+            self.assertIn('Due now:',str(report.embed.to_dict()))
+            detailed=self.ui.insights.Report(20,detail=True)
+            restored=self.ui.workspace.recovery.restore(20,detailed.recovery_context,None)
+            self.assertTrue(restored.recovery_context['detail'])
+        with self.clock('2026-11-09T09:00:00'):
+            self.assertTrue(self.ui.ready(am))
+        with self.clock('2026-11-13T09:00:00'):
+            self.assertTrue(self.ui.ready(friday))
+
+    async def test_workload_scheduled_forecast_is_read_only_and_detail_toggle_recovers(self):
+        self.workload_clear()
+        with self.clock('2026-11-08T09:00:00'):
+            self.workload_chore('friday',5,20)
+            self.workload_chore('daily-am',3,20)
+            before=list(self.db.iterdump())
+            source=self.ui.insights.Report(20)
+            self.assertEqual(list(self.db.iterdump()),before)
+            button=next(c for c in source.children if getattr(c,'label',None)=='More detail')
+            event=Interaction(20)
+            await button.callback(event)
+            detailed=event.result['view']
+            self.assertTrue(detailed.recovery_context['detail'])
+            restored=self.ui.workspace.recovery.restore(20,detailed.recovery_context,None)
+            self.assertEqual(restored.recovery_context,detailed.recovery_context)
+            self.assertIn('Completed per week (past)',str(restored.embed.to_dict()))
 
     async def test_insights_actual_history_undo_resets_timezone_and_sparse_days(self):
         self.workload_clear()
@@ -5843,10 +5894,11 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.ui.attendance.add(20,'2026-10-22','2026-11-18','away')
             data=self.ui.insights.calculate(28)
             self.assertAlmostEqual(data['people']['10']['future_home'],15)
-            self.assertAlmostEqual(data['people']['10']['planned_home'],140/15)
+            self.assertAlmostEqual(data['people']['10']['planned_home'],85/15)
             self.assertEqual(data['people']['20']['future_home'],0)
             self.assertIsNone(data['people']['20']['planned_home'])
-            self.assertEqual(data['people']['20']['away'],280)
+            self.assertEqual(data['people']['20']['away'],0)
+            self.assertEqual(data['people']['20']['planned'],0)
 
     async def test_insights_moves_completed_periods_and_undated_work_are_not_duplicated(self):
         self.workload_clear()
@@ -5903,8 +5955,8 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(data['people']['10']['planned_daily'],1)
             self.assertEqual(data['observed'],0)
             source=self.ui.insights.Report(10)
-            self.assertIn('No completed days',source.embed.description)
-            self.assertIn('Month **— → 30**',source.embed.fields[0].value)
+            self.assertIn('No completed days',self.ui.insights.Report(10,detail=True).embed.description)
+            self.assertIn('Planned per week: **7 points**',source.embed.fields[0].value)
             with self.assertRaises(ValueError):self.ui.insights.calculate(365)
 
     async def test_insights_private_navigation_methods_recovery_and_large_roster_limits(self):

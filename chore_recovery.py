@@ -80,9 +80,9 @@ def install(ns, ui, w):
         if kind == 'usual_schedule':
             return w.UsualSchedule(owner,context.get('people',[]),guild,context.get('mode'),context.get('days',[]),roster_page=context.get('roster_page',0))
         if kind == 'insights_help':
-            return ui.insights.methods(owner,guild,context.get('days',28),context.get('page',0),context.get('order','planned'))
+            return ui.insights.methods(owner,guild,context.get('days',28),context.get('page',0),context.get('order','planned'),context.get('detail',False))
         if kind == 'insights':
-            return ui.insights.Report(owner,guild,context.get('days',28),context.get('page',0),context.get('order','planned'))
+            return ui.insights.Report(owner,guild,context.get('days',28),context.get('page',0),context.get('order','planned'),context.get('detail',False))
         if kind == 'list_length':
             return w.ListLength(owner)
         if kind == 'announcements':

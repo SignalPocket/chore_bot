@@ -558,6 +558,9 @@ async def unclaim(ctx, quest_id: int):
 async def done(ctx, quest_id: int):
     reset_due_quests()
     user_id = str(ctx.author.id)
+    if not chore_ui.available(user_id):
+        await ctx.send("You're away today. Check Who's home? for your dates; your responsibilities remain saved.")
+        return
     if not chore_ui.ready(quest_id):
         await ctx.send("This chore isn't due yet. Check it on its scheduled weekday.")
         return
