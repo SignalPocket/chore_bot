@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.2.1'
+APP_VERSION = '2.3.0'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'A reassuring empty Mine view and clearer one-occurrence Claim wording.'
+RELEASE_SUMMARY = 'Direct Archive, one-tap Claim in Needs attention, Quick Done, separate channel-member accounts, and direct current details.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 

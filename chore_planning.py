@@ -316,15 +316,14 @@ def install(ns, ui, w, lock):
                 async def open_chore(i,qid):
                     q=chore(qid)
                     parent=lambda:Day(owner,day,mine,i.guild,page,flexible,mode)
+                    if day==timing.now().date():return await w.present(i,w.Card(owner,qid,back=parent,guild=i.guild))
                     offered=ui.dated.slots(qid)
                     if offered and day>=timing.now().date():
                         if len(offered)>1:return await w.present(i,w.FutureSlots(owner,qid,day,i.guild,parent))
                         if ui.dated.when(day,offered[0])>timing.now() or ui.dated.record(qid,day,offered[0]):
                             return await w.present(i,w.FutureOccurrence(owner,qid,day,offered[0],i.guild,parent))
                     if day==timing.now().date():return await w.present(i,w.Card(owner,qid,back=parent,guild=i.guild))
-                    preview=w.View(owner);preview.embed=discord.Embed(title=w.clean(q[1],100),description=f'Calendar preview for {day:%a %b %d}. Give flexible work a regular day before reserving a dated occurrence.',color=0x6B9B77)
-                    preview.button('Open current chore',lambda event:w.present(event,w.Card(owner,qid,back=parent,guild=event.guild)),row=0);preview.nav(parent)
-                    await w.present(i,preview)
+                    await w.present(i,w.Card(owner,qid,back=parent,guild=i.guild,notice=f'Current occurrence. Calendar selection: {day:%a %b %d, %Y}. Actions below apply to the current occurrence.'))
                 self.calendar_details=[(q[0],open_chore) for q,uid in chunk]
                 async def select(i):await open_chore(i,int(picker.values[0]))
                 picker.callback=select;self.add_item(picker)

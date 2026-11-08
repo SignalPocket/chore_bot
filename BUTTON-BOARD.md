@@ -355,3 +355,8 @@ Chore details keeps Claim/Done, Checklist when present, Skip, Need help and Choo
 Local candidate, not deployed. Private /chores opens a text-first daily sheet: Mine / Available / Everyone, a readable multi-chore list, one chooser for the work card, unchanged Prev/Next arrows, Other dates, Manage chores and personal Settings. New-account sheet length defaults to 8; existing saved preferences stay intact; Settings supports 1–10. Legacy dense lists retain their protected capacity cap.
 
 The compact work card keeps Claim, Done, Skip, Need help and required Checklist visible, with native action icons. Other actions uses named guarded callbacks for coordination, editing, dates and history. Help/status warnings and chore instructions remain visible. Back to list preserves the parent context; Settings Back and recovery do likewise. One neutral latest-eligible Undo remains last. Catalog editing, archive/restore, search, and Household tools remain available through Manage chores. Public text-command launcher behavior is preserved; private slash entry uses the new sheet. Prototype HTML remains separate from actual source validation. No push/deployment authorization for 1.5.0.
+
+
+## Prepared 2.3.0
+
+Quick actions and account roster behavior are documented in USER-GUIDE.md and QUICK-ACTIONS-REVIEW.md. Needs attention caps the current action sheet at four rows to leave space for navigation and Undo under Discord’s component limit. Quick Done reuses Browse mine/due and its shared completion/checklist backend. Channel cache roster discovery inserts only missing user IDs and preserves existing account fields; it does not enumerate unavailable members or change Discord intents.

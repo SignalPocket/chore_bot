@@ -364,7 +364,7 @@ def install(ns, ui, lock):
                 person_id=str(owner) if who=='mine' else str(who)
                 return (who=='everyone' or (who=='attention' and (q[0] in self.attention or (day!=timing.now().date() and not uid))) or (who=='unclaimed' and not uid) or str(uid)==person_id) and (not query or query.casefold() in ' '.join(str(q[n] or '') for n in (1,8,9)).casefold())
             self.entries=[entry for entry in self.entries if matches(entry)]
-            self.size=sheet_size(owner)
+            self.size=min(sheet_size(owner),4) if who=='attention' else sheet_size(owner)
             self.page=min(self.state['page'],max((len(self.entries)-1)//self.size,0))
             self.state['page']=self.page;self.recovery_context['page']=self.page
             self.name_ids=[uid for _,_,uid in self.entries[self.page*self.size:(self.page+1)*self.size] if uid]
@@ -407,6 +407,16 @@ def install(ns, ui, lock):
             listing=discord.ui.Container(accent_colour=0x6B9B77)
             empty='You’re caught up ✅' if state['who']=='mine' and not catalog and not state['query'] else 'All clear. No chores match this view. Try Everyone or another date.'
             listing.add_item(discord.ui.TextDisplay('**'+heading+'**\n\n'+('\n'.join(lines) if lines else empty)))
+            if state['who']=='attention' and not catalog and day==timing.now().date():
+                listing.clear_items()
+                listing.add_item(discord.ui.TextDisplay('**'+heading+'**'+('\n'+empty if not chunk else '')))
+                for index,(date,q,uid) in enumerate(chunk):
+                    expected=ui.snapshot(q[0])
+                    async def quick_claim(i,qid=q[0],expected=expected):
+                        await claim_now(i,self,qid,expected,lambda:self.rebuild(),stay_on_list=True)
+                    row=frame.detail_row('**'+clean(q[1],100)+'**\n'+lines[index*2+1].removeprefix('-# '),label='Claim',callback=quick_claim)
+                    row.accessory.disabled=bool(uid) or q[5] or not ready(q[0]) or not ui.available(owner)
+                    listing.add_item(row)
             frame.add_item(listing)
             parent=lambda:self.rebuild()
             if chunk:
@@ -439,10 +449,11 @@ def install(ns, ui, lock):
             frame.rows([button('< Prev',lambda i:present(i,target(i,page=self.page-1)),self.page==0),button('Next >',lambda i:present(i,target(i,page=self.page+1)),self.page+1>=count)])
             if notice:frame.add_item(discord.ui.TextDisplay('-# '+str(notice)))
             if catalog:
-                frame.rows([button('Add chore',lambda i:present(i,adapt(ui.AddChoreMenu(owner),owner,parent))),button('Archived chores',lambda i:present(i,adapt(ui.RemoveChoreView(owner,removed=True),owner,parent))),button('Search',lambda i:i.response.send_modal(ChoresSearch(self)))])
+                frame.rows([button('Add chore',lambda i:present(i,adapt(ui.AddChoreMenu(owner),owner,parent))),button('Archive chore',lambda i:present(i,adapt(ui.RemoveChoreView(owner),owner,parent))),button('Archived chores',lambda i:present(i,adapt(ui.RemoveChoreView(owner,removed=True),owner,parent))),button('Search',lambda i:i.response.send_modal(ChoresSearch(self)))])
                 frame.rows([button('Back to chores',lambda i:present(i,target(i,mode='today',day=timing.now().date().isoformat(),who='mine',query='',page=0))),button('Household tools',lambda i:present(i,Dashboard(owner,i.guild,i.user)))])
             else:
                 navigation=[button('Back to today',lambda i:present(i,target(i,mode='today',day=timing.now().date().isoformat(),page=0))),button('Week calendar',lambda i:present(i,ui.planning.Calendar(owner,i.guild,day=day,mine=state['who']=='mine')))] if state['mode']=='date' else [button('Other dates',lambda i:present(i,target(i,mode='date',page=0)))]
+                if state['who']=='mine':navigation.append(button('Quick Done',lambda i:present(i,Browse(owner,area='mine',tab='due',guild=i.guild))))
                 navigation.append(button('Manage chores',lambda i:present(i,target(i,mode='all',who='everyone',query='',page=0))))
                 frame.rows(navigation)
             refresh=button('Refresh',lambda i:present(i,target(i)))
@@ -468,6 +479,7 @@ def install(ns, ui, lock):
             self.button('Chores',lambda i:present(i,Chores(owner,i.guild)),row=3)
             self.button('Calendar',lambda i:present(i,Chores(owner,i.guild,mode='date',who='everyone')),row=3)
             self.button('Needs attention',lambda i:present(i,Chores(owner,i.guild,who='attention')),row=0)
+            self.button('Quick Done',lambda i:present(i,Browse(owner,area='mine',tab='due',guild=i.guild)),row=0)
             self.button('Chore reminders',lambda i:present(i,ui.planning.Reminders(owner)),row=3)
             self.button('Trade alerts', lambda i: present(i, Notifications(owner)), row=2)
             self.button('List length',lambda i:present(i,ListLength(owner)),row=1)
@@ -935,7 +947,7 @@ def install(ns, ui, lock):
                 self.button('Find a person',lambda i:i.response.send_modal(FindPerson()),row=4)
             self.button('Back',lambda i:present(i,source),row=4)
 
-    async def claim_now(i,source,qid,expected,back=None):
+    async def claim_now(i,source,qid,expected,back=None,stay_on_list=False):
         if not await source.interaction_check(i):return
         async def change():
             async with lock:
@@ -946,7 +958,7 @@ def install(ns, ui, lock):
         task=asyncio.create_task(change())
         finished,_=await asyncio.wait({task},timeout=1.0)
         if not finished:await i.response.defer()
-        await present(i,Card(source.owner,qid,back,i.guild),await task)
+        await present(i,back() if stay_on_list and back else Card(source.owner,qid,back,i.guild),await task)
 
     class ClaimChoices(View):
         def __init__(self,owner,qid,guild=None,back=None,include_once=True):
@@ -2204,8 +2216,22 @@ def install(ns, ui, lock):
                 await present(event,self.back(),text)
             await present(i,Confirm(self.owner,'Confirm date changes',f'{len(self.people)} person(s) · {self.state.upper()}\n{first:%A %b %d, %Y} through {last:%A %b %d, %Y}, inclusive full Eastern days.\nExisting chores stay assigned; review coverage afterward.',save,self.back))
 
-    def household_people(viewer):
+    def household_people(viewer,guild=None):
         ids={str(viewer)}
+        saved=db.execute('SELECT guild_id,channel_id,message_id FROM chore_board WHERE singleton=1').fetchone()
+        getter=getattr(guild,'get_channel',None)
+        channel=getter(int(saved[1])) if getter and saved and str(getattr(guild,'id',None))==saved[0] else None
+        members=[]
+        if channel is not None:
+            for member in getattr(channel,'members',()):
+                if getattr(member,'bot',True):continue
+                permissions=channel.permissions_for(member)
+                if permissions.view_channel and permissions.read_message_history:
+                    members.append(str(member.id))
+        if members:
+            # Accounts are keyed by Discord ID; never replace existing scores or preferences.
+            with db:db.executemany('INSERT OR IGNORE INTO users(id) VALUES(?)',[(uid,) for uid in members])
+            ids.update(members)
         for query in ('SELECT id FROM users','SELECT user_id FROM alternating_members',
                       'SELECT user_id FROM availability_defaults','SELECT user_id FROM availability_exceptions',
                       'SELECT user_id FROM claims','SELECT user_id FROM week_signups',
@@ -2225,7 +2251,7 @@ def install(ns, ui, lock):
             self.people_details=[]
             self.embed = discord.Embed(title='Who’s home? · trips and traded days',description='Choose anyone. Mark home/away for particular dates, or change their Usual schedule. Date overrides win; afterward the usual schedule resumes. Eastern time.',color=0x6B9B77)
             if not people:
-                now=timing.now();known=household_people(owner)
+                now=timing.now();known=household_people(owner,guild)
                 size=page_size(owner);page=min(max(page,0),max((len(known)-1)//size,0))
                 self.recovery_context['page']=page
                 home=sum(ui.attendance.at(uid,now) for uid in known)
@@ -2233,13 +2259,14 @@ def install(ns, ui, lock):
                 self.name_ids=known
                 known.sort(key=lambda uid:(clean(person(uid,guild),100).casefold(),int(uid)))
                 self.list_page_size=size
+                names=[clean(person(uid,guild),100) for uid in known]
                 for uid in known[page*size:(page+1)*size]:
                     state='🟢 Home' if ui.attendance.at(uid,now) else '🔴 Away'
                     override=db.execute('SELECT state FROM availability_exceptions WHERE user_id=? AND active=1 AND start_date<=? AND end_date>=? ORDER BY id DESC LIMIT 1',(uid,now.date().isoformat(),now.date().isoformat())).fetchone()
                     reason=('Date override: '+override[0]) if override else ui.attendance.describe(uid)
-                    self.embed.add_field(name=clean(person(uid,guild),100),value=state+' · '+reason,inline=False)
+                    self.embed.add_field(name=clean(person(uid,guild),100)+(f' · ID {uid}' if names.count(clean(person(uid,guild),100))>1 else ''),value=state+' · '+reason,inline=False)
                     self.people_details.append(uid)
-                self.embed.set_footer(text=f'Page {page+1} of {max((len(known)-1)//size+1,1)} · {len(known)} known household account(s)')
+                self.embed.set_footer(text=f'Page {page+1} of {max((len(known)-1)//size+1,1)} · {len(known)} known household account(s) · Missing someone? Use the person picker below.')
                 self.paging_labels=('Previous','Next')
                 if page:self.button('Previous',lambda i:present(i,Trips(owner,i.guild,page=page-1)),row=3)
                 if (page+1)*size<len(known):self.button('Next',lambda i:present(i,Trips(owner,i.guild,page=page+1)),row=3)

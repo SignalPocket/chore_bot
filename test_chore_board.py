@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.2.1')
+        self.assertEqual(chore_board.APP_VERSION,'2.3.0')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.2.1. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.3.0. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -2093,7 +2093,9 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             view=p.Day(10,day,True);picker=self.source_picker(view);picker._values=['2'];i=Interaction();await picker.callback(i)
             result=i.response.payload['view']
             self.assertNotIn('Done',[getattr(c,'label',None) for c in result.children])
-            self.assertIn('Open current chore',[getattr(c,'label',None) for c in result.children])
+            self.assertIsInstance(result,self.ui.workspace.Card)
+            self.assertIn('Actions below apply to the current occurrence',result.embed.description)
+            self.assertNotIn('Open current chore',[getattr(c,'label',None) for c in result.children])
 
 
     async def test_planning_dashboard_entries_and_large_checklist_limits(self):
@@ -3199,7 +3201,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                 panel=w.render(w.Chores(10,who=scope))
                 self.assertTrue(any(isinstance(c,discord.ui.Container) for c in panel.children))
                 picker=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Select))
-                self.assertEqual(len(picker.options),8)
+                self.assertEqual(len(picker.options),4 if scope=='attention' else 8)
                 self.assertLessEqual(panel.total_children_count,40)
                 texts=' '.join(c.content for c in panel.walk_children() if isinstance(c,discord.ui.TextDisplay))
                 self.assertIn('Chores',texts)
@@ -6889,6 +6891,89 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(undo,done.children[-1].accessory)
             await undo.callback(Interaction())
             self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(0,))
+
+    async def test_quick_claim_attention_single_occurrence_stale_and_private(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-21T09:00:00'):
+            panel=w.render(w.Chores(10,who='attention'))
+            row=next(r for r in self.calendar_sections(panel) if 'Fill dishwasher' in r.children[0].content)
+            claim=row.accessory
+            wrong=Interaction(20);await claim.callback(wrong)
+            self.assertFalse(self.db.execute('SELECT * FROM claims').fetchall())
+            event=Interaction();await claim.callback(event)
+            self.assertIsInstance(self.rendered(event).source,w.Chores)
+            self.assertEqual(w.ownership(1)[0],'10')
+            self.assertFalse(self.db.execute('SELECT * FROM week_signups').fetchall())
+            self.assertFalse(self.db.execute('SELECT * FROM repeating_signups').fetchall())
+            await claim.callback(Interaction(20))
+            self.assertEqual(w.ownership(1)[0],'10')
+            await claim.callback(Interaction())
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM claims WHERE quest_id=1').fetchone(),(1,))
+            self.assertFalse(self.db.execute('SELECT * FROM completion_log').fetchall())
+
+    async def test_quick_done_entry_completion_checklist_and_double_tap(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-21T09:00:00'):
+            self.db.execute("UPDATE quests SET assigned_to='10' WHERE id=1");self.db.commit()
+            panel=w.render(w.Chores(10));event=Interaction();await self.activate(panel,'Quick Done',event)
+            quick=self.rendered(event)
+            self.assertIsInstance(quick.source,w.Browse)
+            self.assertEqual((quick.source.state['area'],quick.source.state['tab']),('mine','due'))
+            done=self.row_action(quick,'Fill dishwasher','Done')
+            wrong=Interaction(20);await done.callback(wrong)
+            self.assertFalse(self.db.execute('SELECT * FROM completion_log').fetchall())
+            event=Interaction();await done.callback(event)
+            await done.callback(Interaction())
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log WHERE quest_id=1').fetchone(),(1,))
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone(),(5,))
+
+    async def test_channel_roster_new_accounts_and_separate_defaults(self):
+        w=self.ui.workspace
+        members=[SimpleNamespace(id=n,bot=n==60,display_name='Same name') for n in (10,20,30,40,50,60,70)]
+        channel=SimpleNamespace(members=members,permissions_for=lambda m:SimpleNamespace(view_channel=m.id!=70,read_message_history=True))
+        guild=SimpleNamespace(id=1,get_channel=lambda cid:channel if cid==2 else None,get_member=lambda uid:next((m for m in members if m.id==uid),None))
+        self.db.execute("INSERT INTO users(id,points,streak) VALUES('20',90,3)");self.db.commit()
+        source=w.Trips(10,guild)
+        self.assertEqual({r[0] for r in self.db.execute('SELECT id FROM users')},{'10','20','30','40','50'})
+        self.assertEqual(self.db.execute("SELECT points,streak FROM users WHERE id='20'").fetchone(),(90,3))
+        w.Trips(10,guild)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM users').fetchone(),(5,))
+        a=self.ui.attendance
+        with self.clock('2026-10-21T09:00:00'):
+            a.set_defaults(10,['20'],'away',[],a.defaults_snapshot(['20']),self.ui.timing.now())
+            for uid in ('10','30','40','50'):self.assertTrue(a.at(uid,self.ui.timing.now()))
+            self.assertFalse(a.at('20',self.ui.timing.now()))
+        self.assertFalse(self.db.execute('SELECT * FROM reminder_settings').fetchall())
+        w.render(source).to_components()
+
+    async def test_manage_catalog_archive_direct_and_preserves_return_scope(self):
+        w=self.ui.workspace
+        source=w.Chores(10,mode='all',who='everyone',query='dishwasher')
+        panel=w.render(source)
+        event=Interaction();await self.activate(panel,'Archive chore',event)
+        archive=self.rendered(event)
+        self.assertIsInstance(archive.source,self.ui.RemoveChoreView)
+        self.assertFalse(self.ui.is_archived(1))
+        wrong=Interaction(20);await self.activate(panel,'Archive chore',wrong)
+        self.assertTrue(wrong.response.payload[1]['ephemeral'])
+        panel.to_components();self.assertLessEqual(panel.total_children_count,40)
+
+    async def test_today_details_direct_card_for_dated_and_twice_daily(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-21T10:00:00'):
+            self.db.execute('UPDATE quests SET frequency=? WHERE id=1',('twice-daily',));self.db.commit()
+            source=self.ui.planning.Day(10,self.ui.timing.now().date(),guild=Interaction().guild)
+            panel=w.render(source)
+            details=self.calendar_sections(panel)[0].accessory
+            event=Interaction();await details.callback(event)
+            card=self.rendered(event)
+            self.assertIsInstance(card.source,w.Card)
+            self.assertFalse(any(getattr(c,'label',None)=='Open current chore' for c in card.walk_children()))
+            self.assertFalse(self.db.execute('SELECT * FROM claims').fetchall())
+            event=Interaction();await self.activate(card,'Back',event)
+            restored=self.rendered(event).source
+            self.assertIsInstance(restored,self.ui.planning.Day)
+            self.assertEqual(restored.day,source.day)
 
     async def test_combined_chores_views_header_filters_recovery_and_private_controls(self):
         w=self.ui.workspace

@@ -1,3 +1,11 @@
+# 2.3.0 — 2026-11-08
+
+- Restore Archive chore directly on the current Manage catalog (#13).
+- Needs attention has a guarded Claim button beside each current occurrence and refreshes the list after claiming (#14). Four-row pages keep these controls within Discord limits.
+- Quick Done on Mine and Dashboard opens your due-task list with inline Done buttons and the existing checklist, ownership, and duplicate-award protections (#15).
+- Who’s home includes eligible cached chores-channel members, creates missing accounts without replacing scores/preferences, and distinguishes duplicate display names by Discord ID (#16). The person picker remains available for uncached members; complete membership discovery still depends on Discord member availability.
+- Today’s calendar Details opens the actionable card directly, including dated claims and AM/PM chores (#17). Future dates keep date/shift controls.
+
 # Sprig release notes
 
 ## 1.5.0

@@ -577,3 +577,16 @@ Catalog editing opens the existing prefilled native form directly and returns to
 
 ## Prepared 2.2.1 — caught up and Claim scope
 Unfiltered empty Mine says “You’re caught up ✅”. Empty searches keep the no-match explanation. Work cards show “Just this occurrence” directly below the Claim row; Done cards do not show this cue. Claim, signup and completion behavior is unchanged. Local review only, not deployed.
+
+
+## Prepared 2.3.0 — quick chore actions
+
+Manage chores → Archive chore opens the active archive list directly.
+
+Needs attention shows Claim beside each eligible chore for the current occurrence. It takes only that occurrence and returns to the refreshed list. Assigned chores remain unavailable to other people. These action rows use pages of up to four chores; the chooser still opens instructions.
+
+Mine → Quick Done, or Dashboard → Quick Done, opens your own due tasks with Done beside each. Unfinished checklists open before completion; repeated taps cannot award points twice.
+
+Calendar Details for today opens the actionable chore directly. Future dated chores retain their date/shift choices. Entries that previously offered only Open current chore now open that card directly, with the selected calendar date and a reminder that actions apply to the current occurrence.
+
+Who’s home? lists saved people plus eligible non-bot members Discord supplies for the chores channel. New accounts keep default preferences, including notifications off. Choose a person → Usual schedule for their regular pattern, or Home/Away dates for their exceptions. Changes apply only to the selected person or explicitly selected group. Duplicate names show Discord IDs. If someone is missing from Discord’s cached roster, use the person picker to find/select them; this release does not enable privileged Discord member intents.
