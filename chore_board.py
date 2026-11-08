@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.5.0'
+APP_VERSION = '2.5.1'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'Generic household setup manages people, names, colors, icons and individual calendars and schedules.'
+RELEASE_SUMMARY = 'Points and standings includes all known household people, including zero-point accounts.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 

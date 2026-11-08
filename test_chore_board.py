@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.5.0')
+        self.assertEqual(chore_board.APP_VERSION,'2.5.1')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.5.0. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.5.1. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -5380,6 +5380,34 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(other.response.wire_payload[1]['ephemeral'])
         self.assertEqual(before,[line for line in self.db.iterdump() if 'workspace_' not in line])
 
+    async def test_standings_includes_five_people_with_only_two_score_rows_read_only(self):
+        w=self.ui.workspace
+        self.db.executemany('INSERT INTO users(id,points,streak) VALUES(?,?,?)',[('10',20,2),('20',45,3)])
+        self.db.execute("INSERT INTO household_profiles VALUES('30','Dar','⭐',1)")
+        self.db.execute("INSERT INTO alternating_members VALUES('40')")
+        self.db.execute("UPDATE quests SET assigned_to='50' WHERE id=2");self.db.commit()
+        before=list(self.db.iterdump())
+        panel=w.Points(10)
+        self.assertEqual(len(panel.embed.fields),5)
+        self.assertIn('5 household member(s)',panel.embed.footer.text)
+        self.assertEqual([field.value for field in panel.embed.fields],['45 points','20 points','0 points','0 points','0 points'])
+        self.assertEqual([field.name.split('.')[0] for field in panel.embed.fields],['1','2','3','3','3'])
+        self.assertIn('Dar',panel.embed.fields[2].name)
+        self.assertEqual(before,list(self.db.iterdump()))
+        wire=w.render(panel);wire.to_components();self.assertLessEqual(wire.total_children_count,40)
+
+    async def test_standings_cached_members_without_scores_does_not_register_or_include_bots(self):
+        w=self.ui.workspace;guild=SimpleNamespace(id=1)
+        members=[SimpleNamespace(id=uid,bot=uid==60,display_name='Person '+str(uid)) for uid in (10,20,30,40,50,60,70)]
+        channel=SimpleNamespace(members=members,permissions_for=lambda m:SimpleNamespace(view_channel=m.id!=70,read_message_history=True))
+        guild.get_channel=lambda cid:channel if cid==2 else None
+        guild.get_member=lambda uid:next((m for m in members if m.id==uid),None)
+        before=list(self.db.iterdump());source=w.Points(10,guild)
+        self.assertEqual(set(source.name_ids),{'10','20','30','40','50'})
+        self.assertTrue(all(field.value=='0 points' for field in source.embed.fields))
+        self.assertEqual(before,list(self.db.iterdump()))
+        self.assertFalse(self.db.execute('SELECT * FROM users').fetchall())
+
     async def test_points_standings_handle_empty_users_ties_and_pagination(self):
         w=self.ui.workspace;before=list(self.db.iterdump());empty=w.Points(10)
         self.assertIn('0 points',empty.embed.description)
@@ -5390,7 +5418,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(first.embed.fields[1].name.startswith('1.'))
         self.assertTrue(first.embed.fields[2].name.startswith('3.'))
         event=Interaction();await next(c for c in first.children if getattr(c,'label',None)=='Next').callback(event)
-        self.assertEqual(len(event.response.payload['embed'].fields),3)
+        self.assertEqual(len(event.response.payload['embed'].fields),4)
         self.assertTrue(event.response.payload['embed'].fields[0].name.startswith('6.'))
         self.assertLessEqual(len(event.response.wire_payload['view'].to_components()),40)
 

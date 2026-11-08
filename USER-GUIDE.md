@@ -614,3 +614,8 @@ Household setup → Manage people lists known household accounts. Use Find or ad
 Each person has Regular schedule, Trips and date exceptions, and Calendar. Regular schedule offers always home/away, selected weekdays, or alternating cycle A/B. Cycles retain the existing Sunday 6 p.m. Eastern handoff; cycle A is home on the week beginning October 25, 2026, and cycle B on the week beginning October 18. Existing household defaults and historical alternating membership are preserved unless explicitly edited. Day/week calendar switches keep the selected person. Household calendar shows everyone. Profile setup does not rewrite assignments, scores, attendance or reminder preferences.
 
 Household setup is administered through Manage Server access. Routine attendance and personal settings keep their existing permissions. Saved profiles and navigation survive restart; unsaved modal/draft edits are never replayed.
+
+
+## Prepared 2.5.1 — everyone in standings
+
+Points & standings includes known household people from saved profiles, schedules, assignments, score accounts and eligible cached channel members. People without a score row display 0 points. Viewing the list does not create accounts or change points, streaks, schedules or history. Use Household setup → Manage people to add a missing Discord account and save its profile.

@@ -1,3 +1,7 @@
+# 2.5.1 — 2026-11-08
+
+- Points & standings now includes the shared known-household roster, not just existing score rows. Missing scores display zero; existing points/streaks/history remain unchanged. Reading standings does not register accounts or mutate household records. Preserve ranking ties, pagination, personal markers and private controls.
+
 # 2.5.0 — 2026-11-08
 
 - Replace name-specific Household setup controls with Manage people and Household calendar. Any household Discord account can have a saved display name, independent icon and marker, personal schedule, trips/exceptions and filtered day/week calendar.

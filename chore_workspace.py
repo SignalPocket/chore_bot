@@ -746,7 +746,8 @@ def install(ns, ui, lock):
             size=page_size(owner)
             self.list_page_size=size
             total=db.execute('SELECT points,streak FROM users WHERE id=?',(str(owner),)).fetchone() or (0,0)
-            records=db.execute('SELECT id,points FROM users ORDER BY points DESC,id').fetchall()
+            scores=dict(db.execute('SELECT id,points FROM users'))
+            records=sorted(((uid,scores.get(uid) or 0) for uid in household_people(owner,guild,register=False)),key=lambda row:(-row[1],int(row[0])))
             page=min(max(page,0),max((len(records)-1)//size,0))
             chunk=records[page*size:(page+1)*size]
             self.name_ids=[r[0] for r in chunk]
@@ -2389,7 +2390,7 @@ def install(ns, ui, lock):
                 await present(event,self.back(),text)
             await present(i,Confirm(self.owner,'Confirm date changes',f'{len(self.people)} person(s) · {self.state.upper()}\n{first:%A %b %d, %Y} through {last:%A %b %d, %Y}, inclusive full Eastern days.\nExisting chores stay assigned; review coverage afterward.',save,self.back))
 
-    def household_people(viewer,guild=None):
+    def household_people(viewer,guild=None,register=True):
         ids={str(viewer)}
         saved=db.execute('SELECT guild_id,channel_id,message_id FROM chore_board WHERE singleton=1').fetchone()
         getter=getattr(guild,'get_channel',None)
@@ -2403,7 +2404,8 @@ def install(ns, ui, lock):
                     members.append(str(member.id))
         if members:
             # Accounts are keyed by Discord ID; never replace existing scores or preferences.
-            with db:db.executemany('INSERT OR IGNORE INTO users(id) VALUES(?)',[(uid,) for uid in members])
+            if register:
+                with db:db.executemany('INSERT OR IGNORE INTO users(id) VALUES(?)',[(uid,) for uid in members])
             ids.update(members)
         for query in ('SELECT id FROM users','SELECT user_id FROM household_profiles','SELECT user_id FROM person_colors','SELECT user_id FROM household_identities','SELECT user_id FROM alternating_members',
                       'SELECT user_id FROM availability_defaults','SELECT user_id FROM availability_exceptions',
