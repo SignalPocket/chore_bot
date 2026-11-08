@@ -62,6 +62,7 @@ def install(ns, ui, w):
         kind = context.get('screen')
         parent_context = context.get('parent', {'screen': 'dashboard'})
         parent = lambda: restore(owner, parent_context, guild, depth+1)
+        if kind=='reassign':return parent()
         if kind=='chores':return w.Chores(owner,guild,**{k:context[k] for k in ('mode','day','who','query','page') if k in context})
         if kind=='chore_more':return w.ChoreMore(owner,w.Card(owner,int(context['qid']),parent,guild,int(context.get('offset',0))))
         if kind=='person_color':return w.PersonColor(owner,guild,parent)

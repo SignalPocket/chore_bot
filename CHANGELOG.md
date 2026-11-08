@@ -1,3 +1,7 @@
+# 2.3.2 — 2026-11-08
+
+- Reassignment opened from a chore remembers the original list/calendar date, scope, filters, and page. Confirm and Cancel return there directly with the result. Expired controls recover that origin without replaying the assignment.
+
 # 2.3.1 — 2026-11-08
 
 - Allow Every week · ongoing assignments while the recipient is away. Keep attendance checks for completing work, current-occurrence reassignment, and weekly eligibility. Preserve saved schedules, assignment conflicts, points/history, and stale-screen safeguards.

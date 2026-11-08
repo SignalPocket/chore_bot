@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.3.1'
+APP_VERSION = '2.3.2'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'Ongoing chores can be assigned while someone is away; their saved attendance still applies.'
+RELEASE_SUMMARY = 'Confirming reassignment returns directly to your original chore list and page.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 
@@ -774,9 +774,11 @@ def install(namespace):
         return 'This occurrence reassigned. Completed work and earned points are unchanged.'
 
     class ReassignView(SafeView):
-        def __init__(self,owner,page=0,qid=None,scope=None,target=None,expected=None):
+        def __init__(self,owner,page=0,qid=None,scope=None,target=None,expected=None,return_context=None):
             super().__init__(timeout=600)
             self.owner,self.qid,self.scope,self.target=owner,qid,scope,target
+            self.return_context=return_context
+            if return_context is not None:self.recovery_context={'screen':'reassign','parent':return_context}
             entries=[r for r in db.execute('SELECT id,name FROM quests ORDER BY name COLLATE NOCASE,id') if not is_archived(r[0])]
             self.page=min(max(page,0),max((len(entries)-1)//PAGE_SIZE,0))
             self.expected=expected
@@ -848,21 +850,27 @@ def install(namespace):
             return True
 
         async def show(self,interaction,**changes):
-            values=dict(page=self.page,qid=self.qid,scope=self.scope,target=self.target,expected=self.expected)
+            values=dict(page=self.page,qid=self.qid,scope=self.scope,target=self.target,expected=self.expected,return_context=self.return_context)
             values.update(changes)
             view=ReassignView(self.owner,**values)
             await interaction.response.edit_message(embed=view.embed,view=view,allowed_mentions=discord.AllowedMentions.none())
 
         async def cancel(self,interaction):
+            if not await self.interaction_check(interaction):return
+            if self.return_context is not None:
+                return await workspace.present(interaction,workspace.recovery.restore(self.owner,self.return_context,interaction.guild),'Reassignment canceled. Nothing changed.')
             await interaction.response.edit_message(content='Reassignment canceled. Nothing changed.',embed=None,view=ReturnView(interaction.user.id))
 
         async def confirm(self,interaction):
+            if not await self.interaction_check(interaction):return
             if not self.target or self.target.bot or getattr(getattr(self.target,'guild',None),'id',None)!=interaction.guild_id:
                 await interaction.response.send_message('Choose a household member first.',ephemeral=True)
                 return
             await interaction.response.defer()
             async with lock:
                 notice=reassign(self.qid,self.target.id,self.scope,self.expected,actor=interaction.user.id)
+            if self.return_context is not None:
+                return await workspace.present(interaction,workspace.recovery.restore(self.owner,self.return_context,interaction.guild),notice)
             await interaction.edit_original_response(content=notice,embed=None,view=ReturnView(interaction.user.id),allowed_mentions=discord.AllowedMentions.none())
 
     def owned_scope(qid):

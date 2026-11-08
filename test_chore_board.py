@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.3.1')
+        self.assertEqual(chore_board.APP_VERSION,'2.3.2')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.3.1. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.3.2. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -3463,6 +3463,47 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('Nobody signed up',str(view.embed.to_dict()))
             self.assertLess(len(view.embed.description),400)
             self.assertTrue(all(len(field.value)<=1024 for field in view.embed.fields))
+
+    async def test_reassign_confirm_returns_exact_origin_without_return_page(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            for n in range(12):self.ui.create_chore('Return chore '+str(n),'daily','5','')
+            origin=w.Chores(10,who='everyone',query='Return',page=1)
+            card=w.render(w.Card(10,3,lambda:origin))
+            event=Interaction();await self.activate(card,'Reassign',event)
+            source=self.rendered(event).source
+            self.assertIsInstance(source,self.ui.ReassignView)
+            self.assertEqual(source.return_context,w.recovery.bookmark(origin))
+            target=SimpleNamespace(id=20,bot=False,guild=SimpleNamespace(id=1),display_name='Kas')
+            event=Interaction();await source.show(event,scope='assignment',target=target)
+            confirm=w.render(w.adapt(self.rendered(event),10,lambda:origin))
+            self.assertEqual(confirm.source.return_context,source.return_context)
+            wrong=Interaction(20);await self.activate(confirm,'Confirm reassignment',wrong)
+            self.assertIsNone(self.db.execute('SELECT assigned_to FROM quests WHERE id=3').fetchone()[0])
+            event=Interaction();await self.activate(confirm,'Confirm reassignment',event)
+            returned=self.rendered(event)
+            self.assertIsInstance(returned.source,w.Chores)
+            self.assertEqual(returned.source.state,origin.state)
+            self.assertEqual(self.db.execute('SELECT assigned_to FROM quests WHERE id=3').fetchone(),('20',))
+            self.assertIn('saved',str(event.result.get('content') or returned.notice))
+            await self.activate(confirm,'Confirm reassignment',Interaction())
+            self.assertEqual(self.db.execute('SELECT assigned_to FROM quests WHERE id=3').fetchone(),('20',))
+
+    async def test_reassign_cancel_and_expiry_restore_origin_without_mutation(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            origin=self.ui.planning.Day(10,self.ui.timing.now().date(),mine=False,mode='month')
+            context=w.recovery.bookmark(origin)
+            source=self.ui.ReassignView(10,qid=1,scope='assignment',expected=self.ui.reassign_snapshot(1),return_context=context)
+            panel=w.render(w.adapt(source,10,lambda:origin))
+            event=Interaction();await self.activate(panel,'Cancel',event)
+            self.assertIsInstance(self.rendered(event).source,self.ui.planning.Day)
+            self.assertEqual(w.recovery.bookmark(self.rendered(event).source),context)
+            self.assertIsNone(self.db.execute('SELECT assigned_to FROM quests WHERE id=1').fetchone()[0])
+            self.assertEqual(w.recovery.bookmark(source),dict(screen='reassign',parent=context))
+            restored=w.recovery.restore(10,w.recovery.bookmark(source),None)
+            self.assertIsInstance(restored,self.ui.planning.Day)
+            self.assertEqual(w.recovery.bookmark(restored),context)
 
     async def test_reassign_private_ui_ownership_and_cancel(self):
         event=Interaction()

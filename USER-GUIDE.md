@@ -595,3 +595,8 @@ Who’s home? lists saved people plus eligible non-bot members Discord supplies 
 ## Prepared 2.3.1 — plan ongoing work while away
 
 Every week · ongoing can be assigned even when the selected person is away now, including before the Sunday 6 p.m. return. Their attendance schedule stays saved, and completing work still requires being home. Current-occurrence and weekly assignment eligibility retain their existing checks.
+
+
+## Prepared 2.3.2 — reassignment returns to your place
+
+When Reassign opens from a chore, Confirm reassignment returns directly to the original list or calendar view and shows the saved result there. Selected scope/date, search, filters and page are retained, subject to normal page clamping if the list shrinks. Cancel returns there without saving. Expired controls recover the original location without replaying the old assignment. Legacy standalone reassignment keeps its existing fallback.

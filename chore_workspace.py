@@ -1873,7 +1873,7 @@ def install(ns, ui, lock):
                 elif value == 'edit':
                     ids = [r[0] for r in db.execute('SELECT id FROM quests ORDER BY name COLLATE NOCASE,id') if not ui.is_archived(r[0])]
                     view = ui.EditChoreView(owner, ids.index(qid)//20, qid)
-                elif value == 'reassign': view = ui.ReassignView(owner, qid=qid, scope='occurrence' if scope in ('repeating','dated') else scope, expected=ui.reassign_snapshot(qid))
+                elif value == 'reassign': view = ui.ReassignView(owner, qid=qid, scope='occurrence' if scope in ('repeating','dated') else scope, expected=ui.reassign_snapshot(qid),return_context=recovery.bookmark(back()))
                 elif value == 'drop':
                     if scope=='dated':return await present(i,FutureOccurrence(owner,qid,timing.now().date(),ui.dated.key(qid)[1],guild=i.guild,back=card))
                     if scope=='repeating':return await present(i,Repeating(owner,qid,i.guild))
