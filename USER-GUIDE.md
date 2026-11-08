@@ -590,3 +590,8 @@ Mine → Quick Done, or Dashboard → Quick Done, opens your own due tasks with 
 Calendar Details for today opens the actionable chore directly. Future dated chores retain their date/shift choices. Entries that previously offered only Open current chore now open that card directly, with the selected calendar date and a reminder that actions apply to the current occurrence.
 
 Who’s home? lists saved people plus eligible non-bot members Discord supplies for the chores channel. New accounts keep default preferences, including notifications off. Choose a person → Usual schedule for their regular pattern, or Home/Away dates for their exceptions. Changes apply only to the selected person or explicitly selected group. Duplicate names show Discord IDs. If someone is missing from Discord’s cached roster, use the person picker to find/select them; this release does not enable privileged Discord member intents.
+
+
+## Prepared 2.3.1 — plan ongoing work while away
+
+Every week · ongoing can be assigned even when the selected person is away now, including before the Sunday 6 p.m. return. Their attendance schedule stays saved, and completing work still requires being home. Current-occurrence and weekly assignment eligibility retain their existing checks.

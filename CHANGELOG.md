@@ -1,3 +1,7 @@
+# 2.3.1 — 2026-11-08
+
+- Allow Every week · ongoing assignments while the recipient is away. Keep attendance checks for completing work, current-occurrence reassignment, and weekly eligibility. Preserve saved schedules, assignment conflicts, points/history, and stale-screen safeguards.
+
 # 2.3.0 — 2026-11-08
 
 - Restore Archive chore directly on the current Manage catalog (#13).

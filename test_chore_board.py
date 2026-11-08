@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.3.0')
+        self.assertEqual(chore_board.APP_VERSION,'2.3.1')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.3.0. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.3.1. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -3381,6 +3381,37 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('reassigned',self.ui.reassign(1,20,'week1',self.ui.reassign_snapshot(1)))
             self.assertIn('weekly sign-ups',self.ui.reassign(1,10,'assignment',self.ui.reassign_snapshot(1)))
             self.assertIn('Ongoing assignment',self.ui.reassign(2,10,'week0',self.ui.reassign_snapshot(2)))
+
+    async def test_ongoing_assignment_while_away_survives_sunday_home_handoff(self):
+        w=self.ui.workspace
+        self.db.executemany('INSERT INTO alternating_members VALUES(?)',[('20',),('30',)]);self.db.commit()
+        with self.clock('2026-11-08T09:00:00'):
+            self.assertFalse(self.ui.available(20));self.assertFalse(self.ui.available(30))
+            for qid,uid in ((1,20),(2,30)):
+                self.assertIn('saved',self.ui.reassign(qid,uid,'assignment',self.ui.reassign_snapshot(qid),actor=10))
+                self.assertEqual(w.ownership(qid)[0],str(uid))
+            before=self.db.execute('SELECT * FROM availability_defaults').fetchall()
+            event=Interaction(20);ctx=self.ui.Context(event)
+            await self.app.bot.get_command('done').callback(ctx,1)
+            self.assertIn('away',' '.join(ctx.messages))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+            self.assertEqual(self.db.execute('SELECT * FROM availability_defaults').fetchall(),before)
+        with self.clock('2026-11-08T18:01:00'):
+            self.assertTrue(self.ui.available(20));self.assertTrue(self.ui.available(30))
+            self.assertEqual(w.ownership(1)[0],'20');self.assertEqual(w.ownership(2)[0],'30')
+            ctx=self.ui.Context(Interaction(20));await self.app.bot.get_command('done').callback(ctx,1)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log WHERE quest_id=1').fetchone(),(1,))
+
+    async def test_away_ongoing_assignment_keeps_conflict_stale_and_occurrence_guards(self):
+        with self.clock('2026-10-20T10:00:00'):
+            self.db.execute("INSERT INTO alternating_members VALUES('20')");self.db.commit()
+            self.assertIn('away',self.ui.reassign(1,20,'occurrence',self.ui.reassign_snapshot(1)))
+            self.ui.signup(10,1,self.ui.week_key())
+            self.assertIn('weekly sign-ups',self.ui.reassign(1,20,'assignment',self.ui.reassign_snapshot(1)))
+            expected=self.ui.reassign_snapshot(2)
+            self.db.execute("UPDATE quests SET notes='Changed instructions' WHERE id=2");self.db.commit()
+            self.assertIn('changed',self.ui.reassign(2,20,'assignment',expected))
+            self.assertEqual(self.db.execute('SELECT assigned_to FROM quests WHERE id=2').fetchone(),('10',))
 
     async def test_reassign_ongoing_preserves_name_and_no_current_occurrence_bypass(self):
         with self.clock('2026-10-20T10:00:00'):

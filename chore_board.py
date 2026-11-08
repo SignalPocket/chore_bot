@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.3.0'
+APP_VERSION = '2.3.1'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'Direct Archive, one-tap Claim in Needs attention, Quick Done, separate channel-member accounts, and direct current details.'
+RELEASE_SUMMARY = 'Ongoing chores can be assigned while someone is away; their saved attendance still applies.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 
@@ -740,7 +740,7 @@ def install(namespace):
         if scope in ('week0','week1','assignment') and namespace['chore_ui'].repeating.slots(qid):
             return 'Release repeating days before assigning a whole week or ongoing responsibility.'
         offset=1 if scope=='week1' else 0
-        if (scope.startswith('week') and not can_take_week(target,qid,offset)) or (not scope.startswith('week') and not available(target)):
+        if (scope.startswith('week') and not can_take_week(target,qid,offset)) or (scope=='occurrence' and not available(target)):
             return 'That person is away that week. Choose someone who is home.'
         if scope.startswith('week'):
             if row[1]:
