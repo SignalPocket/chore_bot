@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.6.0')
+        self.assertEqual(chore_board.APP_VERSION,'2.6.1')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.6.0. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.6.1. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -6787,6 +6787,46 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             missing=w.Manage(10,query='definitely absent');self.assertEqual(missing.manage_details,[])
             self.assertIn('No matching chores',missing.embed.fields[0].name)
             w.render(missing).to_components()
+
+    async def test_manage_edit_repeat_schedule_saves_and_details_show_full_cadence(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-21T10:00:00'):
+            panel=w.render(w.Manage(10,query='bathroom'))
+            event=Interaction()
+            await self.manage_sections(panel)[0].accessory.callback(event)
+            modal=event.response.payload
+            self.assertEqual(modal.repeat.default,'Weekly')
+            self.assertEqual(len(modal.children),5)
+            modal.name._value=modal.name.default
+            modal.points._value=modal.points.default
+            modal.repeat._value='Monday and Friday'
+            event=Interaction();await modal.on_submit(event)
+            self.assertEqual(self.db.execute('SELECT frequency FROM quests WHERE id=2').fetchone(),('days:monday,friday',),str(event.response.payload))
+            self.assertEqual(event.response.payload['view'].query,'bathroom')
+            card=w.render(w.Card(10,2))
+            text=' '.join(str(getattr(c,'content','')) for c in card.walk_children())
+            self.assertIn('**Repeats:** Monday, Friday',text)
+            self.assertIn('Repeats: Monday, Friday',str(card.source.embed.to_dict()))
+            before=self.db.execute('SELECT * FROM quests ORDER BY id').fetchall()
+            stale=Interaction();await modal.on_submit(stale)
+            self.assertIn('changed',stale.response.payload['content'])
+            self.assertEqual(self.db.execute('SELECT * FROM quests ORDER BY id').fetchall(),before)
+
+    async def test_repeat_edit_roundtrips_all_schedules_and_rejects_invalid_atomically(self):
+        with self.clock('2026-10-21T10:00:00'):
+            for frequency in self.app.VALID_FREQUENCIES:
+                self.assertEqual(self.ui.timing.parse_repeat(self.ui.timing.repeat_text(frequency)),frequency)
+            modal=self.ui.EditChoreModal(10,2,'weekly',self.ui.snapshot(2))
+            modal.repeat._value='Whenever I feel like it'
+            before=self.db.execute('SELECT * FROM quests WHERE id=2').fetchone()
+            await modal.on_submit(Interaction())
+            self.assertEqual(self.db.execute('SELECT * FROM quests WHERE id=2').fetchone(),before)
+            self.db.execute("INSERT INTO repeating_signups VALUES(1,0,'day','10')");self.db.commit()
+            modal=self.ui.EditChoreModal(10,1,'daily',self.ui.snapshot(1))
+            modal.repeat._value='Monthly'
+            event=Interaction();await modal.on_submit(event)
+            self.assertIn('Release repeating',event.response.payload[0][0])
+            self.assertEqual(self.db.execute('SELECT frequency FROM quests WHERE id=1').fetchone(),('daily',))
 
     async def test_manage_direct_edit_prefills_saves_privately_and_rejects_stale_retry(self):
         w=self.ui.workspace

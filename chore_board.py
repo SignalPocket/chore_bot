@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.6.0'
+APP_VERSION = '2.6.1'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'Chores pause while away, resume when home, and workload summaries are easier to read.'
+RELEASE_SUMMARY = 'Edit a chore’s repeat schedule directly in its form, and see the full repeat schedule in Chore details.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 
@@ -1489,17 +1489,22 @@ def install(namespace):
             super().__init__(owner,frequency)
             self.title='Edit chore'
             self.quest_id,self.expected=quest_id,expected
+            self.repeat=discord.ui.TextInput(label='Repeat schedule',default=timing.repeat_text(frequency),placeholder='Daily, daily AM, weekly, Monday, Monday and Friday, monthly, one time',max_length=100)
+            self.add_item(self.repeat)
             row=db.execute('SELECT name,notes,points FROM quests WHERE id=?',(quest_id,)).fetchone()
             self.name.default=row[0]
             self.notes.default=row[1] or ''
             self.points.default=str(row[2])
             self.room.default=db.execute("SELECT category FROM quests WHERE id=?",(quest_id,)).fetchone()[0] or ""
 
+        def repeat_frequency(self):
+            return timing.parse_repeat(self.repeat.value)
+
         async def on_submit(self,interaction):
             if not can_add(interaction,self.owner):
                 await interaction.response.send_message('Use your own household edit form.',ephemeral=True)
                 return
-            result=update_chore(self.quest_id,self.name.value,self.frequency,self.points.value,self.notes.value,self.expected,self.room.value)
+            result=update_chore(self.quest_id,self.name.value,self.repeat_frequency(),self.points.value,self.notes.value,self.expected,self.room.value)
             await interaction.response.send_message(result,view=ReturnView(interaction.user.id),ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
 
     def feedback_context(qid):

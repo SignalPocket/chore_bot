@@ -180,6 +180,27 @@ class ChoreTiming:
             self.db.execute('UPDATE missed_chore_policy SET deadline=? WHERE quest_id=?',(self.deadline(quest_id,frequency),quest_id))
         return reset
 
+    def repeat_text(self, frequency):
+        if frequency.startswith('days:'):
+            return ', '.join(day.capitalize() for day in frequency[5:].split(','))
+        if frequency.startswith(('home:','away:')):
+            phase,day=frequency.split(':')
+            cycle='A' if phase=='home' else 'B'
+            return f'Every other {day.capitalize()} (cycle {cycle})'
+        return {'daily':'Daily','daily-am':'Daily AM','daily-pm':'Daily PM',
+                'twice-daily':'Twice daily','weekly':'Weekly','monthly':'Monthly',
+                'one-time':'One time'}.get(frequency,frequency.capitalize())
+
+    def parse_repeat(self, text):
+        text=' '.join(text.strip().lower().split())
+        for frequency in self.ns['VALID_FREQUENCIES']:
+            if text in (frequency,self.repeat_text(frequency).lower()):return frequency
+        if text.startswith('every '):text=text[6:]
+        days=[day.strip() for day in text.replace(' and ',',').split(',')]
+        if len(days)==2 and len(set(days))==2 and all(day in WEEKDAYS for day in days):
+            return 'days:'+','.join(sorted(days,key=WEEKDAYS.index))
+        return text
+
     def schedule_label(self, frequency):
         if frequency in DAILY_SHIFTS:
             return 'Daily · AM (morning)' if frequency=='daily-am' else 'Daily · PM (afternoon/evening, from noon)'

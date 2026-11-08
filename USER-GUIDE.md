@@ -619,3 +619,8 @@ Household setup is administered through Manage Server access. Routine attendance
 ## Prepared 2.5.1 — everyone in standings
 
 Points & standings includes known household people from saved profiles, schedules, assignments, score accounts and eligible cached channel members. People without a score row display 0 points. Viewing the list does not create accounts or change points, streaks, schedules or history. Use Household setup → Manage people to add a missing Discord account and save its profile.
+
+
+### Editing the repeat schedule
+
+Manage chores → Edit includes a prefilled Repeat schedule field. Change it in the same form as the name, instructions, points and room. Examples: Daily, Daily AM, Daily PM, Twice daily, Weekly, Monthly, One time, Monday, or Monday and Friday. Alternating schedules display Every other Monday (cycle A/B). Chore details always shows the full repeat schedule separately from due status. Saved dated or repeating reservations must be released before incompatible schedule changes; stale forms cannot overwrite newer edits.

@@ -636,7 +636,7 @@ def install(ns, ui, lock):
                         async def save(event):
                             if not await self.interaction_check(event):return
                             async with lock:
-                                result=ui.update_chore(q[0],modal.name.value,modal.frequency,modal.points.value,modal.notes.value,modal.expected,modal.room.value)
+                                result=ui.update_chore(q[0],modal.name.value,modal.repeat_frequency(),modal.points.value,modal.notes.value,modal.expected,modal.room.value)
                             await present(event,self.rebuild(),result)
                         modal.on_submit=save
                         return await i.response.send_modal(modal)
@@ -1331,6 +1331,7 @@ def install(ns, ui, lock):
             card.add_item(discord.ui.TextDisplay('## ✅ '+clean(q[1],100)))
             card.add_item(discord.ui.TextDisplay(f'Done — nice work! · +{q[3]} points'))
             card.add_item(discord.ui.TextDisplay('-# '+due_text(q).replace('Completed · returns ','Returns ').replace('Completed · does not repeat','Does not repeat')))
+            card.add_item(discord.ui.TextDisplay('**Repeats:** '+timing.repeat_text(q[2])))
             frame.add_item(card)
             back=next((b for b in source.children if getattr(b,'label',None)=='Back'),None)
             if back:
@@ -1345,6 +1346,7 @@ def install(ns, ui, lock):
             status=('Yours' if str(uid)==str(source.owner) else clean(person(uid,getattr(source,'guild',None)),80))
             card=discord.ui.Container(accent_colour=0x6B9B77)
             card.add_item(discord.ui.TextDisplay('## '+clean(q[1],100)))
+            card.add_item(discord.ui.TextDisplay('**Repeats:** '+timing.repeat_text(q[2])))
             if q[5]:
                 card.add_item(discord.ui.TextDisplay('### ✅ Done — nice work!'))
                 card.add_item(discord.ui.Separator())
@@ -1977,7 +1979,7 @@ def install(ns, ui, lock):
             self.rebuild=lambda:Card(owner,qid,back,guild,offset,notice)
             duration = {'assignment':'Every week · ongoing','week0':'This week · until Sunday 6 p.m.','week1':'Next week · Sunday 6 p.m. to Sunday 6 p.m.','occurrence':'Just this time','repeating':'Repeating weekday/shift · only when home','dated':'This date and slot only'}.get(scope, 'Available')
             self.embed.add_field(name='Responsibility', value=f'{clean(person(uid,guild),100)} · {duration}', inline=False)
-            self.embed.add_field(name='When', value=f'{timing.label(q[2],qid)}\n{due_text(q)}', inline=False)
+            self.embed.add_field(name='When', value=f'Repeats: {timing.repeat_text(q[2])}\n{timing.label(q[2],qid)}\n{due_text(q)}', inline=False)
             self.embed.add_field(name='Points and room', value=f'{q[3]} points · {clean(q[9] or "Unspecified",100)}', inline=False)
             self.embed.add_field(name='Estimate and checklist',value=(ui.planning.summary(qid).removeprefix(' · ') or 'No estimate or checklist yet'),inline=False)
             help_status=ui.planning.help_record(qid)
@@ -2255,7 +2257,7 @@ def install(ns, ui, lock):
             async def save(event):
                 if not await self.interaction_check(event):return
                 async with lock:
-                    notice=ui.update_chore(qid,modal.name.value,q[2],modal.points.value,modal.notes.value,expected,modal.room.value)
+                    notice=ui.update_chore(qid,modal.name.value,modal.repeat_frequency(),modal.points.value,modal.notes.value,expected,modal.room.value)
                 await present(event,Manage(self.owner,event.guild,self.page,self.query),notice)
             modal.on_submit=save
             await i.response.send_modal(modal)

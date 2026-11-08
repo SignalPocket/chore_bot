@@ -1,3 +1,8 @@
+# 2.6.1 - 2026-11-08
+
+- Show the current Repeat schedule in the Edit chore form and allow direct changes there, including Manage and catalog edits. Accept readable daily/AM/PM, weekly, monthly, one-time, weekday pairs and alternating cycle schedules. Preserve stale-edit and reservation conflict checks.
+- Chore details explicitly displays the full repeat schedule for active and completed chores, separately from current due status.
+
 # 2.6.0 - 2026-11-08
 
 - Pause assigned chores while their person is away across shared due checks, daily lists, attention, reminders and point forecasts. Preserve assignments, points and history. Resume eligible work at home, including the Sunday 6 p.m. handoff; omit morning and fixed-day occurrences missed entirely while away.
