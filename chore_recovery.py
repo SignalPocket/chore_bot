@@ -63,6 +63,7 @@ def install(ns, ui, w):
         parent_context = context.get('parent', {'screen': 'dashboard'})
         parent = lambda: restore(owner, parent_context, guild, depth+1)
         if kind=='reassign':return parent()
+        if kind=='quick':return w.QuickList(owner,context.get('mode','done'),context.get('page',0),guild)
         if kind=='chores':return w.Chores(owner,guild,**{k:context[k] for k in ('mode','day','who','query','page') if k in context})
         if kind=='chore_more':return w.ChoreMore(owner,w.Card(owner,int(context['qid']),parent,guild,int(context.get('offset',0))))
         if kind=='household_setup':return w.adapt(ui.HouseholdSetup(owner),owner)

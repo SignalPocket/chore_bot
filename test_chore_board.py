@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.6.1')
+        self.assertEqual(chore_board.APP_VERSION,'2.6.2')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.6.1. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.6.2. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -6788,6 +6788,72 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('No matching chores',missing.embed.fields[0].name)
             w.render(missing).to_components()
 
+    async def test_compact_quick_lists_only_actionable_eight_rows_and_no_history_controls(self):
+        w=self.ui.workspace
+        with self.clock('2026-11-09T09:00:00'):
+            self.workload_clear()
+            for n in range(19):self.workload_chore('daily',5,10)
+            completed=self.workload_chore('one-time',5,10,1)
+            self.workload_completion(10,5,'2026-11-09T08:00:00-05:00',qid=completed)
+            source=w.QuickList(10,'done',guild=Interaction().guild)
+            self.assertEqual(len(source.entries),19)
+            panel=w.render(source)
+            rows=[c for c in panel.walk_children() if isinstance(c,discord.ui.Section)]
+            self.assertEqual(len(rows),8)
+            self.assertTrue(all(c.accessory.label=='Done' for c in rows))
+            labels=[getattr(c,'label','') for c in panel.walk_children()]
+            for label in ('Skip','Completed','This week','Next week','Upcoming','Filters','Search'):
+                self.assertNotIn(label,labels)
+            self.assertLessEqual(panel.total_children_count,40)
+            next_button=next(c for c in panel.walk_children() if getattr(c,'label',None)=='Next >')
+            event=Interaction();await next_button.callback(event)
+            self.assertEqual(event.response.payload['view'].page,1)
+            restored=w.recovery.restore(10,event.response.payload['view'].recovery_context,Interaction().guild)
+            self.assertEqual(restored.page,1)
+            last=w.render(w.QuickList(10,'done',2))
+            self.assertEqual(len(last.source.chunk),3)
+
+    async def test_compact_quick_claim_done_refresh_remove_row_and_reject_replay(self):
+        w=self.ui.workspace
+        with self.clock('2026-11-09T09:00:00'):
+            self.workload_clear()
+            qid=self.workload_chore('daily',5)
+            panel=w.render(w.QuickList(10,'claim'))
+            row=next(c for c in panel.walk_children() if isinstance(c,discord.ui.Section))
+            wrong=Interaction(20);await row.accessory.callback(wrong)
+            self.assertIsNone(w.ownership(qid)[0])
+            event=Interaction();await row.accessory.callback(event)
+            self.assertEqual(w.ownership(qid)[0],'10')
+            self.assertEqual(event.response.payload['view'].entries,[])
+            done=w.render(w.QuickList(10,'done'))
+            row=next(c for c in done.walk_children() if isinstance(c,discord.ui.Section))
+            event=Interaction();await row.accessory.callback(event)
+            self.assertEqual(event.result['view'].entries,[])
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(1,))
+            event=Interaction();await row.accessory.callback(event)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(1,))
+            fresh=w.render(w.QuickList(10,'done'))
+            self.assertLessEqual(fresh.total_children_count,40)
+            self.assertTrue(any('Undo' in str(getattr(c,'label','')) for c in fresh.walk_children()))
+
+    async def test_compact_quick_done_checklist_guard_and_away_and_stale_owner(self):
+        w=self.ui.workspace;p=self.ui.planning
+        with self.clock('2026-11-09T09:00:00'):
+            self.workload_clear()
+            qid=self.workload_chore('daily',5,10)
+            p.save_plan(qid,'5','Load cups',p.plan(qid))
+            panel=w.render(w.QuickList(10))
+            action=next(c.accessory for c in panel.walk_children() if isinstance(c,discord.ui.Section))
+            event=Interaction();await action.callback(event)
+            self.assertIsInstance(event.result['view'],p.Checklist)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+            self.db.execute("UPDATE quests SET assigned_to='20' WHERE id=?",(qid,));self.db.commit()
+            event=Interaction();await action.callback(event)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+            self.assertEqual(w.QuickList(10).entries,[])
+            self.ui.attendance.add(20,'2026-11-09','2026-11-09','away')
+            self.assertEqual(w.QuickList(20).entries,[])
+
     async def test_manage_edit_repeat_schedule_saves_and_details_show_full_cadence(self):
         w=self.ui.workspace
         with self.clock('2026-10-21T10:00:00'):
@@ -7212,9 +7278,9 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.db.execute("UPDATE quests SET assigned_to='10' WHERE id=1");self.db.commit()
             panel=w.render(w.Chores(10));event=Interaction();await self.activate(panel,'Quick Done',event)
             quick=self.rendered(event)
-            self.assertIsInstance(quick.source,w.Browse)
-            self.assertEqual((quick.source.state['area'],quick.source.state['tab']),('mine','due'))
-            done=self.row_action(quick,'Fill dishwasher','Done')
+            self.assertIsInstance(quick.source,w.QuickList)
+            self.assertEqual(quick.source.mode,'done')
+            done=next(c.accessory for c in quick.walk_children() if isinstance(c,discord.ui.Section) and 'Fill dishwasher' in c.children[0].content)
             wrong=Interaction(20);await done.callback(wrong)
             self.assertFalse(self.db.execute('SELECT * FROM completion_log').fetchall())
             event=Interaction();await done.callback(event)

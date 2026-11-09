@@ -1,5 +1,9 @@
 # Sprig workspace implementation and deployment
 
+## Quick chore lists
+
+Quick Claim and Quick Done are separate unfinished-only lists with eight chores per page and one Claim/Done accessory per row. Keep date tabs, history, Skip and filters in the full browser. Quick actions refresh the same page, preserving ownership, attendance, checklist, stale-action and Undo guards.
+
 ## Button controls and repeating weekday signups
 
 Each chore row has a **chore-name button**, **Claim / Done**, and **Skip**. Click the name to open instructions, checklist, estimate, responsibility, and actions. The colored day/period marker, AM/PM slot where relevant, and points appear on the name button. Taken work shows the responsible person; future rows offer Choose date for their one-time actions, while completed occurrences have disabled completion buttons. Previous and Next keep their fixed positions, and pages stay at five chores by default.

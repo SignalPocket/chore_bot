@@ -1,3 +1,8 @@
+# 2.6.2 - 2026-11-09
+
+- Separate Quick Claim and Quick Done from the full chore browser. Show eight unfinished, currently actionable chores per page, one Claim/Done button each, with compact paging and a switch between the quick views. Remove history, completed jobs, date tabs, search/filter and per-row Skip controls from quick views.
+- Claim/Done refresh the same list and remove the claimed/completed row. Keep checklist, ownership, attendance, stale/double-action and completion Undo safeguards. Recovery preserves quick mode and page.
+
 # 2.6.1 - 2026-11-08
 
 - Show the current Repeat schedule in the Edit chore form and allow direct changes there, including Manage and catalog edits. Accept readable daily/AM/PM, weekly, monthly, one-time, weekday pairs and alternating cycle schedules. Preserve stale-edit and reservation conflict checks.

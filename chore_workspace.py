@@ -658,7 +658,8 @@ def install(ns, ui, lock):
                 navigation=[button('Back to today',lambda i:present(i,target(i,mode='today',day=timing.now().date().isoformat(),page=0))),button('Week calendar',lambda i:present(i,ui.planning.Calendar(owner,i.guild,day=day,mine=state['who']=='mine')))] if state['mode']=='date' else [button('Other dates',lambda i:present(i,target(i,mode='date',page=0)))]
                 if personal:
                     navigation=[button('Day view',lambda i:present(i,target(i,mode='date',page=0))),button('Week view',lambda i:present(i,target(i,mode='week',page=0))),button('Person settings',lambda i:present(i,PersonProfile(owner,state['who'],i.guild)))]
-                if state['who']=='mine':navigation.append(button('Quick Done',lambda i:present(i,Browse(owner,area='mine',tab='due',guild=i.guild))))
+                if state['who']=='unclaimed':navigation.append(button('Quick Claim',lambda i:present(i,QuickList(owner,'claim',guild=i.guild))))
+                if state['who']=='mine':navigation.append(button('Quick Done',lambda i:present(i,QuickList(owner,'done',guild=i.guild))))
                 navigation.append(button('Manage chores',lambda i:present(i,target(i,mode='all',who='everyone',query='',page=0))))
                 frame.rows(navigation)
             refresh=button('Refresh',lambda i:present(i,target(i)))
@@ -684,7 +685,8 @@ def install(ns, ui, lock):
             self.button('Chores',lambda i:present(i,Chores(owner,i.guild)),row=3)
             self.button('Calendar',lambda i:present(i,Chores(owner,i.guild,mode='date',who='everyone')),row=3)
             self.button('Needs attention',lambda i:present(i,Chores(owner,i.guild,who='attention')),row=0)
-            self.button('Quick Done',lambda i:present(i,Browse(owner,area='mine',tab='due',guild=i.guild)),row=0)
+            self.button('Quick Claim',lambda i:present(i,QuickList(owner,'claim',guild=i.guild)),row=0)
+            self.button('Quick Done',lambda i:present(i,QuickList(owner,'done',guild=i.guild)),row=0)
             self.button('Chore reminders',lambda i:present(i,ui.planning.Reminders(owner)),row=3)
             self.button('Trade alerts', lambda i: present(i, Notifications(owner)), row=2)
             self.button('List length',lambda i:present(i,ListLength(owner)),row=1)
@@ -935,6 +937,79 @@ def install(ns, ui, lock):
         async def on_submit(self, i):
             if not await View(self.owner).interaction_check(i): return
             await present(i, Browse(self.owner, **dict(self.state, query=self.term.value, page=0), guild=i.guild))
+
+    class QuickList(View):
+        """Only actionable, unfinished chores; no history or planning tabs."""
+        def __init__(self,owner,mode='done',page=0,guild=None):
+            super().__init__(owner)
+            self.mode=mode if mode in ('done','claim') else 'done'
+            self.guild=guild
+            ns['reset_due_quests']()
+            self.entries=[]
+            for qid, in db.execute('SELECT id FROM quests WHERE completed=0 ORDER BY name COLLATE NOCASE,id').fetchall():
+                if ui.is_archived(qid) or not ready(qid):continue
+                uid=ownership(qid)[0]
+                if (self.mode=='done' and uid==str(owner)) or (self.mode=='claim' and not uid):
+                    self.entries.append(chore(qid))
+            self.page=min(max(0,int(page)),max(0,(len(self.entries)-1)//8))
+            self.chunk=self.entries[self.page*8:(self.page+1)*8]
+            self.recovery_context={'screen':'quick','mode':self.mode,'page':self.page}
+            self.rebuild=lambda:QuickList(owner,self.mode,self.page,guild)
+            self.return_to=self.rebuild
+
+        def build(self,frame,notice=None):
+            title='Quick Done' if self.mode=='done' else 'Quick Claim'
+            frame.add_item(discord.ui.TextDisplay('# '+title),slot='header')
+            body=discord.ui.Container(accent_colour=0x6B9B77)
+            for q in self.chunk:
+                qid=q[0];expected=ui.snapshot(qid)
+                label='Done' if self.mode=='done' else 'Claim'
+                action=discord.ui.Button(label=label,style=discord.ButtonStyle.success,disabled=not ui.available(self.owner))
+                async def act(i,qid=qid,expected=expected):
+                    if not await self.interaction_check(i):return
+                    parent=lambda:QuickList(self.owner,self.mode,self.page,i.guild)
+                    if self.mode=='claim':
+                        return await claim_now(i,self,qid,expected,parent,stay_on_list=True)
+                    await i.response.defer()
+                    checklist=False
+                    async with lock:
+                        ns['reset_due_quests']()
+                        if ui.snapshot(qid)!=expected:
+                            notice='This occurrence changed. Review the refreshed list.'
+                        elif ownership(qid)[0]!=str(self.owner) or not ready(qid) or not ui.available(self.owner):
+                            notice='This chore is no longer due for you. Review the refreshed list.'
+                        elif not ui.planning.complete(qid):
+                            checklist=True
+                        else:
+                            context=ui.Context(i)
+                            await bot.get_command('done').callback(context,qid)
+                            notice='\n'.join(context.messages)
+                    if checklist:return await present(i,ui.planning.Checklist(self.owner,qid,i.guild,lambda:Card(self.owner,qid,parent,i.guild)))
+                    await present(i,parent(),notice)
+                action.callback=act
+                slot=(' · AM' if timing.now().hour<12 else ' · PM') if q[2]=='twice-daily' else ' · AM' if q[2]=='daily-am' else ' · PM' if q[2]=='daily-pm' else ''
+                body.add_item(discord.ui.Section(discord.ui.TextDisplay('**'+clean(q[1],100)+'**'+slot+f' · {q[3]} pts'),accessory=action))
+            if not self.chunk:body.add_item(discord.ui.TextDisplay('No unfinished chores due for you.' if self.mode=='done' else 'No unclaimed chores due now.'))
+            frame.add_item(body,slot='content')
+            frame.add_item(discord.ui.TextDisplay(f'-# {len(self.entries)} chores · Page {self.page+1} of {max(1,(len(self.entries)+7)//8)}'),slot='footer')
+            controls=[]
+            for label,page,disabled in (('< Prev',self.page-1,self.page==0),('Next >',self.page+1,(self.page+1)*8>=len(self.entries))):
+                b=discord.ui.Button(label=label,disabled=disabled)
+                async def turn(i,page=page):
+                    if not await self.interaction_check(i):return
+                    await present(i,QuickList(self.owner,self.mode,page,i.guild))
+                b.callback=turn;controls.append(b)
+            other='claim' if self.mode=='done' else 'done'
+            switch=discord.ui.Button(label='Quick Claim' if other=='claim' else 'Quick Done')
+            switch.callback=lambda i:present(i,QuickList(self.owner,other,guild=i.guild))
+            home=discord.ui.Button(label='Chores')
+            home.callback=lambda i:present(i,Chores(self.owner,i.guild))
+            refresh=discord.ui.Button(label='Refresh')
+            refresh.callback=lambda i:present(i,QuickList(self.owner,self.mode,self.page,i.guild))
+            frame.rows(controls+[switch,home,refresh],slot='navigation')
+            if notice:frame.add_item(discord.ui.TextDisplay('-# '+str(notice)[:400]),slot='undo')
+            attach_quiet_undo(frame,self)
+            return refresh
 
     def browse_page_size(owner,area='mine'):
         # Undo controls stay visible without overflowing Discord's 40-component cap.
@@ -1234,7 +1309,7 @@ def install(ns, ui, lock):
             stamp=db.execute('SELECT changed_at FROM dated_occurrence_changes WHERE id=?',(source.dated_undo_id,)).fetchone()[0]
             undo_candidates.append((stamp,undo,'Skipped this dated occurrence'))
 
-        done_pending=ui.undoable_completion(source.owner) if isinstance(source,(Browse,Card,Chores)) else None
+        done_pending=ui.undoable_completion(source.owner) if isinstance(source,(Browse,Card,Chores,QuickList)) else None
         if done_pending:
             event_id,qid,name=done_pending
             undo_done=discord.ui.Button(label=('Undo Done: '+name)[:80],style=discord.ButtonStyle.danger)
@@ -1406,6 +1481,13 @@ def install(ns, ui, lock):
                     if item.label in ('Previous','Next','Previous page','Next page','Previous day','Next day'):
                         item.emoji=None
 
+            if isinstance(source,QuickList):
+                self.page_spec=page_spec('Browse','Quick chores')
+                frame=self.layout_plan=PagePlan(self.page_spec)
+                refresh=source.build(frame,notice)
+                frame.commit(self)
+                recovery.attach(self,source,resume=refresh)
+                return
             if isinstance(source,(Chores,Card)):
                 source.page_name=screen_name(source)
                 self.page_spec=page_spec('Card' if isinstance(source,Card) else 'Browse','Work card' if isinstance(source,Card) else 'Daily sheet','Finish a chore' if isinstance(source,Card) else 'Start here')
@@ -1459,7 +1541,7 @@ def install(ns, ui, lock):
                 review=next((label for label in buttons if label.startswith('Review inbox (')),None)
                 planning=['Who’s home?','Workload & pace',trade]
                 if source.owner!=OWNER:planning.append('Household setup')
-                groups=[('Do chores',['Chores','Needs attention']),
+                groups=[('Do chores',['Chores','Quick Claim','Quick Done','Needs attention']),
                     ('Plan & coordinate',planning),
                     ('Your activity',['Points & standings','Continue where I left off']),
                     ('Owner tools',[review,'Update announcements','Household setup'] if source.owner==OWNER else [])]
@@ -2828,7 +2910,7 @@ def install(ns, ui, lock):
 
     TOPICS['Your color']='Open **Settings → Your color** and choose a marker.\n\nChoosing saves immediately. **No marker** removes it. Everyone sees it on refreshed workspace screens; responsibility and points stay unchanged.'
 
-    result = SimpleNamespace(People=People,PersonProfile=PersonProfile,save_profile=save_profile,ProfileModal=ProfileModal,HouseholdColors=HouseholdColors,ChoreMore=ChoreMore,PersonColor=PersonColor,color_key=color_key,sheet_size=sheet_size,Chores=Chores,PersonalSettings=PersonalSettings,browse_page_size=browse_page_size,PageHelp=PageHelp,screen_name=screen_name,PAGE_TOPICS=PAGE_TOPICS,ButtonChoices=ButtonChoices,ClaimChoices=ClaimChoices,Repeating=Repeating,OccurrenceDates=OccurrenceDates,FutureOccurrence=FutureOccurrence,FutureSlots=FutureSlots,skip_occurrence=skip_occurrence,undo_skip=undo_skip,undoable_skip=undoable_skip,UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
+    result = SimpleNamespace(QuickList=QuickList,People=People,PersonProfile=PersonProfile,save_profile=save_profile,ProfileModal=ProfileModal,HouseholdColors=HouseholdColors,ChoreMore=ChoreMore,PersonColor=PersonColor,color_key=color_key,sheet_size=sheet_size,Chores=Chores,PersonalSettings=PersonalSettings,browse_page_size=browse_page_size,PageHelp=PageHelp,screen_name=screen_name,PAGE_TOPICS=PAGE_TOPICS,ButtonChoices=ButtonChoices,ClaimChoices=ClaimChoices,Repeating=Repeating,OccurrenceDates=OccurrenceDates,FutureOccurrence=FutureOccurrence,FutureSlots=FutureSlots,skip_occurrence=skip_occurrence,undo_skip=undo_skip,undoable_skip=undoable_skip,UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
 
     from chore_recovery import install as install_recovery
     recovery = install_recovery(ns, ui, result)

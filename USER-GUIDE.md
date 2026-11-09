@@ -624,3 +624,8 @@ Points & standings includes known household people from saved profiles, schedule
 ### Editing the repeat schedule
 
 Manage chores → Edit includes a prefilled Repeat schedule field. Change it in the same form as the name, instructions, points and room. Examples: Daily, Daily AM, Daily PM, Twice daily, Weekly, Monthly, One time, Monday, or Monday and Friday. Alternating schedules display Every other Monday (cycle A/B). Chore details always shows the full repeat schedule separately from due status. Saved dated or repeating reservations must be released before incompatible schedule changes; stale forms cannot overwrite newer edits.
+
+
+### Quick Claim and Quick Done
+
+Open Quick Claim or Quick Done from the household tools, or use Quick Done from Mine and Quick Claim from Available. Quick Claim lists only unfinished unclaimed chores due now; Quick Done lists only your unfinished due chores. Eight chores fit on each page. Each row has a name, points and one action. Claim and Done keep you in the quick list and remove the finished row. Checklist chores open their checklist before awarding points. Completed history, planning tabs, Skip and filters belong to the full chore views. Completion Undo remains available below the list.

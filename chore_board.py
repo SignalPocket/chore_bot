@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.6.1'
+APP_VERSION = '2.6.2'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'Edit a chore’s repeat schedule directly in its form, and see the full repeat schedule in Chore details.'
+RELEASE_SUMMARY = 'Quick Claim and Quick Done show eight unfinished chores per page with fewer controls.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 
