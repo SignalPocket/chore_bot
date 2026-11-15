@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.6.2')
+        self.assertEqual(chore_board.APP_VERSION,'2.7.0')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.6.2. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.7.0. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -1819,6 +1819,38 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(self.db.execute('SELECT undone_at FROM completion_log').fetchone()[0])
         self.assertEqual(self.db.execute('SELECT actor,action,target FROM owner_action_log').fetchall(),[(str(owner),'correct_completion',str(event))])
         self.assertIn('no longer available',self.ui.owner_undo_completion(owner,event))
+
+    async def test_owner_can_mark_responsible_person_done_with_credit_audit_and_undo(self):
+        owner=301104023405199361;w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            ordinary=w.Card(20,2,lambda:w.Dashboard(20),Interaction().guild)
+            self.assertFalse(any(str(getattr(c,'label','')).startswith('Done for ') for c in ordinary.children))
+            card=w.Card(owner,2,lambda:w.Dashboard(owner),Interaction().guild)
+            proxy=next(c for c in card.children if str(getattr(c,'label','')).startswith('Done for '))
+            self.assertEqual(proxy.style,discord.ButtonStyle.success)
+            request=Interaction(owner);await proxy.callback(request)
+            confirmation=request.response.payload['view']
+            self.assertEqual(confirmation.embed.title,'Mark done for Person 10?')
+            self.assertIn('10 points and streak credit',confirmation.embed.description)
+            confirm=next(c for c in confirmation.children if getattr(c,'label',None)=='Confirm')
+            denied=Interaction(20);await confirm.callback(denied)
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+            completed=Interaction(owner);await confirm.callback(completed)
+            self.assertEqual(self.db.execute("SELECT points,streak FROM users WHERE id='10'").fetchone(),(10,1))
+            self.assertEqual(self.db.execute('SELECT user_id,actor_id FROM completion_log').fetchall(),[('10',str(owner))])
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=2').fetchone(),(1,))
+            panel=w.render(w.Card(owner,2,lambda:w.Dashboard(owner),Interaction().guild))
+            undo=next(c for c in panel.walk_children() if str(getattr(c,'label','')).startswith('↶ Undo'))
+            undone=Interaction(owner);await undo.callback(undone)
+            self.assertEqual(self.db.execute("SELECT points,streak FROM users WHERE id='10'").fetchone(),(0,0))
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=2').fetchone(),(0,))
+            self.assertEqual(self.db.execute('SELECT actor,action FROM owner_action_log').fetchall(),[(str(owner),'correct_completion')])
+
+    async def test_proxy_completion_cannot_bypass_owner_guard(self):
+        context=self.ui.Context(Interaction(20));context.completion_user_id='10';context.allow_proxy_completion=True
+        await self.app.bot.get_command('done').callback(context,2)
+        self.assertIn('Only ginaria',context.messages[0])
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
 
     async def test_owner_recovery_completion_correction_confirmation_and_guardrails(self):
         owner=301104023405199361;w=self.ui.workspace

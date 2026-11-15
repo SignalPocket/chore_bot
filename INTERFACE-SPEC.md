@@ -246,6 +246,8 @@ Local candidate, not deployed. Private /chores opens a text-first daily sheet: M
 
 The compact work card keeps Claim, Done, Skip, Need help and required Checklist visible, with native action icons. Other actions uses named guarded callbacks for coordination, editing, dates and history. Help/status warnings and chore instructions remain visible. Back to list preserves the parent context; Settings Back and recovery do likewise. One neutral latest-eligible Undo remains last. Catalog editing, archive/restore, search, and Household tools remain available through Manage chores. Public text-command launcher behavior is preserved; private slash entry uses the new sheet. Prototype HTML remains separate from actual source validation. No push/deployment authorization for 1.5.0.
 
+On ginaria’s own private card, another person’s currently due responsibility adds **Done for [person]** beside the ordinary work controls. It opens an explicit confirmation naming the credited person and points. After a successful save, the completed card keeps the newest unchanged owner-marked completion available through the bottom Undo. Other accounts do not receive this control.
+
 
 ## Personal name colors
 Settings → Your color saves a personal marker, visible beside your name to everyone on refreshed workspace screens. Defaults: Dar lavender (purple dot), John blue, Kas pink (heart), Z/Zel orange, ginaria green. Discord has no standard lavender/pink circle emoji. Choose another color or No marker. Exact household display names/usernames provide initial defaults only; saved choices belong to Discord account IDs and override defaults. No responsibility, points, list length or notification preferences change.

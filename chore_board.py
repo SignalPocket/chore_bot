@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.6.2'
+APP_VERSION = '2.7.0'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'Quick Claim and Quick Done show eight unfinished chores per page with fewer controls.'
+RELEASE_SUMMARY = 'Ginaria can mark a responsible person’s chore done for them with credited points, an audit trail, and Undo.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 

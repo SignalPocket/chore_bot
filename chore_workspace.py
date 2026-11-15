@@ -15,7 +15,7 @@ def action_style(label, fallback=discord.ButtonStyle.secondary):
     """Use the same supported Discord color for the same kind of action."""
     label=str(label)
     if label=='Dashboard':return discord.ButtonStyle.primary
-    if label in ('Home today','Claim','Claim just this time','Just this occurrence','Done','Mark done') or label.startswith(('Save ','Checked: ')):
+    if label in ('Home today','Claim','Claim just this time','Just this occurrence','Done','Mark done') or label.startswith(('Save ','Checked: ','Done for ')):
         return discord.ButtonStyle.success
     if label in ('Away today','Skip','Skip this occurrence','Skip just this time') or label.startswith(('Undo','Drop ')):
         return discord.ButtonStyle.danger
@@ -1322,6 +1322,19 @@ def install(ns, ui, lock):
             undo_done.callback=undo_done_click
             stamp=db.execute('SELECT completed_at FROM completion_log WHERE id=?',(event_id,)).fetchone()[0]
             undo_candidates.append((stamp,undo_done,'Done · '+name))
+        proxy_pending=ui.undoable_actor_completion(source.owner) if source.owner==OWNER and isinstance(source,(Browse,Card,Chores,QuickList)) else None
+        if proxy_pending and (not done_pending or proxy_pending[0]!=done_pending[0]):
+            event_id,qid,name,target=proxy_pending
+            undo_proxy=discord.ui.Button(label=('Undo Done for '+person(target,getattr(source,'guild',None))+': '+name)[:80],style=discord.ButtonStyle.danger)
+            async def undo_proxy_click(i,event_id=event_id):
+                if not await source.interaction_check(i):return
+                await i.response.defer()
+                async with lock:notice=ui.owner_undo_completion(i.user.id,event_id)
+                target_view=browse_return(source,i.guild) if isinstance(source,Browse) else source.rebuild() if isinstance(source,Chores) else source.return_to()
+                await present(i,target_view,notice)
+            undo_proxy.callback=undo_proxy_click
+            stamp=db.execute('SELECT completed_at FROM completion_log WHERE id=?',(event_id,)).fetchone()[0]
+            undo_candidates.append((stamp,undo_proxy,'Done for '+person(target,getattr(source,'guild',None))+' · '+name))
 
         if undo_candidates:
             _,undo_control,description=max(undo_candidates,key=lambda candidate:datetime.fromisoformat(candidate[0]))
@@ -1334,6 +1347,7 @@ def install(ns, ui, lock):
     def decorate_actions(frame):
         for item in frame.walk_children():
             if isinstance(item,discord.ui.Button) and item.label in ACTION_ICONS:item.emoji=ACTION_ICONS[item.label]
+            elif isinstance(item,discord.ui.Button) and str(item.label).startswith('Done for '):item.emoji='✅'
             if isinstance(item,discord.ui.Select):
                 for option in item.options:
                     if option.label in ACTION_ICONS:option.emoji=ACTION_ICONS[option.label]
@@ -2092,6 +2106,26 @@ def install(ns, ui, lock):
                 await present(i, Card(owner, qid, back, i.guild, offset, notice=text[:1800]))
             if uid == str(owner) and not q[5] and ready(qid) and offset == 0:
                 self.button('Done', lambda i: mutate(i, 'done'), row=0, primary=True, disabled=not ui.available(owner))
+            if owner==OWNER and uid and uid!=str(owner) and not q[5] and ready(qid) and offset==0:
+                async def confirm_proxy(i):
+                    if not await self.interaction_check(i):return
+                    target_name=clean(person(uid,i.guild),100)
+                    async def save(e):
+                        if not await View(owner).interaction_check(e):return
+                        async def change():
+                            async with lock:
+                                ns['reset_due_quests']()
+                                if ui.snapshot(qid)!=self.expected:return 'This chore changed. Review the refreshed card.'
+                                context=ui.Context(e);context.completion_user_id=uid;context.allow_proxy_completion=True
+                                await bot.get_command('done').callback(context,qid)
+                                return '\n'.join(context.messages)
+                        task=asyncio.create_task(change())
+                        finished,_=await asyncio.wait({task},timeout=1.0)
+                        if not finished:await e.response.defer()
+                        await present(e,Card(owner,qid,back,e.guild,offset,notice=(await task)[:1800]))
+                    text=f'Mark this occurrence done for **{target_name}**? They receive {q[3]} points and streak credit. The completion records that you marked it for them.'
+                    await present(i,Confirm(owner,'Mark done for '+target_name+'?',text,save,card))
+                self.button('Done for '+clean(person(uid,guild),55),confirm_proxy,row=0,primary=True,disabled=not ui.available(uid))
             if not uid and not q[5] and ready(qid) and offset == 0:
                 self.button('Claim',lambda i:claim_now(i,self,qid,self.expected,back),row=0,primary=True,disabled=not ui.available(owner))
             if not q[5] and ready(qid) and offset==0 and q[2]!='one-time':
@@ -2674,7 +2708,9 @@ def install(ns, ui, lock):
                        'The points go to the Discord account that completes it. A repeating chore can become '
                        'due again; marking it Done completes only its current occurrence.\n'
                        '\n'
-                       'After Done, the short confirmation stays until you choose **Back to chores**. **Undo** restores the work and removes its points. If something is stopping you, use **Need help** instead.',
+                       'After Done, the short confirmation stays until you choose **Back to chores**. **Undo** restores the work and removes its points. If something is stopping you, use **Need help** instead.\n'
+                       '\n'
+                       'Ginaria can open another person’s currently due chore and choose **Done for [person]**. The confirmation names who receives the points and streak credit. The completion records who marked it done, and the same guarded bottom **Undo** restores the credited person’s state. Other household accounts cannot use this action.',
      'Drop, reassign, or trade': 'Open the chore card, then **Actions…**.\n'
                                  '\n'
                                  '**Drop responsibility** gives up your responsibility without completing the '

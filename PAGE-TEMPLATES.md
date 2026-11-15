@@ -117,6 +117,8 @@ Local candidate, not deployed. Private /chores opens a text-first daily sheet: M
 
 The compact work card keeps Claim, Done, Skip, Need help and required Checklist visible, with native action icons. Other actions uses named guarded callbacks for coordination, editing, dates and history. Help/status warnings and chore instructions remain visible. Back to list preserves the parent context; Settings Back and recovery do likewise. One neutral latest-eligible Undo remains last. Catalog editing, archive/restore, search, and Household tools remain available through Manage chores. Public text-command launcher behavior is preserved; private slash entry uses the new sheet. Prototype HTML remains separate from actual source validation. No push/deployment authorization for 1.5.0.
 
+For ginaria viewing another person’s current due chore, the primary action row may include **Done for [person]**. Always confirm with the credited person and points before saving. Do not show the action to other accounts, for unowned/future/completed occurrences, while the responsible person is away, or when the state is stale. Keep the newest eligible on-behalf completion in the standard bottom Undo slot.
+
 
 All workspace pages, including daily sheets and work cards, display compact Home / Refresh / Settings / Help. Refresh reloads current state and context without repeating the last mutation. Mine/Available/Everyone show the selected scope in blue. Discord pop-up forms retain their native submit/cancel behavior.
 

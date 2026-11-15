@@ -96,6 +96,8 @@ New tables are created additively. No existing chore or point total is rewritten
 
 completion_log records each new award in the same transaction as its chore completion and user point/streak update. It stores before/after states and an undone marker. Earlier individual completions cannot be reconstructed. Undo checks the acting account, most recent un-undone user completion, current week/ownership, chore state, user totals, timing, missed policy, and occurrence move. It restores them together or rejects without partial reversal.
 
+Ginaria’s chore card may show **Done for [person]** when another person is currently responsible for a due, unfinished occurrence. Confirmation runs the same protected Done callback with the responsible account as the credit target. `completion_log.user_id` remains the credited person and `completion_log.actor_id` records the clicking account. Ginaria’s newest unchanged on-behalf-of completion is eligible for the same conservative bottom Undo through owner correction. Ordinary household accounts cannot invoke or forge this path.
+
 occurrence_moves holds a single moved unfinished occurrence without replacing the regular cadence. Completion clears the move; a regular schedule edit clears it too. A moved skipped occurrence gets an adjusted expiry. Canceling a move restores normal timing. The week’s ownership is not silently extended.
 
 Multi-person date changes validate every person before a single transaction. Editing an exception deactivates the old version and inserts its replacement; cancellation is also retained as inactive history. Duplicate exact trips do not create additional records. Overlaps and stale edits are rejected.

@@ -156,6 +156,8 @@ Undo restores the previous chore state, claim, points, and streak values togethe
 
 **Ginaria can assist another person** from the chore card → Completion history → Choose completion to correct. The confirmation identifies the original person and points being reversed. It restores that person’s prior points/streak and the chore responsibility together, keeps the completion marked Undone, and records who corrected it. This uses the same safety rules: it must be that person’s latest completion, with no conflicting later state or score changes. It cannot force a rewind of later work or reconstruct unrecorded completions.
 
+**Ginaria can mark a responsible person’s due chore done for them.** Open the person’s chore card, choose **Done for [person]**, and confirm. The named person receives the points and streak credit; the completion also records that ginaria marked it done. The immediate **Undo** restores that person’s prior points, streak, and chore responsibility together while the saved state is still unchanged. Other household accounts cannot use this on-behalf-of action, and it does not bypass required checklist steps, attendance, due-time, stale-state, or duplicate-completion checks.
+
 **Completion history starts with this release.** Earlier point totals remain intact, but earlier individual completions were not recorded in a reconstructable ledger. Undone records remain visible as Undone.
 
 ## Schedule chores

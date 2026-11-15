@@ -1,3 +1,8 @@
+# 2.7.0 - 2026-11-15
+
+- Let ginaria open another person’s currently due chore and confirm **Done for [person]**. The responsible person receives the points and streak credit; other household accounts still cannot act through someone else’s private controls.
+- Record both the credited person and the account that marked the chore done. Give ginaria an immediate guarded Undo that restores the credited person’s points, streak, and responsibility together.
+
 # 2.6.2 - 2026-11-09
 
 - Separate Quick Claim and Quick Done from the full chore browser. Show eight unfinished, currently actionable chores per page, one Claim/Done button each, with compact paging and a switch between the quick views. Remove history, completed jobs, date tabs, search/filter and per-row Skip controls from quick views.

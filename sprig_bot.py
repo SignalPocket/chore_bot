@@ -557,18 +557,20 @@ async def unclaim(ctx, quest_id: int):
 @bot.command()
 async def done(ctx, quest_id: int):
     reset_due_quests()
-    user_id = str(ctx.author.id)
+    actor_id = str(ctx.author.id)
+    user_id = str(getattr(ctx, 'completion_user_id', actor_id))
+    on_behalf = user_id != actor_id
+    if on_behalf and (actor_id != str(REVIEW_OWNER_ID) or not getattr(ctx, 'allow_proxy_completion', False)):
+        await ctx.send("Only ginaria can mark a chore done for another person.")
+        return
     if not chore_ui.available(user_id):
-        await ctx.send("You're away today. Check Who's home? for your dates; your responsibilities remain saved.")
+        await ctx.send(("That person is" if on_behalf else "You're")+" away today. Check Who's home? for saved dates and responsibilities.")
         return
     if not chore_ui.ready(quest_id):
         await ctx.send("This chore isn't due yet. Check it on its scheduled weekday.")
         return
     if chore_ui.is_archived(quest_id):
         await ctx.send("This chore is archived. Restore it from Manage chores → Archived chores first.")
-        return
-    if not chore_ui.available(user_id):
-        await ctx.send("You're away today. Check Who’s home? for your dates; your responsibilities remain saved.")
         return
     get_or_create_user(user_id)
 
@@ -719,7 +721,7 @@ async def done(ctx, quest_id: int):
         )
 
         cursor.execute("DELETE FROM occurrence_moves WHERE quest_id=?",(quest_id,))
-        chore_ui.record_completion(quest_id,user_id,completion_before)
+        chore_ui.record_completion(quest_id,user_id,completion_before,actor=actor_id)
 
 
     reset_message = (
@@ -728,14 +730,18 @@ async def done(ctx, quest_id: int):
         else f"Returns {format_reset_time(reset_after)}."
     )
 
-    await ctx.send(
-        f"✨ {ctx.author.display_name} completed "
+    completed_name = await get_member_name(ctx, user_id) if on_behalf else ctx.author.display_name
+    actor_note = f"Marked done by {ctx.author.display_name}.\n" if on_behalf else ""
+    message = (
+        f"✨ {completed_name} completed "
         f"quest #{quest_id}: **{name}**!\n\n"
+        f"{actor_note}"
         f"+{points_val} points\n"
         f"🔥 Streak: {streak}\n"
         f"⭐ Total: {new_points}\n"
         f"🕰️ {reset_message}"
     )
+    await ctx.send(message)
 
 
 @bot.command()
@@ -1321,7 +1327,7 @@ HELP_COMMANDS['resetquest'].update(summary='Find safe completion correction cont
 
 # --- Run ---
 
-from chore_board import install
+from chore_board import install, REVIEW_OWNER_ID
 
 chore_ui = install(globals())
 

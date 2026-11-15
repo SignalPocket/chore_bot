@@ -7,7 +7,11 @@ def install(ns, ui):
     db.execute('''CREATE TABLE IF NOT EXISTS completion_log(
         id INTEGER PRIMARY KEY AUTOINCREMENT,quest_id INTEGER NOT NULL,user_id TEXT NOT NULL,
         chore_name TEXT NOT NULL,points INTEGER NOT NULL,completed_at TEXT NOT NULL,
-        before_state TEXT NOT NULL,after_state TEXT NOT NULL,undone_at TEXT)''')
+        before_state TEXT NOT NULL,after_state TEXT NOT NULL,undone_at TEXT,
+        actor_id TEXT)''')
+    if 'actor_id' not in {row[1] for row in db.execute('PRAGMA table_info(completion_log)')}:
+        db.execute('ALTER TABLE completion_log ADD COLUMN actor_id TEXT')
+    db.execute('UPDATE completion_log SET actor_id=user_id WHERE actor_id IS NULL')
     db.execute('''CREATE TABLE IF NOT EXISTS points_reset_log(id INTEGER PRIMARY KEY AUTOINCREMENT,actor TEXT NOT NULL,user_id TEXT NOT NULL,before_state TEXT NOT NULL,after_state TEXT NOT NULL,created_at TEXT NOT NULL)''')
     db.execute('''CREATE TABLE IF NOT EXISTS owner_action_log(id INTEGER PRIMARY KEY AUTOINCREMENT,actor TEXT NOT NULL,action TEXT NOT NULL,target TEXT NOT NULL,details TEXT NOT NULL,created_at TEXT NOT NULL)''')
     db.execute('''CREATE TABLE IF NOT EXISTS points_reset_batches(id INTEGER PRIMARY KEY AUTOINCREMENT,actor TEXT NOT NULL,details TEXT NOT NULL,created_at TEXT NOT NULL,undone_at TEXT)''')
@@ -23,10 +27,10 @@ def install(ns, ui):
     def capture(qid,uid):
         return json.dumps(state(qid,uid))
 
-    def record(qid,uid,before):
+    def record(qid,uid,before,actor=None):
         current=state(qid,uid)
-        db.execute('INSERT INTO completion_log(quest_id,user_id,chore_name,points,completed_at,before_state,after_state) VALUES(?,?,?,?,?,?,?)',
-            (qid,str(uid),current['quest'][0],current['quest'][2],current['quest'][5],before,json.dumps(current)))
+        db.execute('INSERT INTO completion_log(quest_id,user_id,chore_name,points,completed_at,before_state,after_state,actor_id) VALUES(?,?,?,?,?,?,?,?)',
+            (qid,str(uid),current['quest'][0],current['quest'][2],current['quest'][5],before,json.dumps(current),str(actor if actor is not None else uid)))
 
     def undo(uid,event_id,actor=None):
         if actor is not None and actor!=301104023405199361:return "Only ginaria can correct another person’s completion."
@@ -70,7 +74,14 @@ def install(ns, ui):
         after=json.loads(row[3]);after.setdefault('reset_epoch',0);after.setdefault('planning',None)
         return row[:3] if json.loads(capture(row[1],uid))==after else None
 
+    def undoable_actor(actor):
+        row=db.execute('SELECT id,quest_id,chore_name,user_id,after_state FROM completion_log WHERE actor_id=? AND undone_at IS NULL ORDER BY id DESC LIMIT 1',(str(actor),)).fetchone()
+        if not row or ui.is_archived(row[1]):return None
+        after=json.loads(row[4]);after.setdefault('reset_epoch',0);after.setdefault('planning',None)
+        return row[:4] if json.loads(capture(row[1],row[3]))==after else None
+
     ui.undoable_completion=undoable
+    ui.undoable_actor_completion=undoable_actor
     ui.owner_undo_completion=owner_undo
     ui.capture_completion=capture
     ui.record_completion=record
