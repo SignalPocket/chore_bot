@@ -7,6 +7,7 @@ from chore_timing import SCHEDULED
 
 def install(ns, ui):
     db,timing=ns['db'],ui.timing
+    base_ready=timing.ready
     db.executescript('''CREATE TABLE IF NOT EXISTS dated_occurrences(
         quest_id INTEGER NOT NULL, day TEXT NOT NULL, slot TEXT NOT NULL,
         frequency TEXT NOT NULL, state TEXT NOT NULL, actor TEXT NOT NULL,
@@ -41,6 +42,14 @@ def install(ns, ui):
         moved=db.execute('SELECT day FROM occurrence_moves WHERE quest_id=?',(qid,)).fetchone()
         return not moved or day.isoformat()>=moved[0]
 
+    def current_due(qid,day,slot):
+        """Allow a today-only owner for a due occurrence carried into today."""
+        now=timing.now();q=db.execute('SELECT completed FROM quests WHERE id=?',(qid,)).fetchone()
+        moved=db.execute('SELECT day FROM occurrence_moves WHERE quest_id=?',(qid,)).fetchone()
+        return (q and not q[0] and not ui.is_archived(qid)
+            and day==now.date() and slot==key(qid,now)[1]
+            and (not moved or day.isoformat()>=moved[0]) and base_ready(qid))
+
     def record(qid,day,slot):
         return db.execute('SELECT frequency,state,actor,revision FROM dated_occurrences WHERE quest_id=? AND day=? AND slot=?',(qid,str(day),slot)).fetchone()
 
@@ -50,7 +59,7 @@ def install(ns, ui):
         if not rows:return None
         _,slot=key(qid,at)
         row=next((row[:4] for row in rows if row[4]==slot),None)
-        return row if row and row[0]==frequency(qid) and valid(qid,at.date(),slot) else None
+        return row if row and row[0]==frequency(qid) and (valid(qid,at.date(),slot) or current_due(qid,at.date(),slot)) else None
 
     def skipped(qid,at=None):
         row=active(qid,at)
@@ -149,4 +158,4 @@ def install(ns, ui):
             for slot in slots(qid):
                 if valid(qid,day,slot) and when(day,slot)>timing.now():yield day,slot
 
-    return SimpleNamespace(transfer_current=transfer_current,slots=slots,when=when,key=key,valid=valid,record=record,active=active,skipped=skipped,owner=owner,base_owner=base_owner,snapshot=snapshot,change=change,undo=undo,undo_id=undo_id,upcoming=upcoming,in_week=in_week,latest_undo=latest_undo)
+    return SimpleNamespace(transfer_current=transfer_current,slots=slots,when=when,key=key,valid=valid,current_due=current_due,record=record,active=active,skipped=skipped,owner=owner,base_owner=base_owner,snapshot=snapshot,change=change,undo=undo,undo_id=undo_id,upcoming=upcoming,in_week=in_week,latest_undo=latest_undo)

@@ -634,6 +634,6 @@ Open Quick Claim or Quick Done from the household tools, or use Quick Done from 
 
 ## Morning chore sort
 
-At 6:00 a.m. Eastern, Sprig sends ginaria a private list of currently due chores, one chore at a time. Choose **Claim**, **Assign**, **Done**, **Skip**, or **Reschedule**. After a saved choice, Sprig opens the next item automatically. Assign changes only today’s occurrence; future ownership stays as it was.
+At 6:00 a.m. Eastern, Sprig sends ginaria a private list of currently due chores, one chore at a time. Choose **Claim**, **Assign**, **Done**, **Skip**, or **Reschedule**. After a saved choice, Sprig opens the next item automatically. Assign changes only today’s occurrence, including overdue work carried forward from an earlier date, flexible chores, and one-time chores; future ownership stays as it was.
 
 Sprig posts the remaining chores in the household channel, grouped by current owner, only after both things are true: the private sort is complete and it is at least 8:00 a.m. Eastern. Finishing before 8 waits until 8; finishing after 8 posts then. Sprig records each delivery attempt before contacting Discord so a restart does not knowingly duplicate the private prompt or household post. The private controls are registered for recovery after a restart while that day’s sort remains open.

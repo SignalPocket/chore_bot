@@ -265,7 +265,7 @@ def install(ns, ui, w, lock):
         if ui.snapshot(qid)!=expected or ui.is_archived(qid) or not timing.ready(qid):return 'This chore changed. Review the current morning item.'
         if not ui.available(target):return 'That person is away today. Choose someone who is home.'
         day=timing.now().date();slot=ui.dated.key(qid)[1]
-        if not ui.dated.valid(qid,day,slot):return 'This occurrence cannot be assigned for today.'
+        if not (ui.dated.valid(qid,day,slot) or ui.dated.current_due(qid,day,slot)):return 'This occurrence cannot be assigned for today.'
         before=ui.dated.record(qid,day,slot)
         frequency=db.execute('SELECT frequency FROM quests WHERE id=?',(qid,)).fetchone()[0]
         after=(frequency,'claim',str(target),(before[3] if before else 0)+1)

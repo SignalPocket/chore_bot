@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.8.0')
+        self.assertEqual(chore_board.APP_VERSION,'2.8.1')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.8.0. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.8.1. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -7711,6 +7711,23 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(self.db.execute('SELECT assigned_to FROM quests WHERE id=1').fetchone()[0])
         with self.clock('2026-11-19T06:00:00'):
             self.assertEqual(self.ui.workspace.ownership(1),(None,None))
+
+    async def test_morning_assign_supports_due_overdue_and_one_time_chores(self):
+        p=self.ui.planning;owner=301104023405199361
+        self.db.execute("UPDATE quests SET completed=1,frequency='one-time' WHERE id=2")
+        for frequency in ('weekly','monthly','one-time','monday'):
+            self.db.execute('UPDATE quests SET frequency=?,completed=0,assigned_to=NULL WHERE id=1',(frequency,))
+            self.db.execute('DELETE FROM chore_timing WHERE quest_id=1')
+            self.db.execute('DELETE FROM dated_occurrences WHERE quest_id=1')
+            if frequency=='monday':
+                self.db.execute("INSERT INTO chore_timing VALUES(1,'2026-11-16T00:00:00-05:00')")
+            self.db.commit()
+            with self.clock('2026-11-18T06:00:00'):
+                expected=self.ui.snapshot(1)
+                self.assertIn('Assigned for today',p.assign_morning_occurrence(owner,1,10,expected),frequency)
+                self.assertEqual(self.ui.workspace.ownership(1),('10','dated'),frequency)
+            with self.clock('2026-11-19T06:00:00'):
+                self.assertEqual(self.ui.workspace.ownership(1),(None,None),frequency)
 
     async def test_morning_done_and_reschedule_use_real_chore_rules_then_finish_queue(self):
         p=self.ui.planning;owner=301104023405199361

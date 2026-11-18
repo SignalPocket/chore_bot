@@ -1,3 +1,7 @@
+# 2.8.1 - 2026-11-18
+
+- Fixed morning Claim and Assign for overdue chores carried forward from an earlier date, as well as flexible and one-time chores, while keeping the override limited to today.
+
 # 2.8.0 - 2026-11-18
 
 - Added a private 6:00 a.m. Eastern owner triage that presents due chores one at a time with Claim, Assign, Done, Skip, and Reschedule.
