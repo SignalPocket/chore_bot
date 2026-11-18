@@ -304,28 +304,46 @@ def install(ns, ui, w, lock):
             if view.done:await publish_morning_summary()
 
     class MorningAssign(discord.ui.View):
-        def __init__(self,day,qid,expected):
+        def __init__(self,day,qid,expected,page=0):
             super().__init__(timeout=None)
-            self.day,self.qid,self.expected=day,qid,expected
+            self.day,self.qid,self.expected,self.page=day,qid,expected,page
             q=db.execute('SELECT name FROM quests WHERE id=?',(qid,)).fetchone()
-            self.embed=discord.Embed(title='Assign today · '+(q[0] if q else 'Chore unavailable'),description='Choose who owns this occurrence today. Future ownership stays unchanged.',color=0x6B9B77)
-            picker=discord.ui.UserSelect(placeholder='Choose a household person',min_values=1,max_values=1,custom_id=f'sprig:morning:{day}:assign:{qid}')
-            async def choose(i):
+            saved=db.execute('SELECT guild_id FROM chore_board WHERE singleton=1').fetchone();guild=bot.get_guild(int(saved[0])) if saved else None
+            ids=ui.workspace.household_people(ns['REVIEW_OWNER_ID'],guild,register=False)
+            def label(uid):
+                value=ui.workspace.person(uid,guild)
+                return ('Account …'+uid[-4:]) if '<@' in value else value
+            people=sorted(((uid,label(uid)) for uid in ids),key=lambda value:(value[1].casefold(),int(value[0])))
+            size=10;pages=max((len(people)-1)//size+1,1);page=max(0,min(page,pages-1));self.page,self.page_count=page,pages
+            description='Choose who owns this occurrence today. Future ownership stays unchanged.'
+            if not people:description+=' No household accounts are saved yet; open /chores once in the household server.'
+            self.embed=discord.Embed(title='Assign today · '+(q[0] if q else 'Chore unavailable'),description=description,color=0x6B9B77)
+            if pages>1:self.embed.set_footer(text=f'Page {page+1} of {pages}')
+            async def choose(i,target):
                 if not await self.interaction_check(i):return
-                saved=db.execute('SELECT guild_id FROM chore_board WHERE singleton=1').fetchone();guild=bot.get_guild(int(saved[0])) if saved else None
-                target=picker.values[0]
-                member=guild.get_member(target.id) if guild else None
+                member=guild.get_member(int(target)) if guild else None
                 if guild and not member:
-                    try:member=await asyncio.wait_for(guild.fetch_member(target.id),timeout=5)
+                    try:member=await asyncio.wait_for(guild.fetch_member(int(target)),timeout=5)
                     except Exception:member=None
-                if getattr(target,'bot',False) or not member:return await i.response.send_message('Choose a person in the household server, not a bot.',ephemeral=True)
+                if not member or getattr(member,'bot',False):return await i.response.send_message('That saved account is no longer available in the household server.',ephemeral=True)
                 async with lock:
-                    notice=assign_morning_occurrence(i.user.id,qid,target.id,expected)
+                    notice=assign_morning_occurrence(i.user.id,qid,target,expected)
                     if notice.startswith(('Assigned','Claimed')):finish_morning_item(day,qid,'assigned')
                     view=MorningTriage(day,notice)
                 await i.response.edit_message(embed=view.embed,view=view,allowed_mentions=discord.AllowedMentions.none())
                 if view.done:await publish_morning_summary()
-            picker.callback=choose;self.add_item(picker)
+            for index,(uid,name) in enumerate(people[page*size:(page+1)*size]):
+                button=discord.ui.Button(label=name[:80],style=discord.ButtonStyle.secondary,row=index//5,custom_id=f'sprig:morning:{day}:assign:{qid}:{uid}')
+                button.callback=lambda i,uid=uid:choose(i,uid);self.add_item(button)
+            async def turn(i,new_page):
+                if not await self.interaction_check(i):return
+                view=MorningAssign(day,qid,expected,new_page)
+                await i.response.edit_message(embed=view.embed,view=view,allowed_mentions=discord.AllowedMentions.none())
+            if pages>1:
+                previous=discord.ui.Button(label='Previous',style=discord.ButtonStyle.secondary,row=2,disabled=page==0,custom_id=f'sprig:morning:{day}:assign-prev:{qid}:{page}')
+                previous.callback=lambda i:turn(i,page-1);self.add_item(previous)
+                next_button=discord.ui.Button(label='Next',style=discord.ButtonStyle.secondary,row=2,disabled=page+1>=pages,custom_id=f'sprig:morning:{day}:assign-next:{qid}:{page}')
+                next_button.callback=lambda i:turn(i,page+1);self.add_item(next_button)
             back=discord.ui.Button(label='Back',style=discord.ButtonStyle.secondary,custom_id=f'sprig:morning:{day}:assign-back:{qid}')
             async def go_back(i):
                 view=MorningTriage(day)
@@ -349,7 +367,7 @@ def install(ns, ui, w, lock):
             qid,name,frequency,points=item;owner=ui.workspace.ownership(qid)[0]
             self.qid,self.expected=qid,ui.snapshot(qid)
             done_count=total-remaining
-            self.embed=discord.Embed(title=f'Morning chore sort · {done_count+1} of {total}',description=(notice+'\n\n' if notice else '')+f'**{name}**\n{timing.label(frequency,qid)} · {points} points\nCurrent owner: {ui.workspace.person(owner) if owner else "Needs someone"}\n\nChoose one action. Sprig will open the next due chore automatically.',color=0x6B9B77)
+            self.embed=discord.Embed(title=f'Morning chore sort · {done_count+1} of {total}',description=(notice+'\n\n' if notice else '')+f'**{name}**\n{timing.label(frequency,qid)} · {points} points\nCurrent owner: {ui.workspace.person(owner) if owner else "Needs someone"}\n\n**Keep** accepts this chore without changing it. **Skip** skips this occurrence. Sprig will open the next due chore automatically.',color=0x6B9B77)
             async def act(i,action):
                 if not await self.interaction_check(i):return
                 if action=='assign':
@@ -362,9 +380,16 @@ def install(ns, ui, w, lock):
                     elif action=='claim':
                         notice=assign_morning_occurrence(i.user.id,qid,i.user.id,self.expected)
                         if notice.startswith('Claimed'):finish_morning_item(self.day,qid,'claimed')
-                    elif action=='skip':
+                    elif action=='keep':
                         finish_morning_item(self.day,qid,'kept')
                         notice='Left as is. Its owner, due status, schedule, and points are unchanged.'
+                    elif action=='skip':
+                        if frequency=='one-time':
+                            finish_morning_item(self.day,qid,'skipped_for_today')
+                            notice='Skipped for today. This one-time chore stays open and will return in tomorrow’s morning sort unless it is completed or rescheduled.'
+                        else:
+                            notice=ui.workspace.skip_occurrence(i.user.id,qid,self.expected)
+                            if notice.startswith('Occurrence skipped'):finish_morning_item(self.day,qid,'skipped')
                     else:
                         responsible=ui.workspace.ownership(qid)[0] or str(i.user.id)
                         if not complete(qid):notice='Finish the checklist before marking this chore Done.'
@@ -376,8 +401,8 @@ def install(ns, ui, w, lock):
                     view=MorningTriage(self.day,notice)
                 await i.edit_original_response(embed=view.embed,view=view,allowed_mentions=discord.AllowedMentions.none())
                 if view.done:await publish_morning_summary()
-            for label,action in [('Claim','claim'),('Assign','assign'),('Done','done'),('Skip','skip'),('Reschedule','reschedule')]:
-                button=discord.ui.Button(label=label,style=discord.ButtonStyle.success if action in ('claim','done') else discord.ButtonStyle.secondary,custom_id=f'sprig:morning:{self.day}:{qid}:{action}')
+            for label,action in [('Claim','claim'),('Assign','assign'),('Done','done'),('Keep','keep'),('Skip','skip'),('Reschedule','reschedule')]:
+                button=discord.ui.Button(label=label,style=discord.ButtonStyle.success if action in ('claim','done') else discord.ButtonStyle.danger if action=='skip' else discord.ButtonStyle.secondary,custom_id=f'sprig:morning:{self.day}:{qid}:{action}')
                 button.callback=lambda i,action=action:act(i,action);self.add_item(button)
         async def interaction_check(self,i):
             if i.user.id!=ns['REVIEW_OWNER_ID']:
@@ -425,7 +450,9 @@ def install(ns, ui, w, lock):
         key=(str(day),str(message_id),getattr(view,'qid',None))
         if key in registered_morning or view.done:return
         bot.add_view(view,message_id=int(message_id))
-        bot.add_view(MorningAssign(day,view.qid,view.expected),message_id=int(message_id))
+        first=MorningAssign(day,view.qid,view.expected)
+        bot.add_view(first,message_id=int(message_id))
+        for page in range(1,first.page_count):bot.add_view(MorningAssign(day,view.qid,view.expected,page),message_id=int(message_id))
         registered_morning.add(key)
 
     async def send_morning_triage():

@@ -1,7 +1,8 @@
 # 2.8.2 - 2026-11-18
 
-- Changed morning Skip to leave the due chore, owner, schedule, and points unchanged while advancing to the next item.
-- Kept unchanged due chores in the final household list under their current owner.
+- Added **Keep** to accept the current owner and due state without changing the chore while advancing to the next item.
+- Preserved **Skip** for skipping only the current occurrence, and kept unchanged due chores in the final household list under their current owner.
+- Replaced the DM-only user picker with household-roster buttons so Assign can choose another saved household member.
 
 # 2.8.1 - 2026-11-18
 

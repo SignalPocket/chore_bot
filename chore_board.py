@@ -18,7 +18,7 @@ REVIEW_OWNER_ID = 301104023405199361
 
 APP_VERSION = '2.8.2'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'Morning Skip now leaves a due chore exactly as assigned and moves to the next item.'
+RELEASE_SUMMARY = 'Morning Keep accepts chores unchanged, and Assign offers the household roster in private chat.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 

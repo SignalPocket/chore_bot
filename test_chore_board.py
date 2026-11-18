@@ -7683,8 +7683,8 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         channel=SimpleNamespace(id=2,guild=guild,send=AsyncMock(return_value=SimpleNamespace(id=701)))
         with self.clock('2026-11-18T08:30:00'),patch.object(self.app.bot,'get_channel',return_value=channel):
             self.assertFalse(await p.publish_morning_summary())
-            view=p.MorningTriage();skip=next(c for c in view.children if getattr(c,'label',None)=='Skip')
-            await skip.callback(Interaction(owner))
+            view=p.MorningTriage();keep=next(c for c in view.children if getattr(c,'label',None)=='Keep')
+            await keep.callback(Interaction(owner))
         channel.send.assert_awaited_once()
         self.assertIn('Fill dishwasher',channel.send.call_args.args[0])
         self.assertEqual(self.db.execute('SELECT completed_at,shared_status FROM morning_triage_days').fetchone()[1],'sent')
@@ -7730,6 +7730,25 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             with self.clock('2026-11-19T06:00:00'):
                 self.assertEqual(self.ui.workspace.ownership(1),(None,None),frequency)
 
+    async def test_morning_assign_dm_uses_household_roster_buttons_for_other_people(self):
+        p=self.ui.planning;owner=301104023405199361
+        self.db.execute("UPDATE quests SET completed=1,frequency='one-time' WHERE id=2")
+        self.db.executemany('INSERT OR IGNORE INTO users(id) VALUES(?)',[('10',),('20',)])
+        self.db.commit()
+        members={uid:SimpleNamespace(id=uid,display_name=f'Person {uid}',bot=False) for uid in (10,20,owner)}
+        guild=SimpleNamespace(id=1,members=list(members.values()),get_member=lambda uid:members.get(uid),get_channel=lambda cid:None,
+            fetch_member=AsyncMock(side_effect=lambda uid:members.get(uid)))
+        with self.clock('2026-11-18T06:00:00'),patch.object(self.app.bot,'get_guild',return_value=guild):
+            triage=p.MorningTriage();assign=next(c for c in triage.children if getattr(c,'label',None)=='Assign')
+            event=Interaction(owner);await assign.callback(event);view=event.response.payload['view']
+            self.assertFalse(any(isinstance(c,discord.ui.UserSelect) for c in view.children))
+            labels=[getattr(c,'label',None) for c in view.children]
+            self.assertIn('Person 10',labels);self.assertIn('Person 20',labels)
+            target=next(c for c in view.children if getattr(c,'label',None)=='Person 20')
+            event=Interaction(owner);await target.callback(event)
+            self.assertEqual(self.ui.workspace.ownership(1),('20','dated'))
+            self.assertEqual(self.db.execute('SELECT status FROM morning_triage_items').fetchone(),('assigned',))
+
     async def test_morning_done_and_reschedule_use_real_chore_rules_then_finish_queue(self):
         p=self.ui.planning;owner=301104023405199361
         self.db.execute("UPDATE quests SET completed=1,frequency='one-time' WHERE id=2")
@@ -7759,9 +7778,9 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                 self.db.execute('SELECT * FROM dated_occurrences WHERE quest_id=1').fetchall(),
                 self.db.execute('SELECT * FROM occurrence_moves WHERE quest_id=1').fetchall(),
                 self.db.execute('SELECT * FROM occurrence_skips WHERE quest_id=1').fetchall())
-            view=p.MorningTriage();skip=next(c for c in view.children if getattr(c,'label',None)=='Skip')
-            self.assertEqual(skip.style,discord.ButtonStyle.secondary)
-            event=Interaction(owner);await skip.callback(event)
+            view=p.MorningTriage();keep=next(c for c in view.children if getattr(c,'label',None)=='Keep')
+            self.assertEqual(keep.style,discord.ButtonStyle.secondary)
+            event=Interaction(owner);await keep.callback(event)
             after=(self.db.execute('SELECT * FROM quests WHERE id=1').fetchone(),
                 self.db.execute('SELECT * FROM claims WHERE quest_id=1').fetchall(),
                 self.db.execute('SELECT * FROM dated_occurrences WHERE quest_id=1').fetchall(),
@@ -7772,6 +7791,19 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.ui.workspace.ownership(1),('10','assignment'))
             self.assertEqual(self.db.execute('SELECT status FROM morning_triage_items').fetchone(),('kept',))
             self.assertIn('Left as is',event.result['view'].embed.description)
+            self.assertIn('complete',event.result['view'].embed.title.lower())
+
+    async def test_morning_skip_still_skips_the_current_occurrence(self):
+        p=self.ui.planning;owner=301104023405199361
+        self.db.execute("UPDATE quests SET completed=1,frequency='one-time' WHERE id=2");self.db.commit()
+        with self.clock('2026-11-18T06:00:00'):
+            view=p.MorningTriage();skip=next(c for c in view.children if getattr(c,'label',None)=='Skip')
+            self.assertEqual(skip.style,discord.ButtonStyle.danger)
+            event=Interaction(owner);await skip.callback(event)
+            self.assertEqual(self.db.execute('SELECT status FROM morning_triage_items').fetchone(),('skipped',))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM occurrence_skips WHERE quest_id=1').fetchone(),(1,))
+            self.assertFalse(self.ui.timing.ready(1))
+            self.assertIn('Occurrence skipped',event.result['view'].embed.description)
             self.assertIn('complete',event.result['view'].embed.title.lower())
 
 
