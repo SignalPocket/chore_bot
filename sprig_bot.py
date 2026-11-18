@@ -490,6 +490,7 @@ async def claim(ctx, quest_id: int):
 
     quest_id, name, assigned_to, completed = quest
     assigned_to = chore_ui.workspace.ownership(quest_id)[0]
+    saved_owner = chore_ui.workspace.raw_ownership(quest_id)[0]
 
     if completed:
         await ctx.send(f"Quest #{quest_id} is already completed! ✨")
@@ -501,6 +502,14 @@ async def claim(ctx, quest_id: int):
             f"Quest #{quest_id} is assigned to **{assigned_name}** "
             "and does not need to be claimed."
         )
+        return
+
+    if saved_owner and not chore_ui.available(saved_owner):
+        problem=chore_ui.dated.claim_current(user_id,quest_id)
+        if problem:
+            await ctx.send(problem)
+            return
+        await ctx.send(f"🎯 {ctx.author.display_name} claimed quest #{quest_id}: **{name}**! The saved owner remains assigned for later home occurrences.")
         return
 
     cursor.execute(

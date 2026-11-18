@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.8.2')
+        self.assertEqual(chore_board.APP_VERSION,'2.8.3')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.8.2. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.8.3. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -3524,7 +3524,8 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(self.ui.available(20));self.assertFalse(self.ui.available(30))
             for qid,uid in ((1,20),(2,30)):
                 self.assertIn('saved',self.ui.reassign(qid,uid,'assignment',self.ui.reassign_snapshot(qid),actor=10))
-                self.assertEqual(w.ownership(qid)[0],str(uid))
+                self.assertEqual(w.raw_ownership(qid)[0],str(uid))
+                self.assertIsNone(w.ownership(qid)[0])
             before=self.db.execute('SELECT * FROM availability_defaults').fetchall()
             event=Interaction(20);ctx=self.ui.Context(event)
             await self.app.bot.get_command('done').callback(ctx,1)
@@ -5827,11 +5828,13 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             friday=self.workload_chore('friday',7,20)
             self.db.executemany('INSERT OR REPLACE INTO chore_timing VALUES(?,?)',[(am,'2026-11-08T00:00:00-05:00'),(pm,'2026-11-08T12:00:00-05:00'),(friday,'2026-11-06T00:00:00-05:00')])
             self.db.commit()
-            self.assertFalse(self.ui.ready(daily))
+            self.assertTrue(self.ui.ready(daily))
             self.assertEqual(self.ui.insights.calculate(7)['people']['20']['backlog'],0)
-            self.assertFalse(any(row[0][0]==daily for row in self.ui.workspace.attention_rows()))
+            attention=next(row for row in self.ui.workspace.attention_rows() if row[0][0]==daily)
+            self.assertTrue(attention[2])
             self.assertFalse(any(q[0]==daily for q,uid in self.ui.planning.project(datetime(2026,11,16).date())))
             self.assertFalse(self.ui.workspace.Chores(20,who='mine').entries)
+            self.assertIn(daily,[q[0] for _,q,_ in self.ui.workspace.Chores(20,who='unclaimed').entries])
             self.assertEqual(self.db.execute('SELECT assigned_to FROM quests WHERE id=?',(daily,)).fetchone(),('20',))
         with self.clock('2026-11-08T18:01:00'):
             self.assertTrue(self.ui.ready(daily))
@@ -7657,6 +7660,58 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('2 of 2',next_view.embed.title)
             self.assertEqual(self.ui.workspace.ownership(1),(str(owner),'dated'))
             self.assertEqual(self.db.execute("SELECT status FROM morning_triage_items ORDER BY position LIMIT 1").fetchone(),('claimed',))
+
+    async def test_away_saved_owner_releases_current_occurrence_for_household_claim(self):
+        w=self.ui.workspace;day='2026-11-18';week=self.ui.week_key()
+        with self.clock(day+'T09:00:00'):
+            self.ui.attendance.add(20,day,day,'away','Trip')
+            for scope in ('assignment','week','occurrence'):
+                with self.subTest(scope=scope):
+                    self.db.execute('DELETE FROM dated_occurrences WHERE quest_id=1')
+                    self.db.execute('DELETE FROM dated_occurrence_changes WHERE quest_id=1')
+                    self.db.execute('DELETE FROM claims WHERE quest_id=1')
+                    self.db.execute('DELETE FROM week_signups WHERE quest_id=1')
+                    self.db.execute('UPDATE quests SET assigned_to=NULL,completed=0 WHERE id=1')
+                    if scope=='assignment':self.db.execute("UPDATE quests SET assigned_to='20' WHERE id=1")
+                    elif scope=='week':self.db.execute('INSERT INTO week_signups VALUES(?,?,?)',(1,week,'20'))
+                    else:self.db.execute("INSERT INTO claims VALUES(1,'20')")
+                    self.db.commit()
+                    self.assertEqual(w.raw_ownership(1)[0],'20')
+                    self.assertEqual(w.ownership(1),(None,None))
+                    self.assertTrue(self.ui.timing.ready(1))
+                    pickup=w.Browse(10,'pickup','due')
+                    self.assertIn(1,[q[0] for q in pickup.entries])
+                    send=AsyncMock()
+                    event=Interaction(10)
+                    context=SimpleNamespace(author=event.user,guild=event.guild,send=send)
+                    await self.app.bot.get_command('claim').callback(context,1)
+                    self.assertIn('saved owner remains assigned',send.await_args.args[0])
+                    self.assertEqual(w.ownership(1),('10','dated'))
+                    self.assertFalse(self.db.execute('SELECT * FROM claims WHERE quest_id=1').fetchall())
+                    if scope=='assignment':self.assertEqual(self.db.execute('SELECT assigned_to FROM quests WHERE id=1').fetchone(),('20',))
+                    if scope=='week':self.assertEqual(self.db.execute('SELECT user_id FROM week_signups WHERE quest_id=1').fetchone(),('20',))
+
+    async def test_away_owner_override_expires_and_saved_assignment_returns_when_home(self):
+        w=self.ui.workspace
+        self.db.execute("UPDATE quests SET assigned_to='20' WHERE id=1");self.db.commit()
+        with self.clock('2026-11-18T09:00:00'):
+            self.ui.attendance.add(20,'2026-11-18','2026-11-18','away','Trip')
+            send=AsyncMock();event=Interaction(10)
+            await self.app.bot.get_command('claim').callback(SimpleNamespace(author=event.user,guild=event.guild,send=send),1)
+            self.assertEqual(w.ownership(1),('10','dated'))
+        with self.clock('2026-11-19T09:00:00'):
+            self.assertEqual(w.ownership(1),('20','assignment'))
+
+    async def test_open_morning_sort_adds_newly_released_due_chore_once(self):
+        p=self.ui.planning;day=datetime(2026,11,18).date()
+        with self.clock('2026-11-18T06:00:00'):
+            self.db.execute("UPDATE quests SET completed=1,frequency='one-time' WHERE id=2");self.db.commit()
+            p.MorningTriage(day)
+            self.assertEqual(self.db.execute('SELECT quest_id FROM morning_triage_items ORDER BY position').fetchall(),[(1,)])
+            self.db.execute("UPDATE quests SET completed=0,frequency='daily',assigned_to='20' WHERE id=2");self.db.commit()
+            self.ui.attendance.add(20,'2026-11-18','2026-11-18','away','Trip')
+            p.MorningTriage(day);p.MorningTriage(day)
+            self.assertEqual(self.db.execute('SELECT quest_id FROM morning_triage_items ORDER BY position').fetchall(),[(1,),(2,)])
 
     async def test_morning_triage_waits_for_both_completion_and_eight_am_then_posts_once(self):
         p=self.ui.planning;owner=301104023405199361

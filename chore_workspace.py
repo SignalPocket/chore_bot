@@ -127,11 +127,11 @@ def install(ns, ui, lock):
     def chore(qid):
         return db.execute('SELECT id,name,frequency,points,assigned_to,completed,last_completed,reset_after,notes,category FROM quests WHERE id=?', (qid,)).fetchone()
 
-    def ownership(qid, offset=0):
+    def raw_ownership(qid, offset=0):
         q = chore(qid)
         if not q: return None, None
-        dated=ui.dated.owner(qid) if offset==0 else None
-        if dated:return dated,'dated'
+        dated=ui.dated.active(qid) if offset==0 else None
+        if dated and dated[1]=='claim':return dated[2],'dated'
         if q[4]: return str(q[4]), 'assignment'
         weekly = ui.weekly_owner(qid, offset)
         if weekly: return str(weekly), 'week1' if offset else 'week0'
@@ -140,9 +140,14 @@ def install(ns, ui, lock):
         recurring=ui.repeating.owner(qid,ui.week_start(offset)+timedelta(days=1) if offset else None)
         return (recurring,'repeating') if recurring else (None,None)
 
+    def ownership(qid, offset=0):
+        uid,scope=raw_ownership(qid,offset)
+        if offset==0 and uid and not ui.attendance.at(uid,timing.now()):return None,None
+        return uid,scope
+
     def due_text(q):
-        uid=ownership(q[0])[0]
-        if uid and not ui.attendance.at(uid,timing.now()):return 'Paused while away; responsibility saved'
+        uid=raw_ownership(q[0])[0]
+        if uid and not ui.attendance.at(uid,timing.now()):return 'Available for pickup while the saved owner is away'
         move = db.execute('SELECT day FROM occurrence_moves WHERE quest_id=?', (q[0],)).fetchone()
         if move:
             when = datetime.fromisoformat(move[0])
@@ -547,7 +552,7 @@ def install(ns, ui, lock):
                 start=day-timedelta(days=day.weekday()) if mode=='week' else day
                 for n in range(7 if mode=='week' else 1):
                     date=start+timedelta(days=n)
-                    self.entries.extend((date,chore(q[0]),uid) for q,uid in ui.planning.project(date))
+                    self.entries.extend((date,chore(q[0]),ownership(q[0])[0] if date==timing.now().date() else uid) for q,uid in ui.planning.project(date))
                 if mode=='week':
                     self.entries.extend((None,chore(q[0]),uid) for q,uid in ui.planning.project(start,flexible=True))
                 # Flexible and overdue work remains findable on Today.
@@ -1045,9 +1050,11 @@ def install(ns, ui, lock):
                         if not (own or future_own) or (due and own and not future_own): continue
                     elif not (own or (tab in ('week','next') and (ui.repeating.in_week(owner,q[0],offset) or ui.dated.in_week(owner,q[0],offset)))) or (tab == 'due' and not due) or (tab == 'week' and not inweek): continue
                 elif area == 'pickup':
-                    future_open=bool(uid or q[4]) and tab in ('week','next','upcoming') and any(not ui.dated.skipped(q[0],ui.dated.when(day,slot)) and not (ui.dated.owner(q[0],ui.dated.when(day,slot)) or ui.dated.base_owner(q[0],ui.dated.when(day,slot))) for day,slot in ui.dated.upcoming(q[0],ui.week_start(offset).date(),ui.week_start(offset+1).date()+timedelta(days=1)))
-                    if (uid or q[4]) and not future_open: continue
-                    if tab == 'due' and not due: continue
+                    if tab=='due':
+                        if uid or not due:continue
+                    else:
+                        future_open=bool(uid or q[4]) and tab in ('week','next','upcoming') and any(not ui.dated.skipped(q[0],ui.dated.when(day,slot)) and not (ui.dated.owner(q[0],ui.dated.when(day,slot)) or ui.dated.base_owner(q[0],ui.dated.when(day,slot))) for day,slot in ui.dated.upcoming(q[0],ui.week_start(offset).date(),ui.week_start(offset+1).date()+timedelta(days=1)))
+                        if (uid or q[4]) and not future_open: continue
                     if tab in ('week', 'next') and (q[2] not in WEEKLY_FREQUENCIES or not inweek): continue
                 elif (tab == 'due' and not due) or (tab in ('week', 'next') and not inweek): continue
                 if unclaimed and uid: continue
@@ -2946,7 +2953,7 @@ def install(ns, ui, lock):
 
     TOPICS['Your color']='Open **Settings → Your color** and choose a marker.\n\nChoosing saves immediately. **No marker** removes it. Everyone sees it on refreshed workspace screens; responsibility and points stay unchanged.'
 
-    result = SimpleNamespace(QuickList=QuickList,People=People,PersonProfile=PersonProfile,save_profile=save_profile,ProfileModal=ProfileModal,HouseholdColors=HouseholdColors,ChoreMore=ChoreMore,PersonColor=PersonColor,color_key=color_key,sheet_size=sheet_size,Chores=Chores,PersonalSettings=PersonalSettings,browse_page_size=browse_page_size,PageHelp=PageHelp,screen_name=screen_name,PAGE_TOPICS=PAGE_TOPICS,ButtonChoices=ButtonChoices,ClaimChoices=ClaimChoices,Repeating=Repeating,OccurrenceDates=OccurrenceDates,FutureOccurrence=FutureOccurrence,FutureSlots=FutureSlots,skip_occurrence=skip_occurrence,undo_skip=undo_skip,undoable_skip=undoable_skip,UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,household_people=household_people,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,notify_trade=notify_trade,memory=memory)
+    result = SimpleNamespace(QuickList=QuickList,People=People,PersonProfile=PersonProfile,save_profile=save_profile,ProfileModal=ProfileModal,HouseholdColors=HouseholdColors,ChoreMore=ChoreMore,PersonColor=PersonColor,color_key=color_key,sheet_size=sheet_size,Chores=Chores,PersonalSettings=PersonalSettings,browse_page_size=browse_page_size,PageHelp=PageHelp,screen_name=screen_name,PAGE_TOPICS=PAGE_TOPICS,ButtonChoices=ButtonChoices,ClaimChoices=ClaimChoices,Repeating=Repeating,OccurrenceDates=OccurrenceDates,FutureOccurrence=FutureOccurrence,FutureSlots=FutureSlots,skip_occurrence=skip_occurrence,undo_skip=undo_skip,undoable_skip=undoable_skip,UsualSchedule=UsualSchedule,page_size=page_size,ListLength=ListLength,Announcements=Announcements,Confirm=Confirm,clean=clean,person=person,household_people=household_people,undo_points_reset=undo_points_reset,ResetHistory=ResetHistory,ResetPoints=ResetPoints,split_daily_shifts=split_daily_shifts,Points=Points,LayoutPanel=LayoutPanel,render=render,payload=payload,Dashboard=Dashboard,Attention=Attention,attention_rows=attention_rows,Browse=Browse,Card=Card,Inbox=Inbox,Trips=Trips,Guide=Guide,Manage=Manage,History=History,Notifications=Notifications,MoveModal=MoveModal,TripModal=TripModal,View=View,adapt=adapt,present=present,save_trip=save_trip,parse_date=parse_date,ownership=ownership,raw_ownership=raw_ownership,notify_trade=notify_trade,memory=memory)
 
     from chore_recovery import install as install_recovery
     recovery = install_recovery(ns, ui, result)

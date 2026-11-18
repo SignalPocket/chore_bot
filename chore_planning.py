@@ -233,9 +233,13 @@ def install(ns, ui, w, lock):
         key=day.isoformat()
         with db:
             created=db.execute("INSERT OR IGNORE INTO morning_triage_days(day) VALUES(?)",(key,)).rowcount
-            if created:
-                db.executemany('INSERT OR IGNORE INTO morning_triage_items(day,quest_id,position) VALUES(?,?,?)',
-                    [(key,q[0],index) for index,q in enumerate(morning_due_records())])
+            completed=db.execute('SELECT completed_at FROM morning_triage_days WHERE day=?',(key,)).fetchone()[0]
+            if created or not completed:
+                existing={qid for qid, in db.execute('SELECT quest_id FROM morning_triage_items WHERE day=?',(key,))}
+                position=db.execute('SELECT COALESCE(MAX(position),-1)+1 FROM morning_triage_items WHERE day=?',(key,)).fetchone()[0]
+                additions=[q[0] for q in morning_due_records() if q[0] not in existing]
+                db.executemany('INSERT INTO morning_triage_items(day,quest_id,position) VALUES(?,?,?)',
+                    [(key,qid,position+index) for index,qid in enumerate(additions)])
         return key
 
     def morning_item(day):

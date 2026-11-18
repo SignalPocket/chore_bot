@@ -106,7 +106,7 @@ def install(ns, ui, w):
             moved = moves.get(qid) if not completed else None
             due_start = max(earliest, midnight(moved)) if moved else earliest
             if not completed and due_start <= now and ui.ready(qid,initialize=False):
-                uid = owner(q, now, True)
+                uid = w.ownership(qid)[0]
                 if uid is None:unclaimed_due += points
                 else:stats[uid]['backlog'] += points
             if frequency == 'one-time' and not completed and not moved:
@@ -192,7 +192,7 @@ def install(ns, ui, w):
                      if data['observed'] else 'No completed days of recorded history yet')
             self.embed=discord.Embed(title='Workload & pace',description=
                 f'Plan: {data["future_start"]:%b %d}–{data["future_end"]-timedelta(days=1):%b %d} ({days} days).\n'
-                'Recurring chores pause while someone is away. Saved responsibilities resume when home; missed away occurrences do not pile up.\n'
+                'A due occurrence becomes available to the household while its saved owner is away. Saved responsibility resumes when home; missed away occurrences do not pile up.\n'
                 f'Unclaimed due now: **{data["unclaimed_due"]} points**.\n'
                 + (f'History: {history}. Today is separate.\nUnclaimed planned work: {number(data["unclaimed"])} points. Undated one-time work: {data["unplaced"]} points.' if detail else ''),
                 color=0x6B9B77)

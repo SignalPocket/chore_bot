@@ -1,3 +1,9 @@
+# 2.8.3 - 2026-11-18
+
+- Release a due occurrence for household pickup when its saved owner is away, without deleting their ongoing, weekly, or repeating responsibility for later home occurrences.
+- Let a home household member claim the released occurrence as a today-only override.
+- Add newly released due chores to an already-open morning sort so attendance corrections can affect the current day before triage is completed.
+
 # 2.8.2 - 2026-11-18
 
 - Added **Keep** to accept the current owner and due state without changing the chore while advancing to the next item.

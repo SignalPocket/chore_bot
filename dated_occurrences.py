@@ -106,6 +106,24 @@ def install(ns, ui):
             db.execute('INSERT INTO chore_revisions VALUES(?,1) ON CONFLICT(quest_id) DO UPDATE SET revision=revision+1',(qid,))
         return ('Claimed just this time.' if action=='claim' else 'Skipped just this time. Undo is below.' if action=='skip' else 'Dated claim released.')+' Later repeats, signups, and points are unchanged.'
 
+    def claim_current(actor,qid):
+        now=timing.now();day=now.date();slot=key(qid,now)[1];at=when(day,slot)
+        if not ui.attendance.at(actor,now):return 'You are away today. Check Who’s home? before claiming this occurrence.'
+        if not current_due(qid,day,slot):return "This chore isn't due yet. Check it on its scheduled weekday."
+        before=record(qid,day,slot)
+        if before and before[1]=='skip':return 'Undo the skip before claiming this occurrence.'
+        if before and before[1]=='claim' and ui.attendance.at(before[2],at) and before[2]!=str(actor):
+            return 'Someone already has this occurrence. Nothing changed.'
+        revision=(before[3] if before else 0)+1
+        after=(frequency(qid),'claim',str(actor),revision)
+        with db:
+            db.execute('INSERT OR REPLACE INTO dated_occurrences VALUES(?,?,?,?,?,?,?)',(qid,day.isoformat(),slot,*after))
+            db.execute('INSERT INTO dated_occurrence_changes(quest_id,day,slot,actor,action,changed_at,before_state,after_state) VALUES(?,?,?,?,?,?,?,?)',
+                (qid,day.isoformat(),slot,str(actor),'claim_released',now.isoformat(),json.dumps(before),json.dumps(after)))
+            db.execute('DELETE FROM claims WHERE quest_id=?',(qid,))
+            db.execute('INSERT INTO chore_revisions VALUES(?,1) ON CONFLICT(quest_id) DO UPDATE SET revision=revision+1',(qid,))
+        return None
+
     def transfer_current(actor,qid,target):
         day,slot=key(qid);before=record(qid,day,slot)
         if not before or before[1]!='claim':raise ValueError('Dated claim changed')
@@ -158,4 +176,4 @@ def install(ns, ui):
             for slot in slots(qid):
                 if valid(qid,day,slot) and when(day,slot)>timing.now():yield day,slot
 
-    return SimpleNamespace(transfer_current=transfer_current,slots=slots,when=when,key=key,valid=valid,current_due=current_due,record=record,active=active,skipped=skipped,owner=owner,base_owner=base_owner,snapshot=snapshot,change=change,undo=undo,undo_id=undo_id,upcoming=upcoming,in_week=in_week,latest_undo=latest_undo)
+    return SimpleNamespace(transfer_current=transfer_current,claim_current=claim_current,slots=slots,when=when,key=key,valid=valid,current_due=current_due,record=record,active=active,skipped=skipped,owner=owner,base_owner=base_owner,snapshot=snapshot,change=change,undo=undo,undo_id=undo_id,upcoming=upcoming,in_week=in_week,latest_undo=latest_undo)
