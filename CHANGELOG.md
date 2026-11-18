@@ -1,3 +1,10 @@
+# 2.8.0 - 2026-11-18
+
+- Added a private 6:00 a.m. Eastern owner triage that presents due chores one at a time with Claim, Assign, Done, Skip, and Reschedule.
+- Added today-only assignment overrides so morning sorting does not rewrite future chore ownership.
+- Added a duplicate-safe household post grouped by current owner. It sends only after triage is complete and 8:00 a.m. Eastern has passed.
+- Added persistent delivery and item state so restarts do not replay a completed choice or knowingly duplicate a DM or household post.
+
 # 2.7.0 - 2026-11-15
 
 - Let ginaria open another person’s currently due chore and confirm **Done for [person]**. The responsible person receives the points and streak credit; other household accounts still cannot act through someone else’s private controls.

@@ -378,6 +378,11 @@ async def quest_reset_loop():
     except Exception:
         import logging
         logging.getLogger('discord.sprig').exception('Reminder check failed')
+    try:
+        await chore_ui.planning.send_morning_triage()
+    except Exception:
+        import logging
+        logging.getLogger('discord.sprig').exception('Morning triage check failed')
 
 
 @quest_reset_loop.before_loop

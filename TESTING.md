@@ -61,6 +61,7 @@ regressions using the server's Python, SQLite, and installed Discord library:
 | Today's Calendar, private message flags, component limits | Installed Discord interface support |
 | Recovery permissions and actual Discord ViewStore dispatch | Safe recovery and one action per click |
 | Update notice routing, deduplication, and no mentions | One release announcement in the correct channel |
+| Morning triage timing, privacy, and duplicate guards | One private owner sort and one later-of-8-a.m. household post |
 
 The manifest reuses existing regression methods; there is no duplicate set of
 server assertions. Missing or repeated manifest entries fail. The command refuses
@@ -140,4 +141,4 @@ Page-help checks cover named headings, one contextual ? per screen, private acce
 
 Manage-list regression checks cover active/completed inclusion, archived exclusion, direct prefilled editing, saved search/page recovery, empty results, private access, stale submissions, unchanged earned points, and Discord layout limits.
 
-Shared page-template contracts cover top-right contextual help, ordered slots, native dropdown callbacks and expiry, complete preflight validation, and dense lists with current and dated Undo together. The server manifest currently selects 42 checks; all twelve runtime modules, including chore_pages.py, must match the full release report.
+Shared page-template contracts cover top-right contextual help, ordered slots, native dropdown callbacks and expiry, complete preflight validation, and dense lists with current and dated Undo together. The server manifest currently selects 43 checks; all twelve runtime modules, including chore_pages.py, must match the full release report.

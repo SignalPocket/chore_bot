@@ -631,3 +631,9 @@ Manage chores → Edit includes a prefilled Repeat schedule field. Change it in 
 ### Quick Claim and Quick Done
 
 Open Quick Claim or Quick Done from the household tools, or use Quick Done from Mine and Quick Claim from Available. Quick Claim lists only unfinished unclaimed chores due now; Quick Done lists only your unfinished due chores. Eight chores fit on each page. Each row has a name, points and one action. Claim and Done keep you in the quick list and remove the finished row. Checklist chores open their checklist before awarding points. Completed history, planning tabs, Skip and filters belong to the full chore views. Completion Undo remains available below the list.
+
+## Morning chore sort
+
+At 6:00 a.m. Eastern, Sprig sends ginaria a private list of currently due chores, one chore at a time. Choose **Claim**, **Assign**, **Done**, **Skip**, or **Reschedule**. After a saved choice, Sprig opens the next item automatically. Assign changes only today’s occurrence; future ownership stays as it was.
+
+Sprig posts the remaining chores in the household channel, grouped by current owner, only after both things are true: the private sort is complete and it is at least 8:00 a.m. Eastern. Finishing before 8 waits until 8; finishing after 8 posts then. Sprig records each delivery attempt before contacting Discord so a restart does not knowingly duplicate the private prompt or household post. The private controls are registered for recovery after a restart while that day’s sort remains open.

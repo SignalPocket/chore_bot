@@ -51,6 +51,7 @@ SERVER_CHECKS = {
     'reminder deduplication and restart': 'test_planning_reminders_deduplicate_concurrent_and_restart',
     'reminder ownership changes': 'test_audit10_reassignment_during_lookup_follows_recipient_optin',
     'reminder expiry': 'test_audit10_slot_expiring_during_lookup_is_not_sent_late',
+    'morning triage gates and deduplication': 'test_morning_triage_waits_for_both_completion_and_eight_am_then_posts_once',
     'moved Skip persistence': 'test_audit10_moved_monthly_skip_waits_until_next_month_and_survives_reload',
     'today-first Calendar': 'test_calendar_navigation_dashboard_defaults_to_today_at_click_time',
     'private Discord serialization': 'test_v2_serialized_private_message_has_v2_and_ephemeral_flags',

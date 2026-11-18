@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.7.0')
+        self.assertEqual(chore_board.APP_VERSION,'2.8.0')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.7.0. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.8.0. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -7641,6 +7641,106 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('Claim → Just this occurrence',w.Guide(10,'Pick up a chore').embed.description)
         self.assertIn('↶ Undo',w.Guide(10,'Undo a mistake').embed.description)
         self.assertNotIn('More actions',w.Guide(10,'Schedules and missed chores').embed.description)
+
+    async def test_morning_triage_is_owner_only_and_advances_one_item_per_choice(self):
+        p=self.ui.planning;owner=301104023405199361
+        self.db.execute("UPDATE quests SET completed=1,frequency='one-time' WHERE id=2");self.db.commit()
+        with self.clock('2026-11-18T06:00:00'):
+            self.db.execute("INSERT INTO quests(name,frequency,points) VALUES('Second chore','daily',3)");self.db.commit()
+            view=p.MorningTriage()
+            self.assertIn('1 of 2',view.embed.title)
+            claim=next(c for c in view.children if getattr(c,'label',None)=='Claim')
+            denied=Interaction(10);await claim.callback(denied)
+            self.assertEqual(self.db.execute("SELECT COUNT(*) FROM morning_triage_items WHERE status!='pending'").fetchone(),(0,))
+            event=Interaction(owner);await claim.callback(event)
+            next_view=event.result['view']
+            self.assertIn('2 of 2',next_view.embed.title)
+            self.assertEqual(self.ui.workspace.ownership(1),(str(owner),'dated'))
+            self.assertEqual(self.db.execute("SELECT status FROM morning_triage_items ORDER BY position LIMIT 1").fetchone(),('claimed',))
+
+    async def test_morning_triage_waits_for_both_completion_and_eight_am_then_posts_once(self):
+        p=self.ui.planning;owner=301104023405199361
+        self.db.execute("UPDATE quests SET completed=1,frequency='one-time' WHERE id=2");self.db.commit()
+        guild=SimpleNamespace(id=1,get_member=lambda uid:SimpleNamespace(display_name=f'Person {uid}'))
+        channel=SimpleNamespace(id=2,guild=guild,send=AsyncMock(return_value=SimpleNamespace(id=700)))
+        with patch.object(self.app.bot,'get_channel',return_value=channel):
+            with self.clock('2026-11-18T06:00:00'):
+                view=p.MorningTriage();claim=next(c for c in view.children if getattr(c,'label',None)=='Claim')
+                await claim.callback(Interaction(owner))
+                self.assertFalse(await p.publish_morning_summary());channel.send.assert_not_awaited()
+            with self.clock('2026-11-18T08:00:00'):
+                self.assertTrue(await p.publish_morning_summary())
+                self.assertFalse(await p.publish_morning_summary())
+        channel.send.assert_awaited_once()
+        text=channel.send.call_args.args[0]
+        self.assertIn('Today’s chores',text);self.assertIn('Fill dishwasher',text)
+        self.assertEqual(self.db.execute('SELECT shared_status FROM morning_triage_days').fetchone(),('sent',))
+
+    async def test_morning_triage_after_eight_posts_only_when_last_item_is_sorted(self):
+        p=self.ui.planning;owner=301104023405199361
+        self.db.execute("UPDATE quests SET completed=1,frequency='one-time' WHERE id=2");self.db.commit()
+        guild=SimpleNamespace(id=1,get_member=lambda uid:SimpleNamespace(display_name=f'Person {uid}'))
+        channel=SimpleNamespace(id=2,guild=guild,send=AsyncMock(return_value=SimpleNamespace(id=701)))
+        with self.clock('2026-11-18T08:30:00'),patch.object(self.app.bot,'get_channel',return_value=channel):
+            self.assertFalse(await p.publish_morning_summary())
+            view=p.MorningTriage();skip=next(c for c in view.children if getattr(c,'label',None)=='Skip')
+            await skip.callback(Interaction(owner))
+        channel.send.assert_awaited_once()
+        self.assertEqual(self.db.execute('SELECT completed_at,shared_status FROM morning_triage_days').fetchone()[1],'sent')
+
+    async def test_morning_scheduler_private_dm_and_delivery_records_are_duplicate_safe(self):
+        p=self.ui.planning;owner=301104023405199361
+        self.db.execute("UPDATE quests SET completed=1,frequency='one-time' WHERE id=2");self.db.commit()
+        dm=SimpleNamespace(send=AsyncMock(return_value=SimpleNamespace(id=600)))
+        with self.clock('2026-11-18T05:59:00'),patch.object(self.app.bot,'get_user',return_value=dm):
+            self.assertFalse(await p.send_morning_triage());dm.send.assert_not_awaited()
+        with self.clock('2026-11-18T06:00:00'),patch.object(self.app.bot,'get_user',return_value=dm):
+            await asyncio.gather(p.send_morning_triage(),p.send_morning_triage())
+        dm.send.assert_awaited_once()
+        sent=dm.send.call_args.kwargs
+        self.assertIsInstance(sent['view'],p.MorningTriage)
+        self.assertEqual(self.db.execute('SELECT dm_status,dm_message_id FROM morning_triage_days').fetchone(),('sent','600'))
+
+    async def test_morning_assign_is_today_only_and_reschedule_preserves_future_owner(self):
+        p=self.ui.planning;owner=301104023405199361
+        self.db.execute("UPDATE quests SET completed=1,frequency='one-time' WHERE id=2");self.db.commit()
+        with self.clock('2026-11-18T06:00:00'):
+            expected=self.ui.snapshot(1)
+            self.assertIn('Assigned for today',p.assign_morning_occurrence(owner,1,10,expected))
+            self.assertEqual(self.ui.workspace.ownership(1),('10','dated'))
+            self.assertIsNone(self.db.execute('SELECT assigned_to FROM quests WHERE id=1').fetchone()[0])
+        with self.clock('2026-11-19T06:00:00'):
+            self.assertEqual(self.ui.workspace.ownership(1),(None,None))
+
+    async def test_morning_done_and_reschedule_use_real_chore_rules_then_finish_queue(self):
+        p=self.ui.planning;owner=301104023405199361
+        self.db.execute("UPDATE quests SET completed=1,frequency='one-time' WHERE id=2")
+        self.db.execute("INSERT INTO quests(name,frequency,points) VALUES('Move me','daily',3)");self.db.commit()
+        with self.clock('2026-11-18T06:00:00'):
+            view=p.MorningTriage();self.assertTrue(view.is_persistent())
+            done=next(c for c in view.children if getattr(c,'label',None)=='Done')
+            event=Interaction(owner);await done.callback(event)
+            next_view=event.result['view'];self.assertIn('2 of 2',next_view.embed.title)
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=1').fetchone(),(1,))
+            self.assertEqual(self.db.execute('SELECT points FROM users WHERE id=?',(str(owner),)).fetchone(),(5,))
+            move=next(c for c in next_view.children if getattr(c,'label',None)=='Reschedule')
+            event=Interaction(owner);await move.callback(event);modal=event.response.payload
+            modal.when._value='2026-11-19';event=Interaction(owner);await modal.on_submit(event)
+            self.assertEqual(self.db.execute("SELECT day FROM occurrence_moves WHERE quest_id=(SELECT id FROM quests WHERE name='Move me')").fetchone(),('2026-11-19',))
+            self.assertIn('complete',event.response.payload['view'].embed.title.lower())
+            self.assertEqual(self.db.execute("SELECT COUNT(*) FROM morning_triage_items WHERE status='pending'").fetchone(),(0,))
+
+    async def test_morning_one_time_skip_defers_only_today_without_archiving(self):
+        p=self.ui.planning;owner=301104023405199361
+        self.db.execute("UPDATE quests SET frequency='one-time' WHERE id=1")
+        self.db.execute("UPDATE quests SET completed=1,frequency='one-time' WHERE id=2");self.db.commit()
+        with self.clock('2026-11-18T06:00:00'):
+            view=p.MorningTriage();skip=next(c for c in view.children if getattr(c,'label',None)=='Skip')
+            self.assertFalse(skip.disabled)
+            event=Interaction(owner);await skip.callback(event)
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=1').fetchone(),(0,))
+            self.assertEqual(self.db.execute('SELECT status FROM morning_triage_items').fetchone(),('skipped_for_today',))
+            self.assertIn('complete',event.result['view'].embed.title.lower())
 
 
 if __name__ == "__main__":

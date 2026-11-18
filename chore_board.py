@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.7.0'
+APP_VERSION = '2.8.0'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'Ginaria can mark a responsible person’s chore done for them with credited points, an audit trail, and Undo.'
+RELEASE_SUMMARY = 'Ginaria gets a private morning chore sort before Sprig posts the household’s final list after 8 a.m.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 

@@ -20,6 +20,8 @@ def install(ns, ui, w, lock):
     CREATE TABLE IF NOT EXISTS checklist_checks(quest_id INTEGER NOT NULL,cycle TEXT NOT NULL,item INTEGER NOT NULL,checked_by TEXT NOT NULL,PRIMARY KEY(quest_id,cycle,item));
     CREATE TABLE IF NOT EXISTS reminder_settings(user_id TEXT PRIMARY KEY,enabled INTEGER NOT NULL DEFAULT 0,times TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1);
     CREATE TABLE IF NOT EXISTS reminder_deliveries(user_id TEXT NOT NULL,slot TEXT NOT NULL,status TEXT NOT NULL,PRIMARY KEY(user_id,slot));
+    CREATE TABLE IF NOT EXISTS morning_triage_days(day TEXT PRIMARY KEY,dm_status TEXT NOT NULL DEFAULT 'pending',dm_message_id TEXT,completed_at TEXT,shared_status TEXT NOT NULL DEFAULT 'pending',shared_message_id TEXT);
+    CREATE TABLE IF NOT EXISTS morning_triage_items(day TEXT NOT NULL,quest_id INTEGER NOT NULL,position INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'pending',acted_at TEXT,PRIMARY KEY(day,quest_id));
     ''')
     db.commit()
     def chore(qid):
@@ -221,6 +223,237 @@ def install(ns, ui, w, lock):
                         status='sent'
                 except Exception:status='failed_uncertain'
                 with db:db.execute('UPDATE reminder_deliveries SET status=? WHERE user_id=? AND slot=?',(status,uid,slot))
+
+    def morning_due_records():
+        ns['reset_due_quests']()
+        return [q for q in db.execute('SELECT id,name,frequency,points,assigned_to,completed,last_completed,reset_after FROM quests WHERE completed=0 ORDER BY name COLLATE NOCASE,id').fetchall()
+            if not ui.is_archived(q[0]) and timing.ready(q[0])]
+
+    def ensure_morning_day(day):
+        key=day.isoformat()
+        with db:
+            created=db.execute("INSERT OR IGNORE INTO morning_triage_days(day) VALUES(?)",(key,)).rowcount
+            if created:
+                db.executemany('INSERT OR IGNORE INTO morning_triage_items(day,quest_id,position) VALUES(?,?,?)',
+                    [(key,q[0],index) for index,q in enumerate(morning_due_records())])
+        return key
+
+    def morning_item(day):
+        key=day.isoformat() if hasattr(day,'isoformat') else str(day)
+        ns['reset_due_quests']()
+        while True:
+            row=db.execute('SELECT i.quest_id,q.name,q.frequency,q.points FROM morning_triage_items i LEFT JOIN quests q ON q.id=i.quest_id WHERE i.day=? AND i.status=? ORDER BY i.position LIMIT 1',(key,'pending')).fetchone()
+            if not row:
+                if not db.execute('SELECT completed_at FROM morning_triage_days WHERE day=?',(key,)).fetchone()[0]:
+                    with db:db.execute('UPDATE morning_triage_days SET completed_at=? WHERE day=?',(timing.now().isoformat(),key))
+                return None
+            qid=row[0]
+            current=db.execute('SELECT completed FROM quests WHERE id=?',(qid,)).fetchone()
+            if current and not current[0] and not ui.is_archived(qid) and timing.ready(qid):return row
+            with db:db.execute("UPDATE morning_triage_items SET status='resolved_elsewhere',acted_at=? WHERE day=? AND quest_id=?",(timing.now().isoformat(),key,qid))
+
+    def finish_morning_item(day,qid,status):
+        key=day.isoformat() if hasattr(day,'isoformat') else str(day)
+        with db:
+            changed=db.execute("UPDATE morning_triage_items SET status=?,acted_at=? WHERE day=? AND quest_id=? AND status='pending'",(status,timing.now().isoformat(),key,qid)).rowcount
+        if changed:morning_item(key)
+        return bool(changed)
+
+    def assign_morning_occurrence(actor,qid,target,expected):
+        ns['reset_due_quests']()
+        if str(actor)!=str(ns['REVIEW_OWNER_ID']):return 'Only ginaria can sort the morning chore list.'
+        if ui.snapshot(qid)!=expected or ui.is_archived(qid) or not timing.ready(qid):return 'This chore changed. Review the current morning item.'
+        if not ui.available(target):return 'That person is away today. Choose someone who is home.'
+        day=timing.now().date();slot=ui.dated.key(qid)[1]
+        if not ui.dated.valid(qid,day,slot):return 'This occurrence cannot be assigned for today.'
+        before=ui.dated.record(qid,day,slot)
+        frequency=db.execute('SELECT frequency FROM quests WHERE id=?',(qid,)).fetchone()[0]
+        after=(frequency,'claim',str(target),(before[3] if before else 0)+1)
+        with db:
+            db.execute('INSERT OR REPLACE INTO dated_occurrences VALUES(?,?,?,?,?,?,?)',(qid,day.isoformat(),slot,*after))
+            db.execute('INSERT INTO dated_occurrence_changes(quest_id,day,slot,actor,action,changed_at,before_state,after_state) VALUES(?,?,?,?,?,?,?,?)',
+                (qid,day.isoformat(),slot,str(actor),'morning_assign',timing.now().isoformat(),json.dumps(before),json.dumps(after)))
+            db.execute('DELETE FROM claims WHERE quest_id=?',(qid,))
+            db.execute('INSERT INTO chore_revisions VALUES(?,1) ON CONFLICT(quest_id) DO UPDATE SET revision=revision+1',(qid,))
+        return 'Claimed for you today.' if str(target)==str(actor) else 'Assigned for today. Future ownership is unchanged.'
+
+    class MorningMove(discord.ui.Modal):
+        def __init__(self,day,qid,expected):
+            super().__init__(title='Reschedule this occurrence')
+            self.day,self.qid,self.expected=day,qid,expected
+            self.when=discord.ui.TextInput(label='New date: YYYY-MM-DD or tomorrow',max_length=20)
+            self.add_item(self.when)
+        async def on_submit(self,i):
+            if i.user.id!=ns['REVIEW_OWNER_ID']:return await i.response.send_message('Only ginaria can sort this list.',ephemeral=True)
+            try:
+                value=self.when.value.strip().lower();target=timing.now().date()+timedelta(days=1) if value=='tomorrow' else datetime.strptime(value,'%Y-%m-%d').date()
+            except ValueError:return await i.response.send_message('Use tomorrow or YYYY-MM-DD.',ephemeral=True)
+            if not timing.now().date()<target<=timing.now().date()+timedelta(days=365):return await i.response.send_message('Choose a future date within the next year.',ephemeral=True)
+            async with lock:
+                q=db.execute('SELECT completed FROM quests WHERE id=?',(self.qid,)).fetchone()
+                if ui.snapshot(self.qid)!=self.expected or not q or q[0] or ui.is_archived(self.qid):notice='This chore changed. Nothing was rescheduled.'
+                else:
+                    with db:
+                        db.execute('INSERT OR REPLACE INTO occurrence_moves VALUES(?,?)',(self.qid,target.isoformat()))
+                        if timing.policy(self.qid)=='skip':
+                            deadline=datetime.combine(target+timedelta(days=1),datetime.min.time(),tzinfo=ns['QUEST_TIMEZONE']).isoformat()
+                            db.execute('UPDATE missed_chore_policy SET deadline=? WHERE quest_id=?',(deadline,self.qid))
+                    finish_morning_item(self.day,self.qid,'rescheduled');notice=f'Rescheduled for {target:%A, %B %d}.'
+                view=MorningTriage(self.day,notice)
+            await i.response.edit_message(embed=view.embed,view=view,allowed_mentions=discord.AllowedMentions.none())
+            if view.done:await publish_morning_summary()
+
+    class MorningAssign(discord.ui.View):
+        def __init__(self,day,qid,expected):
+            super().__init__(timeout=None)
+            self.day,self.qid,self.expected=day,qid,expected
+            q=db.execute('SELECT name FROM quests WHERE id=?',(qid,)).fetchone()
+            self.embed=discord.Embed(title='Assign today · '+(q[0] if q else 'Chore unavailable'),description='Choose who owns this occurrence today. Future ownership stays unchanged.',color=0x6B9B77)
+            picker=discord.ui.UserSelect(placeholder='Choose a household person',min_values=1,max_values=1,custom_id=f'sprig:morning:{day}:assign:{qid}')
+            async def choose(i):
+                if not await self.interaction_check(i):return
+                saved=db.execute('SELECT guild_id FROM chore_board WHERE singleton=1').fetchone();guild=bot.get_guild(int(saved[0])) if saved else None
+                target=picker.values[0]
+                member=guild.get_member(target.id) if guild else None
+                if guild and not member:
+                    try:member=await asyncio.wait_for(guild.fetch_member(target.id),timeout=5)
+                    except Exception:member=None
+                if getattr(target,'bot',False) or not member:return await i.response.send_message('Choose a person in the household server, not a bot.',ephemeral=True)
+                async with lock:
+                    notice=assign_morning_occurrence(i.user.id,qid,target.id,expected)
+                    if notice.startswith(('Assigned','Claimed')):finish_morning_item(day,qid,'assigned')
+                    view=MorningTriage(day,notice)
+                await i.response.edit_message(embed=view.embed,view=view,allowed_mentions=discord.AllowedMentions.none())
+                if view.done:await publish_morning_summary()
+            picker.callback=choose;self.add_item(picker)
+            back=discord.ui.Button(label='Back',style=discord.ButtonStyle.secondary,custom_id=f'sprig:morning:{day}:assign-back:{qid}')
+            async def go_back(i):
+                view=MorningTriage(day)
+                await i.response.edit_message(embed=view.embed,view=view,allowed_mentions=discord.AllowedMentions.none())
+            back.callback=go_back
+            self.add_item(back)
+        async def interaction_check(self,i):
+            if i.user.id!=ns['REVIEW_OWNER_ID']:
+                await i.response.send_message('Only ginaria can sort this list.',ephemeral=True);return False
+            return True
+
+    class MorningTriage(discord.ui.View):
+        def __init__(self,day=None,notice=''):
+            super().__init__(timeout=None)
+            self.day=day or timing.now().date();key=ensure_morning_day(self.day);item=morning_item(self.day)
+            total=db.execute('SELECT COUNT(*) FROM morning_triage_items WHERE day=?',(key,)).fetchone()[0]
+            remaining=db.execute("SELECT COUNT(*) FROM morning_triage_items WHERE day=? AND status='pending'",(key,)).fetchone()[0]
+            self.done=item is None
+            if self.done:
+                self.embed=discord.Embed(title='Morning chore sort complete',description=(notice+'\n' if notice else '')+f'All {total} due chore'+('s are' if total!=1 else ' is')+' sorted. Sprig will post the household list after 8:00 a.m. Eastern, or now if it is already later.',color=0x6B9B77);return
+            qid,name,frequency,points=item;owner=ui.workspace.ownership(qid)[0]
+            self.qid,self.expected=qid,ui.snapshot(qid)
+            done_count=total-remaining
+            self.embed=discord.Embed(title=f'Morning chore sort · {done_count+1} of {total}',description=(notice+'\n\n' if notice else '')+f'**{name}**\n{timing.label(frequency,qid)} · {points} points\nCurrent owner: {ui.workspace.person(owner) if owner else "Needs someone"}\n\nChoose one action. Sprig will open the next due chore automatically.',color=0x6B9B77)
+            async def act(i,action):
+                if not await self.interaction_check(i):return
+                if action=='assign':
+                    view=MorningAssign(self.day,qid,self.expected)
+                    return await i.response.edit_message(embed=view.embed,view=view,allowed_mentions=discord.AllowedMentions.none())
+                if action=='reschedule':return await i.response.send_modal(MorningMove(self.day,qid,self.expected))
+                await i.response.defer()
+                async with lock:
+                    if ui.snapshot(qid)!=self.expected:notice='This chore changed. Review it again.'
+                    elif action=='claim':
+                        notice=assign_morning_occurrence(i.user.id,qid,i.user.id,self.expected)
+                        if notice.startswith('Claimed'):finish_morning_item(self.day,qid,'claimed')
+                    elif action=='skip':
+                        if frequency=='one-time':
+                            finish_morning_item(self.day,qid,'skipped_for_today')
+                            notice='Skipped for today. This one-time chore stays open and will return in tomorrow’s morning sort unless it is completed or rescheduled.'
+                        else:
+                            notice=ui.workspace.skip_occurrence(i.user.id,qid,self.expected)
+                            if notice.startswith('Occurrence skipped'):finish_morning_item(self.day,qid,'skipped')
+                    else:
+                        responsible=ui.workspace.ownership(qid)[0] or str(i.user.id)
+                        if not complete(qid):notice='Finish the checklist before marking this chore Done.'
+                        else:
+                            if not ui.workspace.ownership(qid)[0]:assign_morning_occurrence(i.user.id,qid,responsible,self.expected)
+                            context=ui.Context(i);context.completion_user_id=responsible;context.allow_proxy_completion=True
+                            await bot.get_command('done').callback(context,qid);notice='\n'.join(context.messages)
+                            if db.execute('SELECT completed FROM quests WHERE id=?',(qid,)).fetchone()==(1,):finish_morning_item(self.day,qid,'done')
+                    view=MorningTriage(self.day,notice)
+                await i.edit_original_response(embed=view.embed,view=view,allowed_mentions=discord.AllowedMentions.none())
+                if view.done:await publish_morning_summary()
+            for label,action in [('Claim','claim'),('Assign','assign'),('Done','done'),('Skip','skip'),('Reschedule','reschedule')]:
+                button=discord.ui.Button(label=label,style=discord.ButtonStyle.success if action in ('claim','done') else discord.ButtonStyle.danger if action=='skip' else discord.ButtonStyle.secondary,custom_id=f'sprig:morning:{self.day}:{qid}:{action}')
+                button.callback=lambda i,action=action:act(i,action);self.add_item(button)
+        async def interaction_check(self,i):
+            if i.user.id!=ns['REVIEW_OWNER_ID']:
+                await i.response.send_message('Only ginaria can sort this private list.',ephemeral=True);return False
+            return True
+
+    async def publish_morning_summary():
+        now=timing.now();key=now.date().isoformat();row=db.execute('SELECT completed_at,shared_status FROM morning_triage_days WHERE day=?',(key,)).fetchone()
+        if not row or not row[0] or now.hour<8 or row[1]!='pending':return False
+        location=db.execute('SELECT guild_id,channel_id FROM chore_board WHERE singleton=1').fetchone()
+        if not location:return False
+        with db:
+            claimed=db.execute("UPDATE morning_triage_days SET shared_status='sending' WHERE day=? AND shared_status='pending'",(key,)).rowcount
+        if not claimed:return False
+        try:
+            channel=bot.get_channel(int(location[1])) or await asyncio.wait_for(bot.fetch_channel(int(location[1])),timeout=5)
+            guild=getattr(channel,'guild',None)
+            if str(getattr(channel,'id',''))!=str(location[1]) or str(getattr(guild,'id',''))!=str(location[0]):raise ValueError('Configured morning summary destination changed')
+            groups={}
+            for qid,name,item_status in db.execute('SELECT i.quest_id,q.name,i.status FROM morning_triage_items i JOIN quests q ON q.id=i.quest_id WHERE i.day=? ORDER BY i.position',(key,)).fetchall():
+                q=db.execute('SELECT completed FROM quests WHERE id=?',(qid,)).fetchone()
+                if item_status not in ('claimed','assigned') or not q or q[0] or ui.is_archived(qid) or not timing.ready(qid):continue
+                owner=ui.workspace.ownership(qid)[0];groups.setdefault(owner,[]).append(name)
+            lines=[f'**Today’s chores · {now:%A, %B} {now.day}**']
+            labels={None:'Needs someone'}
+            for owner in (uid for uid in groups if uid):
+                label=ui.workspace.person(owner,guild)
+                if '<@' in label:
+                    try:label=await asyncio.wait_for(ns['get_member_name'](SimpleNamespace(guild=guild),owner),timeout=5)
+                    except Exception:label='Account '+str(owner)
+                labels[owner]=label
+            for owner,names in sorted(groups.items(),key=lambda pair:(pair[0] is None,labels[pair[0]].casefold())):
+                lines.append('\n**'+labels[owner]+'**')
+                lines.extend('• '+discord.utils.escape_markdown(name) for name in names)
+            if not groups:lines.append('\nNo chores remain due today.')
+            message=await asyncio.wait_for(channel.send('\n'.join(lines),allowed_mentions=discord.AllowedMentions.none()),timeout=10)
+            status,message_id='sent',str(message.id)
+        except Exception:status,message_id='failed_uncertain',None
+        with db:db.execute('UPDATE morning_triage_days SET shared_status=?,shared_message_id=? WHERE day=?',(status,message_id,key))
+        return status=='sent'
+
+    registered_morning=set()
+    def register_morning_view(day,message_id):
+        view=MorningTriage(day)
+        key=(str(day),str(message_id),getattr(view,'qid',None))
+        if key in registered_morning or view.done:return
+        bot.add_view(view,message_id=int(message_id))
+        bot.add_view(MorningAssign(day,view.qid,view.expected),message_id=int(message_id))
+        registered_morning.add(key)
+
+    async def send_morning_triage():
+        now=timing.now()
+        if now.hour<6:return False
+        key=ensure_morning_day(now.date());row=db.execute('SELECT dm_status,completed_at FROM morning_triage_days WHERE day=?',(key,)).fetchone()
+        if row[0]=='pending':
+            with db:claimed=db.execute("UPDATE morning_triage_days SET dm_status='sending' WHERE day=? AND dm_status='pending'",(key,)).rowcount
+            if claimed:
+                try:
+                    recipient=bot.get_user(ns['REVIEW_OWNER_ID']) or await asyncio.wait_for(bot.fetch_user(ns['REVIEW_OWNER_ID']),timeout=5)
+                    view=MorningTriage(now.date())
+                    message=await asyncio.wait_for(recipient.send(embed=view.embed,view=view,allowed_mentions=discord.AllowedMentions.none()),timeout=10)
+                    status,message_id='sent',str(message.id)
+                except Exception:status,message_id='failed_uncertain',None
+                with db:db.execute('UPDATE morning_triage_days SET dm_status=?,dm_message_id=? WHERE day=?',(status,message_id,key))
+        row=db.execute('SELECT dm_status,dm_message_id FROM morning_triage_days WHERE day=?',(key,)).fetchone()
+        if row and row[0]=='sent' and row[1]:
+            try:register_morning_view(now.date(),row[1])
+            except Exception:
+                import logging
+                logging.getLogger('discord.sprig').exception('Morning triage recovery registration failed')
+        await publish_morning_summary()
+        return True
 
     def owner_on(q,day):
         at=datetime.combine(day,datetime.min.time(),tzinfo=ns['QUEST_TIMEZONE'])
@@ -488,4 +721,4 @@ def install(ns, ui, w, lock):
             text='Create **'+w.clean(name,100)+'** as a new unassigned chore.\n'+(f'{source[2]} points · '+timing.compact_label(source[1]) if source else 'Source unavailable')+'\nCopies instructions, room, difficulty, estimate, checklist, and missed-work policy. No claims, assignments, sign-ups, completion history, checked steps, help notes, or one-off date moves are copied.'
             await w.present(i,w.Confirm(self.owner,'Create this chore copy?',text,save,lambda:w.Card(self.owner,self.qid,guild=i.guild)))
 
-    return SimpleNamespace(help_record=help_record,help_snapshot=help_snapshot,help_summary=help_summary,report_help=report_help,resolve_help=resolve_help,HelpNote=HelpNote,HelpStatus=HelpStatus,HelpHistory=HelpHistory,NeedsHelp=NeedsHelp,duplicate_snapshot=duplicate_snapshot,duplicate=duplicate,DuplicateModal=DuplicateModal,plan=plan,steps=steps,cycle=cycle,checked=checked,complete=complete,summary=summary,history_state=history_state,save_plan=save_plan,PlanModal=PlanModal,Checklist=Checklist,settings=settings,save_reminders=save_reminders,Reminders=Reminders,ReminderTimes=ReminderTimes,send_due_reminders=send_due_reminders,Calendar=Calendar,Day=Day,project=project,owner_on=owner_on)
+    return SimpleNamespace(help_record=help_record,help_snapshot=help_snapshot,help_summary=help_summary,report_help=report_help,resolve_help=resolve_help,HelpNote=HelpNote,HelpStatus=HelpStatus,HelpHistory=HelpHistory,NeedsHelp=NeedsHelp,duplicate_snapshot=duplicate_snapshot,duplicate=duplicate,DuplicateModal=DuplicateModal,plan=plan,steps=steps,cycle=cycle,checked=checked,complete=complete,summary=summary,history_state=history_state,save_plan=save_plan,PlanModal=PlanModal,Checklist=Checklist,settings=settings,save_reminders=save_reminders,Reminders=Reminders,ReminderTimes=ReminderTimes,send_due_reminders=send_due_reminders,send_morning_triage=send_morning_triage,publish_morning_summary=publish_morning_summary,register_morning_view=register_morning_view,morning_due_records=morning_due_records,morning_item=morning_item,finish_morning_item=finish_morning_item,assign_morning_occurrence=assign_morning_occurrence,MorningTriage=MorningTriage,MorningAssign=MorningAssign,MorningMove=MorningMove,Calendar=Calendar,Day=Day,project=project,owner_on=owner_on)

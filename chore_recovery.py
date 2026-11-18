@@ -48,7 +48,7 @@ def install(ns, ui, w):
         digest = hashlib.sha256()
         tables = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall()
         for name, in tables:
-            if name.startswith('workspace_') or name in ('reminder_deliveries', 'trade_notifications', 'feedback_notifications', 'update_announcements', 'announcement_settings'):
+            if name.startswith('workspace_') or name.startswith('morning_triage_') or name in ('reminder_deliveries', 'trade_notifications', 'feedback_notifications', 'update_announcements', 'announcement_settings'):
                 continue
             quoted = '"' + name.replace('"', '""') + '"'
             rows = db.execute('SELECT * FROM '+quoted+' ORDER BY rowid').fetchall()
