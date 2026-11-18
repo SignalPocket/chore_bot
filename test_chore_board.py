@@ -605,7 +605,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.8.1')
+        self.assertEqual(chore_board.APP_VERSION,'2.8.2')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +615,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.8.1. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.8.2. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -7686,6 +7686,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             view=p.MorningTriage();skip=next(c for c in view.children if getattr(c,'label',None)=='Skip')
             await skip.callback(Interaction(owner))
         channel.send.assert_awaited_once()
+        self.assertIn('Fill dishwasher',channel.send.call_args.args[0])
         self.assertEqual(self.db.execute('SELECT completed_at,shared_status FROM morning_triage_days').fetchone()[1],'sent')
 
     async def test_morning_scheduler_private_dm_and_delivery_records_are_duplicate_safe(self):
@@ -7747,16 +7748,30 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('complete',event.response.payload['view'].embed.title.lower())
             self.assertEqual(self.db.execute("SELECT COUNT(*) FROM morning_triage_items WHERE status='pending'").fetchone(),(0,))
 
-    async def test_morning_one_time_skip_defers_only_today_without_archiving(self):
+    async def test_morning_skip_leaves_due_chore_and_owner_unchanged(self):
         p=self.ui.planning;owner=301104023405199361
-        self.db.execute("UPDATE quests SET frequency='one-time' WHERE id=1")
+        self.db.execute("UPDATE quests SET frequency='monthly',assigned_to='10' WHERE id=1")
+        self.db.execute('DELETE FROM chore_timing WHERE quest_id=1')
         self.db.execute("UPDATE quests SET completed=1,frequency='one-time' WHERE id=2");self.db.commit()
         with self.clock('2026-11-18T06:00:00'):
+            before=(self.db.execute('SELECT * FROM quests WHERE id=1').fetchone(),
+                self.db.execute('SELECT * FROM claims WHERE quest_id=1').fetchall(),
+                self.db.execute('SELECT * FROM dated_occurrences WHERE quest_id=1').fetchall(),
+                self.db.execute('SELECT * FROM occurrence_moves WHERE quest_id=1').fetchall(),
+                self.db.execute('SELECT * FROM occurrence_skips WHERE quest_id=1').fetchall())
             view=p.MorningTriage();skip=next(c for c in view.children if getattr(c,'label',None)=='Skip')
-            self.assertFalse(skip.disabled)
+            self.assertEqual(skip.style,discord.ButtonStyle.secondary)
             event=Interaction(owner);await skip.callback(event)
+            after=(self.db.execute('SELECT * FROM quests WHERE id=1').fetchone(),
+                self.db.execute('SELECT * FROM claims WHERE quest_id=1').fetchall(),
+                self.db.execute('SELECT * FROM dated_occurrences WHERE quest_id=1').fetchall(),
+                self.db.execute('SELECT * FROM occurrence_moves WHERE quest_id=1').fetchall(),
+                self.db.execute('SELECT * FROM occurrence_skips WHERE quest_id=1').fetchall())
+            self.assertEqual(after,before)
             self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=1').fetchone(),(0,))
-            self.assertEqual(self.db.execute('SELECT status FROM morning_triage_items').fetchone(),('skipped_for_today',))
+            self.assertEqual(self.ui.workspace.ownership(1),('10','assignment'))
+            self.assertEqual(self.db.execute('SELECT status FROM morning_triage_items').fetchone(),('kept',))
+            self.assertIn('Left as is',event.result['view'].embed.description)
             self.assertIn('complete',event.result['view'].embed.title.lower())
 
 

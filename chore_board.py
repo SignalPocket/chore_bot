@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.8.1'
+APP_VERSION = '2.8.2'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'Morning Claim and Assign now work for overdue chores carried forward from an earlier date.'
+RELEASE_SUMMARY = 'Morning Skip now leaves a due chore exactly as assigned and moves to the next item.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 

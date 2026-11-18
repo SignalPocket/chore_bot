@@ -1,3 +1,8 @@
+# 2.8.2 - 2026-11-18
+
+- Changed morning Skip to leave the due chore, owner, schedule, and points unchanged while advancing to the next item.
+- Kept unchanged due chores in the final household list under their current owner.
+
 # 2.8.1 - 2026-11-18
 
 - Fixed morning Claim and Assign for overdue chores carried forward from an earlier date, as well as flexible and one-time chores, while keeping the override limited to today.

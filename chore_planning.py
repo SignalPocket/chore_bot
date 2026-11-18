@@ -363,12 +363,8 @@ def install(ns, ui, w, lock):
                         notice=assign_morning_occurrence(i.user.id,qid,i.user.id,self.expected)
                         if notice.startswith('Claimed'):finish_morning_item(self.day,qid,'claimed')
                     elif action=='skip':
-                        if frequency=='one-time':
-                            finish_morning_item(self.day,qid,'skipped_for_today')
-                            notice='Skipped for today. This one-time chore stays open and will return in tomorrow’s morning sort unless it is completed or rescheduled.'
-                        else:
-                            notice=ui.workspace.skip_occurrence(i.user.id,qid,self.expected)
-                            if notice.startswith('Occurrence skipped'):finish_morning_item(self.day,qid,'skipped')
+                        finish_morning_item(self.day,qid,'kept')
+                        notice='Left as is. Its owner, due status, schedule, and points are unchanged.'
                     else:
                         responsible=ui.workspace.ownership(qid)[0] or str(i.user.id)
                         if not complete(qid):notice='Finish the checklist before marking this chore Done.'
@@ -381,7 +377,7 @@ def install(ns, ui, w, lock):
                 await i.edit_original_response(embed=view.embed,view=view,allowed_mentions=discord.AllowedMentions.none())
                 if view.done:await publish_morning_summary()
             for label,action in [('Claim','claim'),('Assign','assign'),('Done','done'),('Skip','skip'),('Reschedule','reschedule')]:
-                button=discord.ui.Button(label=label,style=discord.ButtonStyle.success if action in ('claim','done') else discord.ButtonStyle.danger if action=='skip' else discord.ButtonStyle.secondary,custom_id=f'sprig:morning:{self.day}:{qid}:{action}')
+                button=discord.ui.Button(label=label,style=discord.ButtonStyle.success if action in ('claim','done') else discord.ButtonStyle.secondary,custom_id=f'sprig:morning:{self.day}:{qid}:{action}')
                 button.callback=lambda i,action=action:act(i,action);self.add_item(button)
         async def interaction_check(self,i):
             if i.user.id!=ns['REVIEW_OWNER_ID']:
@@ -403,7 +399,7 @@ def install(ns, ui, w, lock):
             groups={}
             for qid,name,item_status in db.execute('SELECT i.quest_id,q.name,i.status FROM morning_triage_items i JOIN quests q ON q.id=i.quest_id WHERE i.day=? ORDER BY i.position',(key,)).fetchall():
                 q=db.execute('SELECT completed FROM quests WHERE id=?',(qid,)).fetchone()
-                if item_status not in ('claimed','assigned') or not q or q[0] or ui.is_archived(qid) or not timing.ready(qid):continue
+                if item_status not in ('claimed','assigned','kept') or not q or q[0] or ui.is_archived(qid) or not timing.ready(qid):continue
                 owner=ui.workspace.ownership(qid)[0];groups.setdefault(owner,[]).append(name)
             lines=[f'**Today’s chores · {now:%A, %B} {now.day}**']
             labels={None:'Needs someone'}
