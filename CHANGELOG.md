@@ -1,3 +1,8 @@
+# 2.9.2 - 2026-11-20
+
+- Fix **One at a time** so the batch morning sort opens the detailed Claim, Assign, Done, Keep, Skip, and Reschedule screen with its private owner context.
+- Add a real click-through regression covering the detailed controls, Back/Home navigation, and Discord component limit.
+
 # 2.9.1 - 2026-11-20
 
 - Put the owner-only **Run morning sort** button directly on the `/chores` list so the batch workflow does not depend on finding the Dashboard.

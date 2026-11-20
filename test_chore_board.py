@@ -649,7 +649,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.9.1')
+        self.assertEqual(chore_board.APP_VERSION,'2.9.2')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -659,7 +659,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.9.1. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.9.2. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -7826,6 +7826,15 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             wire_labels=[getattr(c,'label',None) for c in panel.walk_children()]
             self.assertIn('Assign selected',wire_labels);self.assertIn('Skip selected',wire_labels);self.assertIn('One at a time',wire_labels)
             self.assertTrue(next(c for c in panel.walk_children() if getattr(c,'label',None)=='Assign selected').disabled)
+            batch=p.MorningBatch(owner,datetime(2026,11,18).date(),guild=Interaction(owner).guild)
+            one=next(c for c in batch.children if getattr(c,'label',None)=='One at a time')
+            interaction=Interaction(owner)
+            await one.callback(interaction)
+            opened=interaction.response.wire_payload['view']
+            self.assertLessEqual(opened.total_children_count,40)
+            opened_labels=[getattr(c,'label',None) for c in opened.walk_children()]
+            self.assertIn('Claim',opened_labels);self.assertIn('Done',opened_labels);self.assertIn('Reschedule',opened_labels)
+            self.assertIn('Back',opened_labels);self.assertIn('🏠',opened_labels)
             selected=w.render(p.MorningBatch(owner,datetime(2026,11,18).date(),selected=(1,2),guild=Interaction(owner).guild))
             self.assertFalse(next(c for c in selected.walk_children() if getattr(c,'label',None)=='Assign selected').disabled)
 

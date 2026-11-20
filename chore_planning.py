@@ -528,7 +528,10 @@ def install(ns, ui, w, lock):
             self.button('Keep selected',lambda i:apply(i,'keep'),row=1,disabled=not selected)
             self.button('Previous',lambda i:w.present(i,MorningBatch(owner,self.day,page-1,guild=i.guild)),row=2,disabled=page==0)
             self.button('Next',lambda i:w.present(i,MorningBatch(owner,self.day,page+1,guild=i.guild)),row=2,disabled=(page+1)*size>=len(rows))
-            self.button('One at a time',lambda i:w.present(i,MorningTriage(self.day)),row=3)
+            async def one_at_a_time(i):
+                view=MorningTriage(self.day);view.owner=owner
+                await w.present(i,w.adapt(view,owner,lambda:MorningBatch(owner,self.day,page,guild=i.guild)))
+            self.button('One at a time',one_at_a_time,row=3)
             self.button('Refresh',lambda i:w.present(i,MorningBatch(owner,self.day,page,guild=i.guild)),row=3)
             self.nav()
         async def interaction_check(self,i):
