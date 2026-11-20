@@ -1,3 +1,9 @@
+# 2.8.4 - 2026-11-20
+
+- Let a due repeating chore be reassigned for just the current occurrence while preserving its ongoing, weekly, or repeating owner for later occurrences.
+- Offer separate current-occurrence and broader-scope Drop actions so releasing today’s work does not require dropping the saved responsibility.
+- Preserve owner-on-behalf completion credit and clear the completed occurrence from Needs attention after a current-only reassignment.
+
 # 2.8.3 - 2026-11-18
 
 - Release a due occurrence for household pickup when its saved owner is away, without deleting their ongoing, weekly, or repeating responsibility for later home occurrences.

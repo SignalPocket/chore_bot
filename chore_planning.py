@@ -574,7 +574,7 @@ def install(ns, ui, w, lock):
             for q,uid in chunk:
                 when=datetime.combine(day,datetime.min.time(),tzinfo=ns['QUEST_TIMEZONE']).replace(hour=12)
                 away=uid and not ui.attendance.at(uid,when)
-                self.embed.add_field(name=w.clean(q[1],100),value=((' · '.join(s.upper()+': '+('Skipped' if ui.dated.skipped(q[0],when.replace(hour=12 if s=='pm' else 0)) else w.clean(w.person(ui.dated.owner(q[0],when.replace(hour=12 if s=='pm' else 0)) or ui.dated.base_owner(q[0],when.replace(hour=12 if s=='pm' else 0)),guild),65)) for s in ui.repeating.shifts(q[0]))) if ui.dated.slots(q[0])==('am','pm') or ui.repeating.slots(q[0]) else w.clean(w.person(uid,guild),100))+f' · {q[3]} points'+summary(q[0])+(' · ⚠ Away' if away else ''),inline=False)
+                self.embed.add_field(name=w.clean(q[1],100),value=((' · '.join(s.upper()+': '+('Skipped' if ui.dated.skipped(q[0],when.replace(hour=12 if s=='pm' else 0)) else w.clean(w.person(ui.dated.effective_owner(q[0],when.replace(hour=12 if s=='pm' else 0)),guild),65)) for s in ui.repeating.shifts(q[0]))) if ui.dated.slots(q[0])==('am','pm') or ui.repeating.slots(q[0]) else w.clean(w.person(uid,guild),100))+f' · {q[3]} points'+summary(q[0])+(' · ⚠ Away' if away else ''),inline=False)
             self.embed.set_footer(text=f'Page {page+1} of {max((len(rows)-1)//size+1,1)} · '+(f'Chores {page*size+1}–{page*size+len(chunk)} of {len(rows)}' if rows else '0 chores')+' · Eastern time')
             if chunk:
                 picker=discord.ui.Select(placeholder='Choose chore',row=0,options=[discord.SelectOption(label=q[1][:100],value=str(q[0])) for q,uid in chunk])

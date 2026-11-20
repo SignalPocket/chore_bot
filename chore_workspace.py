@@ -132,6 +132,7 @@ def install(ns, ui, lock):
         if not q: return None, None
         dated=ui.dated.active(qid) if offset==0 else None
         if dated and dated[1]=='claim':return dated[2],'dated'
+        if dated and dated[1]=='released':return None,'dated'
         if q[4]: return str(q[4]), 'assignment'
         weekly = ui.weekly_owner(qid, offset)
         if weekly: return str(weekly), 'week1' if offset else 'week0'
@@ -1053,7 +1054,7 @@ def install(ns, ui, lock):
                     if tab=='due':
                         if uid or not due:continue
                     else:
-                        future_open=bool(uid or q[4]) and tab in ('week','next','upcoming') and any(not ui.dated.skipped(q[0],ui.dated.when(day,slot)) and not (ui.dated.owner(q[0],ui.dated.when(day,slot)) or ui.dated.base_owner(q[0],ui.dated.when(day,slot))) for day,slot in ui.dated.upcoming(q[0],ui.week_start(offset).date(),ui.week_start(offset+1).date()+timedelta(days=1)))
+                        future_open=bool(uid or q[4]) and tab in ('week','next','upcoming') and any(not ui.dated.skipped(q[0],ui.dated.when(day,slot)) and not ui.dated.effective_owner(q[0],ui.dated.when(day,slot)) for day,slot in ui.dated.upcoming(q[0],ui.week_start(offset).date(),ui.week_start(offset+1).date()+timedelta(days=1)))
                         if (uid or q[4]) and not future_open: continue
                     if tab in ('week', 'next') and (q[2] not in WEEKLY_FREQUENCIES or not inweek): continue
                 elif (tab == 'due' and not due) or (tab in ('week', 'next') and not inweek): continue
@@ -2033,7 +2034,7 @@ def install(ns, ui, lock):
             back=back or (lambda:OccurrenceDates(owner,qid,guild))
             self.recovery_context={'screen':'future_occurrence','qid':qid,'day':day.isoformat(),'slot':slot,'parent':recovery.bookmark(back())}
             q=chore(qid);at=ui.dated.when(day,slot);record=ui.dated.record(qid,day,slot)
-            uid=ui.dated.owner(qid,at) or ui.dated.base_owner(qid,at)
+            uid=ui.dated.effective_owner(qid,at)
             skipped=ui.dated.skipped(qid,at)
             self.name_ids=[uid] if uid else []
             self.rebuild=lambda:FutureOccurrence(owner,qid,day,slot,guild,back)
@@ -2721,8 +2722,10 @@ def install(ns, ui, lock):
      'Drop, reassign, or trade': 'Open the chore card, then **Actions…**.\n'
                                  '\n'
                                  '**Drop responsibility** gives up your responsibility without completing the '
-                                 'work. **Reassign** gives it to another person. Check whether the '
-                                 'confirmation covers one occurrence, a whole week, or an ongoing assignment.\n'
+                                 'work. For a due repeating chore, **Drop just this occurrence** keeps the regular '
+                                 'owner for next time. **Reassign → Just this time** gives only the current '
+                                 'occurrence to another person, even when an ongoing or weekly owner is saved. '
+                                 'Check whether the confirmation covers one occurrence, a whole week, or an ongoing assignment.\n'
                                  '\n'
                                  '**Propose trade** offers an exchange with someone else. The other person '
                                  'must accept in **Plan & coordinate → Trades** before ownership changes. '

@@ -44,6 +44,7 @@ def install(ns, ui):
 
     def current_due(qid,day,slot):
         """Allow a today-only owner for a due occurrence carried into today."""
+        if isinstance(day,str):day=datetime.fromisoformat(day).date()
         now=timing.now();q=db.execute('SELECT completed FROM quests WHERE id=?',(qid,)).fetchone()
         moved=db.execute('SELECT day FROM occurrence_moves WHERE quest_id=?',(qid,)).fetchone()
         return (q and not q[0] and not ui.is_archived(qid)
@@ -55,7 +56,7 @@ def install(ns, ui):
 
     def active(qid,at=None):
         at=at or timing.now()
-        rows=db.execute("SELECT frequency,state,actor,revision,slot FROM dated_occurrences WHERE quest_id=? AND day=? AND state!='released'",(qid,at.date().isoformat())).fetchall()
+        rows=db.execute("SELECT frequency,state,actor,revision,slot FROM dated_occurrences WHERE quest_id=? AND day=?",(qid,at.date().isoformat())).fetchall()
         if not rows:return None
         _,slot=key(qid,at)
         row=next((row[:4] for row in rows if row[4]==slot),None)
@@ -68,6 +69,12 @@ def install(ns, ui):
     def owner(qid,at=None):
         at=at or timing.now();row=active(qid,at)
         return row[2] if row and row[1]=='claim' and ui.attendance.at(row[2],at) else None
+
+    def effective_owner(qid,at=None):
+        """Resolve a one-occurrence override before the recurring responsibility."""
+        at=at or timing.now();row=active(qid,at)
+        if row and row[1]=='released':return None
+        return owner(qid,at) or base_owner(qid,at)
 
     def base_owner(qid,at):
         q=db.execute('SELECT assigned_to FROM quests WHERE id=?',(qid,)).fetchone()
@@ -92,7 +99,7 @@ def install(ns, ui):
         if action=='claim':
             if before and before[1]=='skip':return 'Undo the skip before claiming this occurrence.'
             if not ui.attendance.at(actor,at):return 'You are away for this occurrence. Choose a day you are home.'
-            uid=(before[2] if before and before[1]=='claim' and ui.attendance.at(before[2],at) else None) or base_owner(qid,at)
+            uid=(before[2] if before and before[1]=='claim' and ui.attendance.at(before[2],at) else None) or (None if before and before[1]=='released' else base_owner(qid,at))
             if uid and uid!=str(actor):return 'Someone already has this occurrence. Nothing changed.'
         if action=='drop' and (not before or before[1]!='claim' or before[2]!=str(actor)):
             return 'Only the person with this dated claim can release it.'
@@ -126,8 +133,8 @@ def install(ns, ui):
 
     def transfer_current(actor,qid,target):
         day,slot=key(qid);before=record(qid,day,slot)
-        if not before or before[1]!='claim':raise ValueError('Dated claim changed')
-        after=(frequency(qid),'claim' if target else 'released',str(target or actor),before[3]+1)
+        if not current_due(qid,day,slot) or (before and before[1]=='skip'):raise ValueError('Current occurrence changed')
+        after=(frequency(qid),'claim' if target else 'released',str(target or actor),(before[3] if before else 0)+1)
         db.execute('INSERT OR REPLACE INTO dated_occurrences VALUES(?,?,?,?,?,?,?)',(qid,day,slot,*after))
         db.execute('INSERT INTO dated_occurrence_changes(quest_id,day,slot,actor,action,changed_at,before_state,after_state) VALUES(?,?,?,?,?,?,?,?)',(qid,day,slot,str(actor),'reassign' if target else 'drop',timing.now().isoformat(),json.dumps(before),json.dumps(after)))
         db.execute('INSERT INTO chore_revisions VALUES(?,1) ON CONFLICT(quest_id) DO UPDATE SET revision=revision+1',(qid,))
@@ -176,4 +183,4 @@ def install(ns, ui):
             for slot in slots(qid):
                 if valid(qid,day,slot) and when(day,slot)>timing.now():yield day,slot
 
-    return SimpleNamespace(transfer_current=transfer_current,claim_current=claim_current,slots=slots,when=when,key=key,valid=valid,current_due=current_due,record=record,active=active,skipped=skipped,owner=owner,base_owner=base_owner,snapshot=snapshot,change=change,undo=undo,undo_id=undo_id,upcoming=upcoming,in_week=in_week,latest_undo=latest_undo)
+    return SimpleNamespace(transfer_current=transfer_current,claim_current=claim_current,slots=slots,when=when,key=key,valid=valid,current_due=current_due,record=record,active=active,skipped=skipped,owner=owner,effective_owner=effective_owner,base_owner=base_owner,snapshot=snapshot,change=change,undo=undo,undo_id=undo_id,upcoming=upcoming,in_week=in_week,latest_undo=latest_undo)

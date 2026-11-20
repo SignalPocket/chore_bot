@@ -129,7 +129,7 @@ Undo is conditional, not unlimited history editing. If later changes make revers
 | Screen | Purpose | Controls / result |
 | --- | --- | --- |
 | Reassign | Give a selected scope to another person. | Select chore if not preselected, scope and person; Confirm reassignment transfers only that scope; Cancel leaves ownership. |
-| Drop responsibility | Release the displayed occurrence/week/ongoing responsibility. | Confirm the stated scope; later unrelated signups/history remain. |
+| Drop responsibility | Release the current occurrence, week, or ongoing responsibility. | A due repeating chore with a broader owner offers Drop just this occurrence separately from confirming the broader scope; later unrelated responsibility and history remain. |
 | Trade proposal | Offer work in exchange for another chore. | Choose recipient/exchange where offered; Propose trade records pending proposal; invalid/stale proposals are refused. |
 | Trade inbox | Review requests to or from this account. | Select request; recipient Accept revalidates and swaps; Decline closes it; sender Cancel proposal withdraws. No points are transferred. |
 | Weekly signup / responsibility views | Supporting shared weekly overview. | This week / Next week switches scope; select a chore/person; Sign up for week / Release week changes that week; Chore review opens relevant review tools. |

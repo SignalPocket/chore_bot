@@ -16,7 +16,7 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.8.3'
+APP_VERSION = '2.8.4'
 # Keep this to one short sentence describing changes since the previous release.
 RELEASE_SUMMARY = 'Due chores become available for household pickup while their saved owner is away.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
@@ -498,7 +498,7 @@ def install(namespace):
                     for slot in dated.slots(qid):
                         when=dated.when(day,slot)
                         if not start<=when<end or not dated.valid(qid,day,slot) or dated.skipped(qid,when):continue
-                        active=dated.owner(qid,when) or dated.base_owner(qid,when)
+                        active=dated.effective_owner(qid,when)
                         result.append((active,qid,name+' · '+day.strftime('%a %b %d')+' · '+('All day' if slot=='day' else slot.upper()),frequency,'Dated occurrence','Scheduled'))
                 continue
             repeating=namespace['chore_ui'].repeating
@@ -759,12 +759,13 @@ def install(namespace):
                 db.execute('UPDATE quests SET assigned_to=? WHERE id=?',(str(target),qid))
                 db.execute('DELETE FROM claims WHERE quest_id=?',(qid,))
             return 'Ongoing assignment saved. The chore name, completion history, and earned points are unchanged.'
-        if namespace['chore_ui'].dated.owner(qid):
-            if row[2] or not timing.ready(qid):return 'There is no open dated occurrence to reassign.'
+        has_recurring_owner=(row[1] or weekly_owner(qid) or namespace['chore_ui'].repeating.owner(qid) or namespace['chore_ui'].dated.active(qid))
+        if scope=='occurrence' and row[0]!='one-time' and has_recurring_owner:
+            if row[2] or not timing.ready(qid):return 'There is no open occurrence to reassign.'
             with db:
                 namespace['chore_ui'].dated.transfer_current(actor if actor is not None else 'system',qid,str(target))
                 db.execute('DELETE FROM claims WHERE quest_id=?',(qid,))
-            return 'This dated occurrence reassigned. Later repeats and points stay saved.'
+            return 'This occurrence reassigned. The regular owner, later repeats, and points stay saved.'
         if row[1] or weekly_owner(qid):
             return 'This chore has an ongoing assignment or weekly owner. Choose that scope instead.'
         if row[2] or not timing.ready(qid):
@@ -797,7 +798,7 @@ def install(namespace):
                     self.embed.add_field(name='Chore',value=discord.utils.escape_markdown(row[0])+'\n'+timing.label(row[2],qid),inline=False)
                 scopes=[]
                 current_scope=owned_scope(qid)[1]
-                if not row[1] and not weekly_owner(qid) and not db.execute('SELECT completed FROM quests WHERE id=?',(qid,)).fetchone()[0] and timing.ready(qid):
+                if row[2]!='one-time' and not db.execute('SELECT completed FROM quests WHERE id=?',(qid,)).fetchone()[0] and timing.ready(qid):
                     scopes.append(('Just this time','occurrence'))
                 if not row[1] and row[2] in WEEKLY_FREQUENCIES:
                     for value,offset in [('week0',0),('week1',1)]:
@@ -888,16 +889,20 @@ def install(namespace):
         row=db.execute('SELECT user_id FROM claims WHERE quest_id=?',(qid,)).fetchone()
         return (row[0],'occurrence') if row else ((recurring,'repeating') if recurring else (None,None))
 
-    def drop_chore(owner,qid,expected):
+    def drop_chore(owner,qid,expected,requested_scope=None):
         api.reset_due_quests()
         if snapshot(qid)!=expected:
             return 'This chore changed. Reopen My chores before dropping it.'
         current,scope=owned_scope(qid)
         if current!=str(owner):
             return 'This chore is no longer yours. Nothing changed.'
+        frequency=db.execute('SELECT frequency FROM quests WHERE id=?',(qid,)).fetchone()[0]
+        if requested_scope=='occurrence' and scope!='occurrence' and timing.ready(qid) and frequency!='one-time':
+            with db:namespace['chore_ui'].dated.transfer_current(owner,qid,None)
+            return 'Dropped this occurrence. The regular owner, later repeats, history, and points stay saved.'
         if scope=='dated':
             with db:namespace['chore_ui'].dated.transfer_current(owner,qid,None)
-            return 'Dated claim released. Later repeats and points stay saved.'
+            return 'Dropped this occurrence; dated claim released. Later repeats and points stay saved.'
         if scope=='repeating':return 'Use Sign-up schedule → Release selected days to release repeating responsibility, or Skip this occurrence for just today.'
         with db:
             if scope=='assignment':
@@ -911,17 +916,24 @@ def install(namespace):
         def __init__(self,owner,qid,expected):
             super().__init__(timeout=600)
             self.owner=owner
-            name=db.execute('SELECT name FROM quests WHERE id=?',(qid,)).fetchone()[0]
+            name,frequency=db.execute('SELECT name,frequency FROM quests WHERE id=?',(qid,)).fetchone()
             scope=owned_scope(qid)[1]
-            label={'week0':'your whole responsibility for this week (future weeks stay unchanged)','assignment':'the ongoing assignment, including future occurrences','occurrence':'this occurrence only'}.get(scope,'this responsibility')
-            self.embed=discord.Embed(title='Drop chore?',description=f'**{discord.utils.escape_markdown(name)}**\nThis releases {label}. History and earned points remain.')
-            for label,save in [('Confirm drop',True),('Cancel',False)]:
+            label={'week0':'your whole responsibility for this week (future weeks stay unchanged)','assignment':'the ongoing assignment, including future occurrences','occurrence':'this occurrence only','dated':'this occurrence only'}.get(scope,'this responsibility')
+            choices=[]
+            if scope in ('assignment','week0','repeating') and timing.ready(qid) and frequency!='one-time':
+                choices.append(('Drop just this occurrence','occurrence'))
+                broad_label={'assignment':'Drop ongoing assignment','week0':'Drop this week'}.get(scope)
+                if broad_label:choices.append((broad_label,scope))
+            elif scope!='repeating':choices.append(('Confirm drop',scope))
+            description=(f'**{discord.utils.escape_markdown(name)}**\nChoose whether to release only the current occurrence or {label}. History and earned points remain.' if len(choices)>1 else f'**{discord.utils.escape_markdown(name)}**\nThis releases {label}. History and earned points remain.')
+            self.embed=discord.Embed(title='Drop chore?',description=description)
+            for label,save_scope in choices+[('Cancel',None)]:
                 button=discord.ui.Button(label=label)
-                async def choose(interaction,save=save):
+                async def choose(interaction,save_scope=save_scope):
                     if not await self.interaction_check(interaction):return
                     async with lock:
-                        result=drop_chore(owner,qid,expected) if save else 'Canceled. Nothing changed.'
-                    if save and result.startswith('Dropped.'):
+                        result=drop_chore(owner,qid,expected,save_scope) if save_scope else 'Canceled. Nothing changed.'
+                    if save_scope and result.startswith('Dropped'):
                         await workspace.present(interaction,workspace.Chores(owner,guild=interaction.guild),notice='Dropped · '+name)
                     else:
                         await interaction.response.edit_message(content=result,embed=None,view=ReturnView(interaction.user.id))

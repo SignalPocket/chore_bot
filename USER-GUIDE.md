@@ -140,9 +140,9 @@ Press **Done** beside your chore, or open its card and press **Done** when the w
 
 Use the named action buttons on the chore card.
 
-**Drop responsibility** shows the exact duration before confirmation. Dropping an ongoing assignment releases future occurrences too; dropping this week does not release a separate future-week reservation.
+**Drop responsibility** shows the exact duration before confirmation. When a due repeating chore has an ongoing, weekly, or repeating owner, choose **Drop just this occurrence** to make only the current occurrence available; the regular owner returns for the next occurrence. Confirming the ongoing or weekly scope releases that broader responsibility. Dropping this week does not release a separate future-week reservation.
 
-**Reassign** lets any trusted household person choose a valid duration and recipient, then confirm. It takes effect immediately without the recipient accepting. Points already earned stay with the person who earned them. Names and instructions do not change automatically; reassigning “Kas: laundry” does not rename it.
+**Reassign** lets any trusted household person choose a valid duration and recipient, then confirm. **Just this time** remains available for a due repeating chore even when it has an ongoing or weekly owner; that regular owner returns for the next occurrence. Reassignment takes effect immediately without the recipient accepting. Points already earned stay with the person who earned them. Names and instructions do not change automatically; reassigning “Kas: laundry” does not rename it.
 
 **Propose trade** offers your chore for someone else’s responsibility. The proposal shows the duration on both sides. Nothing changes until the recipient opens **Trades**, selects the proposal, and chooses **Accept trade**. They may Decline; you may Cancel proposal. Changing chores, dates, or weeks can make a proposal stale. Propose a fresh trade after reviewing the changes.
 

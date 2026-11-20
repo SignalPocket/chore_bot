@@ -196,6 +196,50 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         with self.clock('2026-10-23T09:00:00'):
             self.app.reset_due_quests();self.assertEqual(w.ownership(1),(None,None))
 
+    async def test_current_occurrence_reassign_and_drop_preserve_ongoing_owner(self):
+        owner=301104023405199361;w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            self.assertEqual(self.db.execute('SELECT assigned_to FROM quests WHERE id=2').fetchone(),('10',))
+            current_day,current_slot=self.ui.dated.key(2)
+            self.assertTrue(self.ui.dated.current_due(2,current_day,current_slot),(current_day,current_slot,self.ui.ready(2),self.ui.dated.slots(2)))
+            reassign=self.ui.ReassignView(owner,qid=2,expected=self.ui.reassign_snapshot(2))
+            scopes=next(c for c in reassign.children if isinstance(c,discord.ui.Select) and c.placeholder=='For how long?')
+            self.assertIn('Just this time',[option.label for option in scopes.options])
+            self.assertIn('regular owner',self.ui.reassign(2,20,'occurrence',self.ui.reassign_snapshot(2),actor=owner))
+            self.assertEqual(w.ownership(2),('20','dated'))
+            self.assertEqual(self.db.execute('SELECT assigned_to FROM quests WHERE id=2').fetchone(),('10',))
+
+            drop=self.ui.DropChoreView(20,2,self.ui.snapshot(2))
+            release=next(c for c in drop.children if getattr(c,'label',None)=='Confirm drop')
+            await release.callback(Interaction(20))
+            self.assertEqual(w.ownership(2),(None,'dated'))
+            self.assertEqual(self.db.execute('SELECT assigned_to FROM quests WHERE id=2').fetchone(),('10',))
+
+            self.assertIn('regular owner',self.ui.reassign(2,20,'occurrence',self.ui.reassign_snapshot(2),actor=owner))
+            card=w.Card(owner,2,lambda:w.Dashboard(owner),Interaction().guild)
+            proxy=next(c for c in card.children if str(getattr(c,'label','')).startswith('Done for '))
+            request=Interaction(owner);await proxy.callback(request)
+            confirm=next(c for c in request.response.payload['view'].children if getattr(c,'label',None)=='Confirm')
+            await confirm.callback(Interaction(owner))
+            self.assertEqual(self.db.execute('SELECT completed,assigned_to FROM quests WHERE id=2').fetchone(),(1,'10'))
+            self.assertEqual(self.db.execute('SELECT user_id,actor_id FROM completion_log WHERE quest_id=2').fetchall(),[('20',str(owner))])
+            self.assertNotIn(2,[row[0][0] for row in w.Attention(owner).entries])
+            reset_after=self.db.execute('SELECT reset_after FROM quests WHERE id=2').fetchone()[0]
+        with self.clock((datetime.fromisoformat(reset_after)+timedelta(seconds=1)).isoformat()):
+            self.app.reset_due_quests()
+            self.assertEqual(w.ownership(2),('10','assignment'))
+
+    async def test_drop_ongoing_chore_offers_current_occurrence_without_changing_future_owner(self):
+        with self.clock('2026-10-20T10:00:00'):
+            view=self.ui.DropChoreView(10,2,self.ui.snapshot(2))
+            labels=[getattr(c,'label',None) for c in view.children]
+            self.assertIn('Drop just this occurrence',labels)
+            self.assertIn('Drop ongoing assignment',labels)
+            event=Interaction(10)
+            await next(c for c in view.children if getattr(c,'label',None)=='Drop just this occurrence').callback(event)
+            self.assertEqual(self.ui.workspace.ownership(2),(None,'dated'))
+            self.assertEqual(self.db.execute('SELECT assigned_to FROM quests WHERE id=2').fetchone(),('10',))
+
     async def test_dated_am_pm_independent_claim_skip_undo_and_later_repeats(self):
         d=self.ui.dated;day=datetime(2026,10,22).date()
         with self.clock('2026-10-21T09:00:00'):
@@ -605,7 +649,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.8.3')
+        self.assertEqual(chore_board.APP_VERSION,'2.8.4')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -615,7 +659,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.8.3. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.8.4. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -1349,7 +1393,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                 qid=self.db.execute('SELECT MAX(id) FROM quests').fetchone()[0]
                 self.db.execute("UPDATE quests SET assigned_to='10' WHERE id=?",(qid,));self.db.commit()
                 done=(next(c for c in w.Card(10,qid).children if getattr(c,'label',None)=='Done').callback,Interaction())
-                drop=(next(c for c in self.ui.DropChoreView(10,qid,self.ui.snapshot(qid)).children if getattr(c,'label',None)=='Confirm drop').callback,Interaction())
+                drop=(next(c for c in self.ui.DropChoreView(10,qid,self.ui.snapshot(qid)).children if getattr(c,'label',None)=='Drop ongoing assignment').callback,Interaction())
                 await self.audit9_queue(*( (done,drop) if done_first else (drop,done) ))
                 self.assertEqual(self.db.execute('SELECT completed,assigned_to FROM quests WHERE id=?',(qid,)).fetchone(),(1,'10') if done_first else (0,None))
                 self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log WHERE quest_id=?',(qid,)).fetchone(),(int(done_first),))
@@ -3549,13 +3593,13 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('changed',self.ui.reassign(2,20,'assignment',expected))
             self.assertEqual(self.db.execute('SELECT assigned_to FROM quests WHERE id=2').fetchone(),('10',))
 
-    async def test_reassign_ongoing_preserves_name_and_no_current_occurrence_bypass(self):
+    async def test_reassign_ongoing_preserves_name_and_allows_current_occurrence_override(self):
         with self.clock('2026-10-20T10:00:00'):
             self.assertIn('saved',self.ui.reassign(2,20,'assignment',self.ui.reassign_snapshot(2)))
             self.assertEqual(self.db.execute('SELECT name,assigned_to FROM quests WHERE id=2').fetchone(),('My bathroom','20'))
-            self.assertIn('scope',self.ui.reassign(2,10,'occurrence',self.ui.reassign_snapshot(2)))
+            self.assertIn('regular owner',self.ui.reassign(2,10,'occurrence',self.ui.reassign_snapshot(2)))
             self.ui.signup(10,1,self.ui.week_key())
-            self.assertIn('scope',self.ui.reassign(1,20,'occurrence',self.ui.reassign_snapshot(1)))
+            self.assertIn('regular owner',self.ui.reassign(1,20,'occurrence',self.ui.reassign_snapshot(1)))
 
     async def test_reassign_rejects_sunday_rollover_and_future_owner_change(self):
         with self.clock('2026-10-24T10:00:00'):
@@ -4767,7 +4811,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('repeating',self.ui.signup(20,1,self.ui.week_key()).lower())
             self.assertIn('Release',self.ui.reassign(1,20,'assignment',self.ui.reassign_snapshot(1)))
             self.assertIn('reassigned',self.ui.reassign(1,20,'occurrence',self.ui.reassign_snapshot(1)))
-            self.assertEqual(w.ownership(1),('20','occurrence'))
+            self.assertEqual(w.ownership(1),('20','dated'))
             await self.ui.PersonalView(20,'mine',selected=1).act(Interaction(20),'done')
             self.assertEqual(r.slots(1),[(0,'day','10')])
 
