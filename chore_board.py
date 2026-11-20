@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.9.2'
+APP_VERSION = '2.9.3'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'Open the detailed one-at-a-time morning sort without an error.'
+RELEASE_SUMMARY = 'Advance to the next one-at-a-time chore immediately after Claim.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 

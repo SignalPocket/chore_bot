@@ -238,6 +238,7 @@ def install(ns, ui, lock):
             return await self.raw.edit_original_response(**kwargs)
 
     def adapt(view, owner, back=None):
+        if not isinstance(view,(View,LayoutPanel)):view.owner=owner
         if isinstance(view, (View,LayoutPanel)) or getattr(view, 'workspace_adapted', False): return view
         view.workspace_adapted = True
         view.recovery_parent = back

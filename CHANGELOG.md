@@ -1,3 +1,9 @@
+# 2.9.3 - 2026-11-20
+
+- Preserve the private owner context when a legacy chore control redraws inside the modern workspace.
+- Make one-at-a-time **Claim** update immediately to the next due chore instead of appearing inert and then recovering to the batch list on a stale second click.
+- Verify the rendered Claim button records one claim and opens the next detailed chore with no duplicate action.
+
 # 2.9.2 - 2026-11-20
 
 - Fix **One at a time** so the batch morning sort opens the detailed Claim, Assign, Done, Keep, Skip, and Reschedule screen with its private owner context.

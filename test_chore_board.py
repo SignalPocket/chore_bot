@@ -649,7 +649,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.9.2')
+        self.assertEqual(chore_board.APP_VERSION,'2.9.3')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -659,7 +659,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.9.2. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.9.3. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -7835,6 +7835,15 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             opened_labels=[getattr(c,'label',None) for c in opened.walk_children()]
             self.assertIn('Claim',opened_labels);self.assertIn('Done',opened_labels);self.assertIn('Reschedule',opened_labels)
             self.assertIn('Back',opened_labels);self.assertIn('🏠',opened_labels)
+            first_qid=opened.source.qid
+            claim=next(c for c in opened.walk_children() if getattr(c,'label',None)=='Claim')
+            claimed=Interaction(owner)
+            await claim.callback(claimed)
+            self.assertEqual(self.db.execute('SELECT status FROM morning_triage_items WHERE day=? AND quest_id=?',('2026-11-18',first_qid)).fetchone(),('claimed',))
+            next_item=claimed.wire_result['view']
+            self.assertIsInstance(next_item.source,p.MorningTriage)
+            self.assertNotEqual(next_item.source.qid,first_qid)
+            self.assertIn('Claim',[getattr(c,'label',None) for c in next_item.walk_children()])
             selected=w.render(p.MorningBatch(owner,datetime(2026,11,18).date(),selected=(1,2),guild=Interaction(owner).guild))
             self.assertFalse(next(c for c in selected.walk_children() if getattr(c,'label',None)=='Assign selected').disabled)
 
