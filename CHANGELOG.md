@@ -1,3 +1,8 @@
+# 2.9.1 - 2026-11-20
+
+- Put the owner-only **Run morning sort** button directly on the `/chores` list so the batch workflow does not depend on finding the Dashboard.
+- Keep the existing Dashboard entry and the same duplicate-safe, today-only batch behavior.
+
 # 2.9.0 - 2026-11-20
 
 - Add an owner-only **Run morning sort** Dashboard button that reloads today’s currently due chores without replaying its private DM or household post.

@@ -649,7 +649,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.9.0')
+        self.assertEqual(chore_board.APP_VERSION,'2.9.1')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -659,7 +659,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.9.0. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.9.1. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -7816,6 +7816,11 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             labels=[getattr(c,'label',None) for c in w.Dashboard(owner).children]
             self.assertIn('Run morning sort',labels)
             self.assertNotIn('Run morning sort',[getattr(c,'label',None) for c in w.Dashboard(10).children])
+            owner_sheet=w.render(w.Chores(owner,Interaction(owner).guild))
+            self.assertLessEqual(owner_sheet.total_children_count,40)
+            self.assertIn('Run morning sort',[getattr(c,'label',None) for c in owner_sheet.walk_children()])
+            other_sheet=w.render(w.Chores(10,Interaction(10).guild))
+            self.assertNotIn('Run morning sort',[getattr(c,'label',None) for c in other_sheet.walk_children()])
             panel=w.render(p.MorningBatch(owner,datetime(2026,11,18).date()))
             self.assertLessEqual(panel.total_children_count,40)
             wire_labels=[getattr(c,'label',None) for c in panel.walk_children()]

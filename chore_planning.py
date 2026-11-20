@@ -508,7 +508,7 @@ def install(ns, ui, w, lock):
             self.expected={q[0]:ui.snapshot(q[0]) for q in chunk};self.name_ids=[ui.workspace.ownership(q[0])[0] for q in chunk if ui.workspace.ownership(q[0])[0]]
             self.recovery_context={'screen':'morning_batch','day':self.day.isoformat(),'page':page}
             if self.done:
-                self.embed=discord.Embed(title='Morning chore sort complete',description='No due chores remain in this sort. Run morning sort from the Dashboard later to reload anything still due.',color=0x6B9B77)
+                self.embed=discord.Embed(title='Morning chore sort complete',description='No due chores remain in this sort. Run morning sort from /chores later to reload anything still due.',color=0x6B9B77)
                 self.button('Run again',lambda i:self.rerun(i),row=1);self.nav();return
             self.embed=discord.Embed(title=f'Morning chore sort · {len(rows)} left',description='Select several chores on this page, then Skip, Keep, or assign them together. Assign uses one person for the whole selection. One at a time keeps the detailed Claim, Done, and Reschedule choices.',color=0x6B9B77)
             for qid,name,frequency,points in chunk:

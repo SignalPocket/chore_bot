@@ -6,7 +6,7 @@ Quick Claim and Quick Done are separate unfinished-only lists with eight chores 
 
 ## Owner morning batch
 
-The owner-only Dashboard button **Run morning sort** reopens today's live due work without changing the duplicate-safe morning DM or household-post delivery records. Its batch page lists up to ten chores with one multi-select, **Assign selected**, **Skip selected**, **Keep selected**, fixed paging, Refresh, Dashboard, and **One at a time** for Claim, Done, and Reschedule. Batch assignment uses one saved household person for all selected chores and creates today-only occurrence ownership. Every selected chore is snapshot-checked under the shared mutation lock before the batch begins; a stale selection changes nothing and refreshes for review.
+The owner-only **Run morning sort** button appears directly on `/chores` and on the Dashboard. It reopens today's live due work without changing the duplicate-safe morning DM or household-post delivery records. Its batch page lists up to ten chores with one multi-select, **Assign selected**, **Skip selected**, **Keep selected**, fixed paging, Refresh, Dashboard, and **One at a time** for Claim, Done, and Reschedule. Batch assignment uses one saved household person for all selected chores and creates today-only occurrence ownership. Every selected chore is snapshot-checked under the shared mutation lock before the batch begins; a stale selection changes nothing and refreshes for review.
 
 ## Button controls and repeating weekday signups
 

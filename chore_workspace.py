@@ -526,6 +526,10 @@ def install(ns, ui, lock):
             self.button('Trade alerts: '+('On' if trade_on else 'Off'),toggle_trade,row=3)
             self.nav(back)
 
+    async def open_morning_sort(i,owner):
+        async with lock:due=ui.planning.reopen_morning_day(i.user.id)
+        await present(i,ui.planning.MorningBatch(owner,guild=i.guild),f'Reloaded {due} currently due chore'+('s.' if due!=1 else '.'))
+
     class ChoresSearch(discord.ui.Modal):
         def __init__(self,source):
             super().__init__(title='Find a chore')
@@ -664,6 +668,7 @@ def install(ns, ui, lock):
                 navigation=[button('Back to today',lambda i:present(i,target(i,mode='today',day=timing.now().date().isoformat(),page=0))),button('Week calendar',lambda i:present(i,ui.planning.Calendar(owner,i.guild,day=day,mine=state['who']=='mine')))] if state['mode']=='date' else [button('Other dates',lambda i:present(i,target(i,mode='date',page=0)))]
                 if personal:
                     navigation=[button('Day view',lambda i:present(i,target(i,mode='date',page=0))),button('Week view',lambda i:present(i,target(i,mode='week',page=0))),button('Person settings',lambda i:present(i,PersonProfile(owner,state['who'],i.guild)))]
+                if owner==OWNER:navigation.insert(0,button('Run morning sort',lambda i:open_morning_sort(i,owner)))
                 if state['who']=='unclaimed':navigation.append(button('Quick Claim',lambda i:present(i,QuickList(owner,'claim',guild=i.guild))))
                 if state['who']=='mine':navigation.append(button('Quick Done',lambda i:present(i,QuickList(owner,'done',guild=i.guild))))
                 navigation.append(button('Manage chores',lambda i:present(i,target(i,mode='all',who='everyone',query='',page=0))))
@@ -701,10 +706,7 @@ def install(ns, ui, lock):
             if incoming: self.embed.add_field(name='Waiting for you', value=f'{incoming} incoming trade request(s).', inline=False)
             if owner == OWNER:
                 count = db.execute('SELECT COUNT(*) FROM chore_feedback WHERE reviewed=0').fetchone()[0]
-                async def morning(i):
-                    async with lock:due=ui.planning.reopen_morning_day(i.user.id)
-                    await present(i,ui.planning.MorningBatch(owner,guild=i.guild),f'Reloaded {due} currently due chore'+('s.' if due!=1 else '.'))
-                self.button('Run morning sort',morning,row=0)
+                self.button('Run morning sort',lambda i:open_morning_sort(i,owner),row=0)
                 self.button(f'Review inbox ({count})', lambda i: present(i, Inbox(owner, i.guild)), row=2)
                 self.button('Update announcements',lambda i:present(i,Announcements(owner,i.guild)),row=2)
             if guild:
