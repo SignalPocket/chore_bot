@@ -48,7 +48,7 @@ Private controls expire after ten minutes of inactivity or a bot restart. Reopen
 
 ## Read a chore card
 
-Lists use Discord Components V2 with five chores per page. Previous and Next sit directly below the page numbers, above the view tabs. Each row has a chore-name button that opens details, a Claim/Done button, and Skip. Away-day Done buttons are disabled. Pressing Done refreshes the same private list. The chore-name button opens instructions and other actions. Discord controls the actual width on each device.
+Lists use Discord Components V2 with five chores per page. Previous and Next sit directly below the page numbers, above the view tabs. Each row has a chore-name button that opens details, a Claim/Done button, and Skip. Away status does not disable Done for your own due work. Pressing Done refreshes the same private list. The chore-name button opens instructions and other actions. Discord controls the actual width on each device.
 
 Select a chore from My chores, Pick up chores, or Household. Each route opens the same card:
 
@@ -156,7 +156,11 @@ Undo restores the previous chore state, claim, points, and streak values togethe
 
 **Ginaria can assist another person** from the chore card → Completion history → Choose completion to correct. The confirmation identifies the original person and points being reversed. It restores that person’s prior points/streak and the chore responsibility together, keeps the completion marked Undone, and records who corrected it. This uses the same safety rules: it must be that person’s latest completion, with no conflicting later state or score changes. It cannot force a rewind of later work or reconstruct unrecorded completions.
 
-**Ginaria can mark a responsible person’s due chore done for them.** Open the person’s chore card, choose **Done for [person]**, and confirm. The named person receives the points and streak credit; the completion also records that ginaria marked it done. The immediate **Undo** restores that person’s prior points, streak, and chore responsibility together while the saved state is still unchanged. Other household accounts cannot use this on-behalf-of action, and it does not bypass required checklist steps, attendance, due-time, stale-state, or duplicate-completion checks.
+**Away status does not block Done.** You can mark your own currently due chore Done while marked away, including completing its required checklist first. This records the work and points without marking you Home or changing future responsibility, reminders, or coverage.
+
+Refreshed Mine/person lists and chore cards say when the saved responsible person is marked Away. Everyone and Available identify chores opened for Away coverage. Existing Discord messages are snapshots and do not change automatically after Home/Away is edited; use **Refresh** or reopen `/chores` to see the current state. If you press Claim while marked Away, Sprig explains that attendance blocked the claim and leaves the chore unchanged instead of silently doing nothing.
+
+**Ginaria can mark a responsible person’s due chore done for them.** Open the person’s chore card, choose **Done for [person]**, and confirm. The named person receives the points and streak credit; the completion also records that ginaria marked it done. This owner action also works when the person is marked away. The immediate **Undo** restores that person’s prior points, streak, and chore responsibility together while the saved state is still unchanged. Other household accounts cannot use this on-behalf-of action, and it does not bypass required checklist steps, due-time, stale-state, or duplicate-completion checks.
 
 **Completion history starts with this release.** Earlier point totals remain intact, but earlier individual completions were not recorded in a reconstructable ledger. Undone records remain visible as Undone.
 

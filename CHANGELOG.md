@@ -1,3 +1,10 @@
+# 2.9.4 - 2026-11-20
+
+- Let people use **Done** for their own due work while marked away, and let ginaria use **Done for [person]**.
+- Preserve the person's attendance, future responsibility, reminder behavior, and coverage behavior.
+- Show the saved person’s Away status on refreshed chore lists and cards; attendance-blocked Claim actions explain why nothing changed instead of silently disabling the button.
+- Verify personal and proxy **Done** while away still enforce due-time, authorization, audit, duplicate-completion, checklist, and points rules.
+
 # 2.9.3 - 2026-11-20
 
 - Preserve the private owner context when a legacy chore control redraws inside the modern workspace.

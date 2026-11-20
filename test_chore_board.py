@@ -649,7 +649,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.9.3')
+        self.assertEqual(chore_board.APP_VERSION,'2.9.4')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -659,7 +659,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.9.3. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.9.4. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -970,7 +970,12 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                 panel=w.render(w.Browse(10,'pickup',tab=tab));rows=self.pickup_rows(panel)
                 self.assertTrue(rows)
                 self.assertTrue(all(not r.children[0].disabled for r in rows))
-                self.assertTrue(all(c.disabled for c in panel.walk_children() if getattr(c,'label',None)=='Claim'))
+                claims=[c for c in panel.walk_children() if getattr(c,'label',None)=='Claim']
+                if tab=='week':
+                    claim=next(c for c in claims if not c.disabled)
+                    rejected=Interaction();await claim.callback(rejected)
+                    self.assertIn("You're away today",rejected.response.payload['content'])
+                else:self.assertTrue(all(c.disabled for c in claims))
                 event=Interaction();await rows[0].children[0].callback(event)
                 card=event.response.payload['view']
                 self.assertIsInstance(card,w.Card)
@@ -1895,6 +1900,51 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         await self.app.bot.get_command('done').callback(context,2)
         self.assertIn('Only ginaria',context.messages[0])
         self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+
+    async def test_away_person_can_complete_own_work_and_owner_can_credit_them(self):
+        owner=301104023405199361;w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.attendance.add(10,'2026-10-20','2026-10-20','away','Out for the day')
+            self.assertFalse(self.ui.available(10))
+            card=w.Card(10,2,lambda:w.Dashboard(10),Interaction().guild)
+            own_done=next(c for c in card.children if getattr(c,'label',None)=='Done')
+            self.assertFalse(own_done.disabled)
+            ordinary=self.ui.Context(Interaction(10));await self.app.bot.get_command('done').callback(ordinary,2)
+            self.assertEqual(self.db.execute("SELECT points,streak FROM users WHERE id='10'").fetchone(),(10,1))
+            self.assertEqual(self.db.execute('SELECT user_id,actor_id FROM completion_log').fetchall(),[('10','10')])
+            self.assertFalse(self.ui.available(10))
+            claim=self.ui.Context(Interaction(10));await self.app.bot.get_command('claim').callback(claim,1)
+            self.assertIn("You're away today",claim.messages[0])
+            self.db.execute("UPDATE quests SET assigned_to='10' WHERE id=1");self.db.commit()
+            card=w.Card(owner,1,lambda:w.Dashboard(owner),Interaction().guild)
+            proxy=next(c for c in card.children if str(getattr(c,'label','')).startswith('Done for '))
+            self.assertFalse(proxy.disabled)
+            request=Interaction(owner);await proxy.callback(request)
+            confirmation=request.response.payload['view']
+            self.assertIn('even when they are marked away',confirmation.embed.description)
+            confirm=next(c for c in confirmation.children if getattr(c,'label',None)=='Confirm')
+            completed=Interaction(owner);await confirm.callback(completed)
+            self.assertEqual(self.db.execute("SELECT points,streak FROM users WHERE id='10'").fetchone(),(15,1),completed.response.payload['embed'].description)
+            self.assertEqual(self.db.execute('SELECT user_id,actor_id FROM completion_log').fetchall(),[('10','10'),('10',str(owner))])
+            self.assertFalse(self.ui.available(10))
+
+    async def test_away_status_is_visible_and_claim_click_explains_failure(self):
+        w=self.ui.workspace
+        with self.clock('2026-10-20T10:00:00'):
+            self.ui.attendance.add(10,'2026-10-20','2026-10-20','away','Out for the day')
+            card=w.Card(10,2,lambda:w.Dashboard(10),Interaction().guild)
+            responsibility=next(field.value for field in card.embed.fields if field.name=='Responsibility')
+            self.assertIn('Marked Away today',responsibility)
+            mine=w.render(w.Chores(10,who='mine'))
+            self.assertIn('marked Away today',' '.join(c.content for c in mine.walk_children() if isinstance(c,discord.ui.TextDisplay)))
+            everyone=w.render(w.Chores(20,who='everyone'))
+            self.assertIn('Away; available for pickup',' '.join(c.content for c in everyone.walk_children() if isinstance(c,discord.ui.TextDisplay)))
+            quick=w.render(w.QuickList(10,'claim'))
+            action=next(c.accessory for c in quick.walk_children() if isinstance(c,discord.ui.Section))
+            self.assertFalse(action.disabled)
+            event=Interaction(10);await action.callback(event)
+            self.assertIn("You're away today",event.response.payload['content'])
+            self.assertFalse(self.db.execute('SELECT * FROM claims').fetchall())
 
     async def test_owner_recovery_completion_correction_confirmation_and_guardrails(self):
         owner=301104023405199361;w=self.ui.workspace
@@ -3561,7 +3611,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('weekly sign-ups',self.ui.reassign(1,10,'assignment',self.ui.reassign_snapshot(1)))
             self.assertIn('Ongoing assignment',self.ui.reassign(2,10,'week0',self.ui.reassign_snapshot(2)))
 
-    async def test_ongoing_assignment_while_away_survives_sunday_home_handoff(self):
+    async def test_ongoing_assignment_while_away_allows_done_and_survives_sunday_home_handoff(self):
         w=self.ui.workspace
         self.db.executemany('INSERT INTO alternating_members VALUES(?)',[('20',),('30',)]);self.db.commit()
         with self.clock('2026-11-08T09:00:00'):
@@ -3573,8 +3623,8 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             before=self.db.execute('SELECT * FROM availability_defaults').fetchall()
             event=Interaction(20);ctx=self.ui.Context(event)
             await self.app.bot.get_command('done').callback(ctx,1)
-            self.assertIn('away',' '.join(ctx.messages))
-            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
+            self.assertIn('completed',' '.join(ctx.messages))
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(1,))
             self.assertEqual(self.db.execute('SELECT * FROM availability_defaults').fetchall(),before)
         with self.clock('2026-11-08T18:01:00'):
             self.assertTrue(self.ui.available(20));self.assertTrue(self.ui.available(30))
@@ -4034,7 +4084,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             with self.clock(stamp):
                 self.assertEqual(self.ui.available(10),expected,stamp)
 
-    async def test_away_exception_blocks_claim_done_and_preserves_existing_owners(self):
+    async def test_away_exception_blocks_claim_but_allows_done_and_preserves_existing_owners(self):
         with self.clock('2026-10-26T10:00:00'):
             self.ui.signup(10,1,self.ui.week_key())
             self.db.execute("INSERT INTO claims VALUES(2,'10')")
@@ -4051,8 +4101,8 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             event=Interaction()
             ctx=SimpleNamespace(author=event.user,guild=event.guild,send=send)
             await self.app.bot.get_command('done').callback(ctx,1)
-            self.assertIn('away',messages[-1])
-            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone()[0],50)
+            self.assertIn('completed',messages[-1])
+            self.assertEqual(self.db.execute("SELECT points FROM users WHERE id='10'").fetchone()[0],55)
             self.assertIn('Paused while away',self.ui.coverage_warning(1,10))
 
     async def test_partial_week_signup_matches_actual_due_day(self):
@@ -4211,12 +4261,13 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(next(option for option in picker.options if option.value=='1').default)
 
 
-    async def test_away_empty_state_does_not_claim_work_is_finished(self):
+    async def test_away_mine_list_keeps_saved_work_available_for_done(self):
         with self.clock('2026-10-20T10:00:00'):
             self.ui.attendance.add(10,'2026-10-20','2026-10-20','away')
-            view=self.ui.PersonalView(10,'mine')
-            self.assertIn('Away today',str(view.embed.to_dict()))
-            self.assertIn('remain saved',str(view.embed.to_dict()))
+            view=self.ui.PersonalView(10,'mine',selected=2)
+            self.assertIn("You're away today",str(view.embed.to_dict()))
+            self.assertTrue(view.entries)
+            self.assertTrue(any(getattr(c,'label',None)=='Done' for c in view.children))
             self.assertNotIn('All clear',str(view.embed.to_dict()))
 
     async def test_dashboard_back_navigation_never_changes_data(self):
@@ -5877,7 +5928,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             attention=next(row for row in self.ui.workspace.attention_rows() if row[0][0]==daily)
             self.assertTrue(attention[2])
             self.assertFalse(any(q[0]==daily for q,uid in self.ui.planning.project(datetime(2026,11,16).date())))
-            self.assertFalse(self.ui.workspace.Chores(20,who='mine').entries)
+            self.assertIn(daily,[q[0] for _,q,_ in self.ui.workspace.Chores(20,who='mine').entries])
             self.assertIn(daily,[q[0] for _,q,_ in self.ui.workspace.Chores(20,who='unclaimed').entries])
             self.assertEqual(self.db.execute('SELECT assigned_to FROM quests WHERE id=?',(daily,)).fetchone(),('20',))
         with self.clock('2026-11-08T18:01:00'):
@@ -6931,7 +6982,16 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.db.execute('SELECT COUNT(*) FROM completion_log').fetchone(),(0,))
             self.assertEqual(w.QuickList(10).entries,[])
             self.ui.attendance.add(20,'2026-11-09','2026-11-09','away')
-            self.assertEqual(w.QuickList(20).entries,[])
+            away=w.QuickList(20)
+            self.assertEqual([q[0] for q in away.entries],[qid])
+            panel=w.render(away)
+            action=next(c.accessory for c in panel.walk_children() if isinstance(c,discord.ui.Section))
+            self.assertFalse(action.disabled)
+            event=Interaction(20);await action.callback(event)
+            checklist=event.result['view']
+            self.assertIsInstance(checklist,p.Checklist)
+            self.assertTrue(checklist.step_buttons)
+            self.assertFalse(self.ui.available(20))
 
     async def test_manage_edit_repeat_schedule_saves_and_details_show_full_cadence(self):
         w=self.ui.workspace

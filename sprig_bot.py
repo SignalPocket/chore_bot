@@ -577,9 +577,6 @@ async def done(ctx, quest_id: int):
     if on_behalf and (actor_id != str(REVIEW_OWNER_ID) or not getattr(ctx, 'allow_proxy_completion', False)):
         await ctx.send("Only ginaria can mark a chore done for another person.")
         return
-    if not chore_ui.available(user_id):
-        await ctx.send(("That person is" if on_behalf else "You're")+" away today. Check Who's home? for saved dates and responsibilities.")
-        return
     if not chore_ui.ready(quest_id):
         await ctx.send("This chore isn't due yet. Check it on its scheduled weekday.")
         return
@@ -616,7 +613,7 @@ async def done(ctx, quest_id: int):
         assigned_to,
         completed,
     ) = quest
-    assigned_to = chore_ui.workspace.ownership(quest_id)[0]
+    assigned_to = chore_ui.workspace.raw_ownership(quest_id)[0]
 
     if completed:
         await ctx.send(

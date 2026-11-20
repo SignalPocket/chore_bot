@@ -84,8 +84,8 @@ def install(ns, ui, w, lock):
             self.expected=(ui.snapshot(qid),plan(qid),cycle(qid),sorted(done))
             self.embed=discord.Embed(title='Checklist · '+w.clean(q[1],100) if q else 'Chore unavailable',description=f'**{len(done)}/{len(items)} steps complete** · Check steps below, then press Done. Points are awarded once; progress stays with this occurrence.',color=0x6B9B77)
             for idx,item in enumerate(items):self.embed.add_field(name=('☑ ' if idx in done else '☐ ')+w.clean(item,80),value='Checked' if idx in done else 'Not checked',inline=False)
-            uid,_=w.ownership(qid)
-            if q and not ui.is_archived(qid) and not q[5] and timing.ready(qid) and uid==str(owner) and ui.available(owner) and items:
+            uid,_=w.raw_ownership(qid)
+            if q and not ui.is_archived(qid) and not q[5] and timing.ready(qid) and uid==str(owner) and items:
                 picker=discord.ui.Select(placeholder='Select all finished steps; unselect to undo',min_values=0,max_values=len(items),row=0,options=[discord.SelectOption(label=item,value=str(idx),default=idx in done) for idx,item in enumerate(items)])
                 async def change(i):
                     if not await self.interaction_check(i):return
@@ -93,7 +93,7 @@ def install(ns, ui, w, lock):
                     async with lock:
                         ns['reset_due_quests']()
                         current=(ui.snapshot(qid),plan(qid),cycle(qid),sorted(checked(qid)))
-                        if current!=self.expected or w.ownership(qid)[0]!=str(owner) or not ui.available(owner) or not timing.ready(qid):text='This occurrence or checklist changed. Review its current progress.'
+                        if current!=self.expected or w.raw_ownership(qid)[0]!=str(owner) or not timing.ready(qid):text='This occurrence or checklist changed. Review its current progress.'
                         else:
                             values={int(v) for v in picker.values}
                             if not values.issubset(set(range(len(items)))):text='Choose valid checklist steps.'
@@ -117,7 +117,7 @@ def install(ns, ui, w, lock):
                     self.step_buttons.append(button)
             elif not items:self.embed.add_field(name='No checklist yet',value='Use Estimate / checklist from the chore card to add steps.')
             else:self.embed.add_field(name='View only',value='Only the person responsible for the current due occurrence can check or uncheck steps.')
-            if q and items and complete(qid) and not q[5] and not ui.is_archived(qid) and timing.ready(qid) and uid==str(owner) and ui.available(owner):
+            if q and items and complete(qid) and not q[5] and not ui.is_archived(qid) and timing.ready(qid) and uid==str(owner):
                 async def finish(i):
                     if not await self.interaction_check(i):return
                     await i.response.defer()

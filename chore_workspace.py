@@ -572,9 +572,11 @@ def install(ns, ui, lock):
                 self.entries=[(day,r[0],ownership(r[0][0])[0]) for r in self.attention.values()]
             def matches(entry):
                 _,q,uid=entry
-                if mode in ('today','date') and day==timing.now().date() and (q[5] or (uid and not ready(q[0]))):return False
                 person_id=str(owner) if who=='mine' else str(who)
-                return (who=='everyone' or (who=='attention' and (q[0] in self.attention or (day!=timing.now().date() and not uid))) or (who=='unclaimed' and not uid) or str(uid)==person_id) and (not query or query.casefold() in ' '.join(str(q[n] or '') for n in (1,8,9)).casefold())
+                saved_uid=raw_ownership(q[0])[0] if day==timing.now().date() else uid
+                if mode in ('today','date') and day==timing.now().date() and (q[5] or ((uid or saved_uid) and not ready(q[0]))):return False
+                owns_row=str(uid)==person_id or (who not in ('unclaimed','attention','everyone') and str(saved_uid)==person_id)
+                return (who=='everyone' or (who=='attention' and (q[0] in self.attention or (day!=timing.now().date() and not uid))) or (who=='unclaimed' and not uid) or owns_row) and (not query or query.casefold() in ' '.join(str(q[n] or '') for n in (1,8,9)).casefold())
             self.entries=[entry for entry in self.entries if matches(entry)]
             self.size=min(sheet_size(owner),4) if who=='attention' else sheet_size(owner)
             self.page=min(self.state['page'],max((len(self.entries)-1)//self.size,0))
@@ -600,16 +602,25 @@ def install(ns, ui, lock):
                 frame.rows(tabs)
             if not catalog:
                 frame.add_item(discord.ui.TextDisplay('-# '+('Today · ' if state['mode']=='today' else '')+day.strftime('%A, %B %d')))
+                status_uid=str(owner) if state['who']=='mine' else str(state['who']) if personal else None
+                if status_uid and day==timing.now().date() and not ui.available(status_uid):
+                    frame.add_item(discord.ui.TextDisplay('⚠️ **'+clean(person(status_uid,self.guild),80)+' is marked Away today.** Due saved chores can still be marked Done; unclaimed work and coverage claims remain unavailable while Away.'))
                 if state['mode']=='date':
                     frame.rows([button('<< Prev day',lambda i:present(i,target(i,day=(day-timedelta(days=1)).isoformat(),page=0))),button('Today',lambda i:present(i,target(i,day=timing.now().date().isoformat(),page=0))),button('Next day >>',lambda i:present(i,target(i,day=(day+timedelta(days=1)).isoformat(),page=0)))])
             chunk=self.entries[self.page*self.size:(self.page+1)*self.size]
             lines=[]
             for index,(date,q,uid) in enumerate(chunk,self.page*self.size+1):
                 suffix=''
+                current_row=state['mode']=='today' or date==timing.now().date()
+                saved_uid=raw_ownership(q[0])[0] if current_row else uid
+                saved_away=bool(saved_uid and current_row and not ui.available(saved_uid))
                 if state['who']=='everyone' and not catalog:
-                    name=person(uid,self.guild) if uid else 'Unclaimed'
-                    if uid and '<@' in name:name=name[:name.index('<@')]+'Assigned'
+                    name=person(saved_uid,self.guild)+' · Away; available for pickup' if saved_away else person(uid,self.guild) if uid else 'Unclaimed'
+                    if (uid or saved_uid) and '<@' in name:
+                        name=name[:name.index('<@')]+'Assigned'+(' · Away; available for pickup' if saved_away else '')
                     suffix=' · '+clean(name,60)
+                elif state['who']=='unclaimed' and saved_away:
+                    suffix=' · Coverage for '+clean(person(saved_uid,self.guild),45)+' (Away)'
                 # A middle dot avoids Discord treating numbered rows as Markdown lists.
                 lines.append(f'{index} · {clean(q[1],100)}'+suffix)
                 if state['who']=='attention':
@@ -629,7 +640,7 @@ def install(ns, ui, lock):
                     async def quick_claim(i,qid=q[0],expected=expected):
                         await claim_now(i,self,qid,expected,lambda:self.rebuild(),stay_on_list=True)
                     row=frame.detail_row('**'+clean(q[1],100)+'**\n'+lines[index*2+1].removeprefix('-# '),label='Claim',callback=quick_claim)
-                    row.accessory.disabled=bool(uid) or q[5] or not ready(q[0]) or not ui.available(owner)
+                    row.accessory.disabled=bool(uid) or q[5] or not ready(q[0])
                     listing.add_item(row)
             frame.add_item(listing)
             parent=lambda:self.rebuild()
@@ -961,7 +972,7 @@ def install(ns, ui, lock):
             self.entries=[]
             for qid, in db.execute('SELECT id FROM quests WHERE completed=0 ORDER BY name COLLATE NOCASE,id').fetchall():
                 if ui.is_archived(qid) or not ready(qid):continue
-                uid=ownership(qid)[0]
+                uid=(raw_ownership(qid) if self.mode=='done' else ownership(qid))[0]
                 if (self.mode=='done' and uid==str(owner)) or (self.mode=='claim' and not uid):
                     self.entries.append(chore(qid))
             self.page=min(max(0,int(page)),max(0,(len(self.entries)-1)//8))
@@ -977,7 +988,7 @@ def install(ns, ui, lock):
             for q in self.chunk:
                 qid=q[0];expected=ui.snapshot(qid)
                 label='Done' if self.mode=='done' else 'Claim'
-                action=discord.ui.Button(label=label,style=discord.ButtonStyle.success,disabled=not ui.available(self.owner))
+                action=discord.ui.Button(label=label,style=discord.ButtonStyle.success)
                 async def act(i,qid=qid,expected=expected):
                     if not await self.interaction_check(i):return
                     parent=lambda:QuickList(self.owner,self.mode,self.page,i.guild)
@@ -989,7 +1000,7 @@ def install(ns, ui, lock):
                         ns['reset_due_quests']()
                         if ui.snapshot(qid)!=expected:
                             notice='This occurrence changed. Review the refreshed list.'
-                        elif ownership(qid)[0]!=str(self.owner) or not ready(qid) or not ui.available(self.owner):
+                        elif (raw_ownership(qid) if self.mode=='done' else ownership(qid))[0]!=str(self.owner) or not ready(qid):
                             notice='This chore is no longer due for you. Review the refreshed list.'
                         elif not ui.planning.complete(qid):
                             checklist=True
@@ -1135,7 +1146,7 @@ def install(ns, ui, lock):
                 if tab=='done':
                     last=db.execute('SELECT completed_at FROM completion_log WHERE quest_id=? AND user_id=? AND undone_at IS NULL ORDER BY id DESC LIMIT 1',(q[0],str(owner))).fetchone()
                     status='Last completed '+last[0][:16].replace('T',' ') if last else status
-                self.quick_rows.append((q[0],ui.snapshot(q[0]),tab not in ('next','upcoming','done') and offset==0 and uid==str(owner) and not q[5] and ready(q[0])))
+                self.quick_rows.append((q[0],ui.snapshot(q[0]),tab not in ('next','upcoming','done') and offset==0 and raw_ownership(q[0])[0]==str(owner) and not q[5] and ready(q[0])))
                 details=f'{timing.compact_label(q[2])} · {q[3]} points'+ui.planning.summary(q[0])+ui.planning.help_summary(q[0])
                 if area=='mine':
                     if tab=='due':
@@ -1276,7 +1287,7 @@ def install(ns, ui, lock):
                 finished,_=await asyncio.wait({task},timeout=1.0)
                 if not finished:await i.response.defer()
                 await present(i,back(),await task)
-            if include_once:self.button('Just this occurrence',once,row=0,primary=True,disabled=q[5] or not ready(qid) or bool(ownership(qid)[0]) or not ui.available(owner))
+            if include_once:self.button('Just this occurrence',once,row=0,primary=True,disabled=q[5] or not ready(qid) or bool(ownership(qid)[0]))
             if q[2] in WEEKLY_FREQUENCIES:
                 for offset,label in ((0,'This week'),(1,'Next week')):
                     async def week(i,offset=offset):
@@ -1667,7 +1678,7 @@ def install(ns, ui, lock):
                             await present(i,Card(source.owner,qid,parent,i.guild,1 if source.state['tab']=='next' else 0))
                         name.callback=details
                         name._sprig_navigation=True
-                        action=discord.ui.Button(label='Done' if can_done else 'Claim' if not uid else ('Taken: '+clean(person(uid,getattr(source,'guild',None)),30)),style=discord.ButtonStyle.success if can_done else discord.ButtonStyle.primary if not uid else discord.ButtonStyle.secondary,disabled=not current or (bool(uid) and uid!=str(source.owner)) or not ui.available(source.owner))
+                        action=discord.ui.Button(label='Done' if can_done else 'Claim' if not uid else ('Taken: '+clean(person(uid,getattr(source,'guild',None)),30)),style=discord.ButtonStyle.success if can_done else discord.ButtonStyle.primary if not uid else discord.ButtonStyle.secondary,disabled=not current or (bool(uid) and uid!=str(source.owner)))
                         future_picker=source.state['tab'] in ('next','upcoming','week') and not current and bool(ui.dated.slots(qid))
                         if future_picker:action.label='Choose date';action.disabled=False
                         pending_steps=can_done and not ui.planning.complete(qid)
@@ -2086,10 +2097,14 @@ def install(ns, ui, lock):
                 self.nav(back)
                 return
             uid, scope = ownership(qid, offset)
-            self.name_ids=[uid]
+            proxy_uid, raw_scope = raw_ownership(qid, offset)
+            self.name_ids=[uid,proxy_uid]
             self.rebuild=lambda:Card(owner,qid,back,guild,offset,notice)
-            duration = {'assignment':'Every week · ongoing','week0':'This week · until Sunday 6 p.m.','week1':'Next week · Sunday 6 p.m. to Sunday 6 p.m.','occurrence':'Just this time','repeating':'Repeating weekday/shift · only when home','dated':'This date and slot only'}.get(scope, 'Available')
-            self.embed.add_field(name='Responsibility', value=f'{clean(person(uid,guild),100)} · {duration}', inline=False)
+            duration = {'assignment':'Every week · ongoing','week0':'This week · until Sunday 6 p.m.','week1':'Next week · Sunday 6 p.m. to Sunday 6 p.m.','occurrence':'Just this time','repeating':'Repeating weekday/shift · only when home','dated':'This date and slot only'}.get(raw_scope or scope, 'Available')
+            responsibility=f'{clean(person(proxy_uid or uid,guild),100)} · {duration}'
+            if proxy_uid and offset==0 and not ui.available(proxy_uid):
+                responsibility+='\n⚠️ Marked Away today · Done is still available; the chore is also available for household coverage.'
+            self.embed.add_field(name='Responsibility', value=responsibility, inline=False)
             self.embed.add_field(name='When', value=f'Repeats: {timing.repeat_text(q[2])}\n{timing.label(q[2],qid)}\n{due_text(q)}', inline=False)
             self.embed.add_field(name='Points and room', value=f'{q[3]} points · {clean(q[9] or "Unspecified",100)}', inline=False)
             self.embed.add_field(name='Estimate and checklist',value=(ui.planning.summary(qid).removeprefix(' · ') or 'No estimate or checklist yet'),inline=False)
@@ -2119,30 +2134,30 @@ def install(ns, ui, lock):
                 if not finished: await i.response.defer()
                 text=await task
                 await present(i, Card(owner, qid, back, i.guild, offset, notice=text[:1800]))
-            if uid == str(owner) and not q[5] and ready(qid) and offset == 0:
-                self.button('Done', lambda i: mutate(i, 'done'), row=0, primary=True, disabled=not ui.available(owner))
-            if owner==OWNER and uid and uid!=str(owner) and not q[5] and ready(qid) and offset==0:
+            if proxy_uid == str(owner) and not q[5] and ready(qid) and offset == 0:
+                self.button('Done', lambda i: mutate(i, 'done'), row=0, primary=True)
+            if owner==OWNER and proxy_uid and proxy_uid!=str(owner) and not q[5] and ready(qid) and offset==0:
                 async def confirm_proxy(i):
                     if not await self.interaction_check(i):return
-                    target_name=clean(person(uid,i.guild),100)
+                    target_name=clean(person(proxy_uid,i.guild),100)
                     async def save(e):
                         if not await View(owner).interaction_check(e):return
                         async def change():
                             async with lock:
                                 ns['reset_due_quests']()
                                 if ui.snapshot(qid)!=self.expected:return 'This chore changed. Review the refreshed card.'
-                                context=ui.Context(e);context.completion_user_id=uid;context.allow_proxy_completion=True
+                                context=ui.Context(e);context.completion_user_id=proxy_uid;context.allow_proxy_completion=True
                                 await bot.get_command('done').callback(context,qid)
                                 return '\n'.join(context.messages)
                         task=asyncio.create_task(change())
                         finished,_=await asyncio.wait({task},timeout=1.0)
                         if not finished:await e.response.defer()
                         await present(e,Card(owner,qid,back,e.guild,offset,notice=(await task)[:1800]))
-                    text=f'Mark this occurrence done for **{target_name}**? They receive {q[3]} points and streak credit. The completion records that you marked it for them.'
+                    text=f'Mark this occurrence done for **{target_name}**? They receive {q[3]} points and streak credit. The completion records that you marked it for them. This works even when they are marked away; their attendance and future responsibility stay unchanged.'
                     await present(i,Confirm(owner,'Mark done for '+target_name+'?',text,save,card))
-                self.button('Done for '+clean(person(uid,guild),55),confirm_proxy,row=0,primary=True,disabled=not ui.available(uid))
-            if not uid and not q[5] and ready(qid) and offset == 0:
-                self.button('Claim',lambda i:claim_now(i,self,qid,self.expected,back),row=0,primary=True,disabled=not ui.available(owner))
+                self.button('Done for '+clean(person(proxy_uid,guild),55),confirm_proxy,row=0,primary=True)
+            if not uid and proxy_uid != str(owner) and not q[5] and ready(qid) and offset == 0:
+                self.button('Claim',lambda i:claim_now(i,self,qid,self.expected,back),row=0,primary=True)
             if not q[5] and ready(qid) and offset==0 and q[2]!='one-time':
                 async def skip(i):
                     if not await self.interaction_check(i):return

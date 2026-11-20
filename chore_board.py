@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.9.3'
+APP_VERSION = '2.9.4'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'Advance to the next one-at-a-time chore immediately after Claim.'
+RELEASE_SUMMARY = 'Show Away status clearly and let people record due work with explanatory coverage feedback.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 
@@ -265,9 +265,11 @@ def install(namespace):
             FROM quests q LEFT JOIN claims c ON c.quest_id = q.id
             WHERE q.completed = 0 ORDER BY q.name COLLATE NOCASE, q.id""").fetchall()
         result = [r for r in result if not is_archived(r[0]) and timing.ready(r[0])]
-        if not available(user_id):
+        if not available(user_id) and mode != "mine":
             return []
-        def responsible(qid):return namespace['chore_ui'].workspace.ownership(qid)[0]
+        def responsible(qid):
+            workspace=namespace['chore_ui'].workspace
+            return (workspace.raw_ownership(qid)[0] if mode=='mine' else workspace.ownership(qid)[0])
         if mode == "mine":
             return [r for r in result if responsible(r[0]) == str(user_id)]
         return [r for r in result if not responsible(r[0])]
@@ -448,7 +450,7 @@ def install(namespace):
             async def change():
                 async with lock:
                     api.reset_due_quests()
-                    if not available(self.owner):
+                    if action != 'done' and not available(self.owner):
                         notice = "You're away today. Open Weekly sign-ups to plan your next home week."
                     elif snapshot(self.selected[0]) != self.expected:
                         notice = "This chore changed since you opened it. The list has been refreshed."
