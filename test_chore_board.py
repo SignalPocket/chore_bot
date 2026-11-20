@@ -649,7 +649,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_notice_version_and_eastern_timestamp(self):
         import chore_board
         from datetime import timezone
-        self.assertEqual(chore_board.APP_VERSION,'2.8.4')
+        self.assertEqual(chore_board.APP_VERSION,'2.9.0')
         cases = (
             (datetime(2026,10,21,18,40,tzinfo=timezone.utc),'October 21, 2026 at 2:40 PM EDT'),
             (datetime(2026,12,2,2,5,tzinfo=timezone.utc),'December 1, 2026 at 9:05 PM EST'),
@@ -659,7 +659,7 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         for at, stamp in cases:
             with self.subTest(at=at):
                 self.assertEqual(chore_board.update_notice(at),
-                    'Sprig has been updated to version 2.8.4. Open /chores for fresh controls.'
+                    'Sprig has been updated to version 2.9.0. Open /chores for fresh controls.'
                     +'\nWhat’s new: '+chore_board.RELEASE_SUMMARY+'\nAnnounced '+stamp+' (Eastern time).')
         with self.assertRaises(ValueError):
             chore_board.update_notice(datetime(2026,10,21))
@@ -7800,6 +7800,70 @@ class BoardTests(unittest.IsolatedAsyncioTestCase):
         sent=dm.send.call_args.kwargs
         self.assertIsInstance(sent['view'],p.MorningTriage)
         self.assertEqual(self.db.execute('SELECT dm_status,dm_message_id FROM morning_triage_days').fetchone(),('sent','600'))
+
+    async def test_dashboard_owner_can_rerun_morning_sort_without_replaying_deliveries(self):
+        p=self.ui.planning;w=self.ui.workspace;owner=301104023405199361
+        with self.clock('2026-11-18T09:00:00'):
+            p.ensure_morning_day(datetime(2026,11,18).date())
+            self.db.execute("UPDATE morning_triage_items SET status='kept',acted_at='2026-11-18T08:00:00-05:00'")
+            self.db.execute("UPDATE morning_triage_days SET dm_status='sent',dm_message_id='600',completed_at='2026-11-18T08:00:00-05:00',shared_status='sent',shared_message_id='700'")
+            self.db.commit()
+            self.assertEqual(p.reopen_morning_day(10),0)
+            self.assertEqual(self.db.execute("SELECT COUNT(*) FROM morning_triage_items WHERE status='kept'").fetchone(),(2,))
+            self.assertEqual(p.reopen_morning_day(owner),2)
+            self.assertEqual(self.db.execute("SELECT COUNT(*) FROM morning_triage_items WHERE status='pending'").fetchone(),(2,))
+            self.assertEqual(self.db.execute('SELECT dm_status,dm_message_id,shared_status,shared_message_id FROM morning_triage_days').fetchone(),('sent','600','sent','700'))
+            labels=[getattr(c,'label',None) for c in w.Dashboard(owner).children]
+            self.assertIn('Run morning sort',labels)
+            self.assertNotIn('Run morning sort',[getattr(c,'label',None) for c in w.Dashboard(10).children])
+            panel=w.render(p.MorningBatch(owner,datetime(2026,11,18).date()))
+            self.assertLessEqual(panel.total_children_count,40)
+            wire_labels=[getattr(c,'label',None) for c in panel.walk_children()]
+            self.assertIn('Assign selected',wire_labels);self.assertIn('Skip selected',wire_labels);self.assertIn('One at a time',wire_labels)
+            self.assertTrue(next(c for c in panel.walk_children() if getattr(c,'label',None)=='Assign selected').disabled)
+            selected=w.render(p.MorningBatch(owner,datetime(2026,11,18).date(),selected=(1,2),guild=Interaction(owner).guild))
+            self.assertFalse(next(c for c in selected.walk_children() if getattr(c,'label',None)=='Assign selected').disabled)
+
+    async def test_morning_batch_assigns_selected_chores_for_today_only(self):
+        p=self.ui.planning;owner=301104023405199361;day=datetime(2026,11,18).date()
+        self.db.execute("UPDATE quests SET completed=0,frequency='daily' WHERE id IN (1,2)")
+        self.db.execute("UPDATE quests SET assigned_to='10' WHERE id=2")
+        self.db.executemany('INSERT OR IGNORE INTO users(id) VALUES(?)',[('10',),('20',)])
+        self.db.commit()
+        with self.clock('2026-11-18T09:00:00'):
+            self.assertEqual(p.reopen_morning_day(owner),2)
+            expected={qid:self.ui.snapshot(qid) for qid in (1,2)}
+            self.db.execute('UPDATE quests SET points=99 WHERE id=1');self.db.commit()
+            self.assertEqual(p.apply_morning_batch(owner,day,(1,2),expected,'assign','20'),(0,'The selected chores changed. Review the refreshed list before trying again.'))
+            self.assertEqual(self.db.execute("SELECT COUNT(*) FROM morning_triage_items WHERE status='pending'").fetchone(),(2,))
+            self.db.execute('UPDATE quests SET points=5 WHERE id=1');self.db.commit()
+            expected={qid:self.ui.snapshot(qid) for qid in (1,2)}
+            changed,notice=p.apply_morning_batch(owner,day,(1,2),expected,'assign','20')
+            self.assertEqual((changed,notice),(2,'2 chores assigned.'))
+            self.assertEqual(self.db.execute('SELECT status FROM morning_triage_items ORDER BY quest_id').fetchall(),[('assigned',),('assigned',)])
+            self.assertEqual(self.ui.workspace.ownership(1),('20','dated'))
+            self.assertEqual(self.ui.workspace.ownership(2),('20','dated'))
+            self.assertEqual(self.db.execute('SELECT assigned_to FROM quests WHERE id=2').fetchone(),('10',))
+        with self.clock('2026-11-19T09:00:00'):
+            self.assertEqual(self.ui.workspace.ownership(2),('10','assignment'))
+
+    async def test_morning_batch_skip_and_keep_process_multiple_selected_chores(self):
+        p=self.ui.planning;owner=301104023405199361;day=datetime(2026,11,18).date()
+        self.db.execute("UPDATE quests SET completed=0,frequency='daily' WHERE id=1")
+        self.db.execute("UPDATE quests SET completed=0,frequency='one-time' WHERE id=2")
+        self.db.commit()
+        with self.clock('2026-11-18T09:00:00'):
+            p.reopen_morning_day(owner)
+            expected={qid:self.ui.snapshot(qid) for qid in (1,2)}
+            changed,notice=p.apply_morning_batch(owner,day,(1,2),expected,'skip')
+            self.assertEqual((changed,notice),(2,'2 chores skipped.'))
+            self.assertEqual(self.db.execute('SELECT status FROM morning_triage_items ORDER BY quest_id').fetchall(),[('skipped',),('skipped_for_today',)])
+            self.assertEqual(self.db.execute('SELECT COUNT(*) FROM occurrence_skips WHERE quest_id=1').fetchone(),(1,))
+            self.assertEqual(self.db.execute('SELECT completed FROM quests WHERE id=2').fetchone(),(0,))
+            self.assertTrue(p.MorningBatch(owner,day).done)
+            p.reopen_morning_day(owner)
+            expected={qid:self.ui.snapshot(qid) for qid in (2,)}
+            self.assertEqual(p.apply_morning_batch(owner,day,(2,),expected,'keep'),(1,'1 chore kept.'))
 
     async def test_morning_assign_is_today_only_and_reschedule_preserves_future_owner(self):
         p=self.ui.planning;owner=301104023405199361

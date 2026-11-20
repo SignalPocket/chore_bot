@@ -1,5 +1,9 @@
 # Sprig interface specification
 
+## Morning sort
+
+Ginaria's Dashboard includes **Run morning sort**. It reloads today's currently due chores without replaying either scheduled delivery. The batch list shows up to ten chores per page and supports multi-select **Assign selected**, **Skip selected**, and **Keep selected** actions. Assign applies one person to every selected current occurrence while preserving future ownership. **One at a time** opens the existing detailed morning controls. Wrong-account and stale-state checks reject the action without a partial batch.
+
 Prepared 1.3.2 · October 22, 2026 · Local implementation, not deployed.
 
 This is the behavioral contract for the interface. PAGE-MAP.md shows routes; this document states what screens and controls must accomplish. Conditional controls appear only when applicable. A passing offline check is not a live Discord verification.

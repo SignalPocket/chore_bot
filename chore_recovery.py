@@ -63,6 +63,10 @@ def install(ns, ui, w):
         parent_context = context.get('parent', {'screen': 'dashboard'})
         parent = lambda: restore(owner, parent_context, guild, depth+1)
         if kind=='reassign':return parent()
+        if kind=='morning_batch':
+            try:day=date.fromisoformat(context['day'])
+            except (KeyError,TypeError,ValueError):day=ui.timing.now().date()
+            return ui.planning.MorningBatch(owner,day,context.get('page',0),guild=guild)
         if kind=='quick':return w.QuickList(owner,context.get('mode','done'),context.get('page',0),guild)
         if kind=='chores':return w.Chores(owner,guild,**{k:context[k] for k in ('mode','day','who','query','page') if k in context})
         if kind=='chore_more':return w.ChoreMore(owner,w.Card(owner,int(context['qid']),parent,guild,int(context.get('offset',0))))

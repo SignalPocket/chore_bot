@@ -17,7 +17,7 @@ def action_style(label, fallback=discord.ButtonStyle.secondary):
     if label=='Dashboard':return discord.ButtonStyle.primary
     if label in ('Home today','Claim','Claim just this time','Just this occurrence','Done','Mark done') or label.startswith(('Save ','Checked: ','Done for ')):
         return discord.ButtonStyle.success
-    if label in ('Away today','Skip','Skip this occurrence','Skip just this time') or label.startswith(('Undo','Drop ')):
+    if label in ('Away today','Skip','Skip this occurrence','Skip just this time','Skip selected') or label.startswith(('Undo','Drop ')):
         return discord.ButtonStyle.danger
     return fallback
 
@@ -701,6 +701,10 @@ def install(ns, ui, lock):
             if incoming: self.embed.add_field(name='Waiting for you', value=f'{incoming} incoming trade request(s).', inline=False)
             if owner == OWNER:
                 count = db.execute('SELECT COUNT(*) FROM chore_feedback WHERE reviewed=0').fetchone()[0]
+                async def morning(i):
+                    async with lock:due=ui.planning.reopen_morning_day(i.user.id)
+                    await present(i,ui.planning.MorningBatch(owner,guild=i.guild),f'Reloaded {due} currently due chore'+('s.' if due!=1 else '.'))
+                self.button('Run morning sort',morning,row=0)
                 self.button(f'Review inbox ({count})', lambda i: present(i, Inbox(owner, i.guild)), row=2)
                 self.button('Update announcements',lambda i:present(i,Announcements(owner,i.guild)),row=2)
             if guild:

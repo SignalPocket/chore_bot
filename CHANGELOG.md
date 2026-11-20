@@ -1,3 +1,9 @@
+# 2.9.0 - 2026-11-20
+
+- Add an owner-only **Run morning sort** Dashboard button that reloads today’s currently due chores without replaying its private DM or household post.
+- Let ginaria select up to ten chores per page and Skip, Keep, or assign the whole selection to one person for today only.
+- Preserve the existing detailed one-at-a-time Claim, Done, and Reschedule flow, with owner, stale-state, recovery, and future-ownership safeguards.
+
 # 2.8.4 - 2026-11-20
 
 - Let a due repeating chore be reassigned for just the current occurrence while preserving its ongoing, weekly, or repeating owner for later occurrences.

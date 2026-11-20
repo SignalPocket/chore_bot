@@ -263,6 +263,40 @@ def install(ns, ui, w, lock):
         if changed:morning_item(key)
         return bool(changed)
 
+    def reopen_morning_day(actor,day=None):
+        """Reopen today's live due work without replaying either delivery."""
+        if str(actor)!=str(ns['REVIEW_OWNER_ID']):return 0
+        day=day or timing.now().date();key=day.isoformat();records=morning_due_records()
+        with db:
+            db.execute('INSERT OR IGNORE INTO morning_triage_days(day) VALUES(?)',(key,))
+            existing={qid for qid, in db.execute('SELECT quest_id FROM morning_triage_items WHERE day=?',(key,))}
+            position=db.execute('SELECT COALESCE(MAX(position),-1)+1 FROM morning_triage_items WHERE day=?',(key,)).fetchone()[0]
+            additions=[q[0] for q in records if q[0] not in existing]
+            db.executemany('INSERT INTO morning_triage_items(day,quest_id,position) VALUES(?,?,?)',
+                [(key,qid,position+index) for index,qid in enumerate(additions)])
+            for q in records:
+                db.execute("UPDATE morning_triage_items SET status='pending',acted_at=NULL WHERE day=? AND quest_id=?",(key,q[0]))
+            db.execute('UPDATE morning_triage_days SET completed_at=? WHERE day=?',
+                (None if records else timing.now().isoformat(),key))
+        return len(records)
+
+    def morning_pending(day):
+        key=day.isoformat() if hasattr(day,'isoformat') else str(day)
+        ns['reset_due_quests']();valid=[];invalid=[]
+        for row in db.execute('SELECT i.quest_id,q.name,q.frequency,q.points FROM morning_triage_items i LEFT JOIN quests q ON q.id=i.quest_id WHERE i.day=? AND i.status=? ORDER BY i.position',(key,'pending')).fetchall():
+            current=db.execute('SELECT completed FROM quests WHERE id=?',(row[0],)).fetchone()
+            if current and not current[0] and not ui.is_archived(row[0]) and timing.ready(row[0]):valid.append(row)
+            else:invalid.append(row[0])
+        if invalid:
+            with db:
+                db.executemany("UPDATE morning_triage_items SET status='resolved_elsewhere',acted_at=? WHERE day=? AND quest_id=? AND status='pending'",
+                    [(timing.now().isoformat(),key,qid) for qid in invalid])
+        if not valid:
+            row=db.execute('SELECT completed_at FROM morning_triage_days WHERE day=?',(key,)).fetchone()
+            if row and not row[0]:
+                with db:db.execute('UPDATE morning_triage_days SET completed_at=? WHERE day=?',(timing.now().isoformat(),key))
+        return valid
+
     def assign_morning_occurrence(actor,qid,target,expected):
         ns['reset_due_quests']()
         if str(actor)!=str(ns['REVIEW_OWNER_ID']):return 'Only ginaria can sort the morning chore list.'
@@ -412,6 +446,98 @@ def install(ns, ui, w, lock):
             if i.user.id!=ns['REVIEW_OWNER_ID']:
                 await i.response.send_message('Only ginaria can sort this private list.',ephemeral=True);return False
             return True
+
+    def morning_batch_valid(day,selected,expected):
+        key=day.isoformat() if hasattr(day,'isoformat') else str(day)
+        pending={qid for qid, in db.execute("SELECT quest_id FROM morning_triage_items WHERE day=? AND status='pending'",(key,))}
+        return bool(selected) and all(qid in pending and ui.snapshot(qid)==expected.get(qid) and not ui.is_archived(qid) and timing.ready(qid) for qid in selected)
+
+    def apply_morning_batch(actor,day,selected,expected,action,target=None):
+        selected=tuple(dict.fromkeys(int(qid) for qid in selected))
+        if str(actor)!=str(ns['REVIEW_OWNER_ID']):return 0,'Only ginaria can sort the morning chore list.'
+        if not morning_batch_valid(day,selected,expected):return 0,'The selected chores changed. Review the refreshed list before trying again.'
+        if action=='assign' and not ui.available(target):return 0,'That person is away today. Choose someone who is home.'
+        changed=0
+        for qid in selected:
+            frequency=db.execute('SELECT frequency FROM quests WHERE id=?',(qid,)).fetchone()[0]
+            if action=='assign':
+                notice=assign_morning_occurrence(actor,qid,target,expected[qid])
+                if notice.startswith(('Assigned','Claimed')):changed+=finish_morning_item(day,qid,'assigned')
+            elif action=='skip':
+                if frequency=='one-time':changed+=finish_morning_item(day,qid,'skipped_for_today')
+                else:
+                    notice=ui.workspace.skip_occurrence(actor,qid,expected[qid])
+                    if notice.startswith('Occurrence skipped'):changed+=finish_morning_item(day,qid,'skipped')
+            elif action=='keep':changed+=finish_morning_item(day,qid,'kept')
+        label={'assign':'assigned','skip':'skipped','keep':'kept'}[action]
+        return changed,f'{changed} chore'+('s' if changed!=1 else '')+f' {label}.'
+
+    class MorningBatchAssign(w.View):
+        def __init__(self,owner,day,selected,expected,page=0,guild=None,return_page=0):
+            super().__init__(owner);self.day,self.selected,self.expected=day,tuple(selected),expected
+            ids=ui.workspace.household_people(ns['REVIEW_OWNER_ID'],guild,register=False)
+            def label(uid):
+                value=ui.workspace.person(uid,guild)
+                return ('Account …'+uid[-4:]) if '<@' in value else value
+            people=sorted(((uid,label(uid)) for uid in ids),key=lambda value:(value[1].casefold(),int(value[0])))
+            size=10;pages=max((len(people)-1)//size+1,1);page=max(0,min(page,pages-1));self.page=page
+            self.embed=discord.Embed(title=f'Assign {len(selected)} morning chore'+('s' if len(selected)!=1 else ''),description='Choose one person. Every selected chore is assigned to that person for today only; regular and future ownership stays unchanged.',color=0x6B9B77)
+            async def choose(i,target):
+                member=guild.get_member(int(target)) if guild else None
+                if guild and not member:
+                    try:member=await asyncio.wait_for(guild.fetch_member(int(target)),timeout=5)
+                    except Exception:member=None
+                if not member or getattr(member,'bot',False):return await i.response.send_message('That saved account is no longer available in the household server.',ephemeral=True)
+                await i.response.defer()
+                async with lock:changed,notice=apply_morning_batch(i.user.id,day,selected,expected,'assign',target)
+                view=MorningBatch(owner,day,return_page,guild=guild)
+                await w.present(i,view,notice)
+                if view.done:await publish_morning_summary()
+            for index,(uid,name) in enumerate(people[page*size:(page+1)*size]):
+                self.button(name[:80],lambda i,uid=uid:choose(i,uid),row=index//5)
+            if pages>1:
+                self.button('Previous',lambda i:w.present(i,MorningBatchAssign(owner,day,selected,expected,page-1,i.guild,return_page)),row=2,disabled=page==0)
+                self.button('Next',lambda i:w.present(i,MorningBatchAssign(owner,day,selected,expected,page+1,i.guild,return_page)),row=2,disabled=page+1>=pages)
+            self.nav(lambda:MorningBatch(owner,day,return_page,selected,guild))
+
+    class MorningBatch(w.View):
+        def __init__(self,owner,day=None,page=0,selected=(),guild=None):
+            super().__init__(owner);today=timing.now().date();self.day=day if day==today else today;rows=morning_pending(self.day);size=10
+            page=max(0,min(page,max((len(rows)-1)//size,0)));chunk=rows[page*size:(page+1)*size]
+            self.page,self.done=page,not rows;available={q[0] for q in chunk};selected=tuple(qid for qid in selected if qid in available)
+            self.expected={q[0]:ui.snapshot(q[0]) for q in chunk};self.name_ids=[ui.workspace.ownership(q[0])[0] for q in chunk if ui.workspace.ownership(q[0])[0]]
+            self.recovery_context={'screen':'morning_batch','day':self.day.isoformat(),'page':page}
+            if self.done:
+                self.embed=discord.Embed(title='Morning chore sort complete',description='No due chores remain in this sort. Run morning sort from the Dashboard later to reload anything still due.',color=0x6B9B77)
+                self.button('Run again',lambda i:self.rerun(i),row=1);self.nav();return
+            self.embed=discord.Embed(title=f'Morning chore sort · {len(rows)} left',description='Select several chores on this page, then Skip, Keep, or assign them together. Assign uses one person for the whole selection. One at a time keeps the detailed Claim, Done, and Reschedule choices.',color=0x6B9B77)
+            for qid,name,frequency,points in chunk:
+                current=ui.workspace.ownership(qid)[0]
+                self.embed.add_field(name=w.clean(name,100),value=f'{timing.label(frequency,qid)} · {points} points · '+(ui.workspace.person(current,guild) if current else 'Needs someone'),inline=False)
+            picker=discord.ui.Select(placeholder='Choose chores on this page…',min_values=1,max_values=len(chunk),row=0,options=[discord.SelectOption(label=q[1][:100],value=str(q[0]),default=q[0] in selected) for q in chunk])
+            async def select(i):await w.present(i,MorningBatch(owner,self.day,page,tuple(int(value) for value in picker.values),i.guild),f'{len(picker.values)} selected.')
+            picker.callback=select;self.add_item(picker)
+            async def apply(i,action):
+                await i.response.defer()
+                async with lock:changed,notice=apply_morning_batch(i.user.id,self.day,selected,self.expected,action)
+                view=MorningBatch(owner,self.day,page,guild=i.guild)
+                await w.present(i,view,notice)
+                if view.done:await publish_morning_summary()
+            self.button('Assign selected',lambda i:w.present(i,MorningBatchAssign(owner,self.day,selected,{qid:self.expected[qid] for qid in selected},guild=i.guild,return_page=page)),row=1,disabled=not selected)
+            self.button('Skip selected',lambda i:apply(i,'skip'),row=1,disabled=not selected)
+            self.button('Keep selected',lambda i:apply(i,'keep'),row=1,disabled=not selected)
+            self.button('Previous',lambda i:w.present(i,MorningBatch(owner,self.day,page-1,guild=i.guild)),row=2,disabled=page==0)
+            self.button('Next',lambda i:w.present(i,MorningBatch(owner,self.day,page+1,guild=i.guild)),row=2,disabled=(page+1)*size>=len(rows))
+            self.button('One at a time',lambda i:w.present(i,MorningTriage(self.day)),row=3)
+            self.button('Refresh',lambda i:w.present(i,MorningBatch(owner,self.day,page,guild=i.guild)),row=3)
+            self.nav()
+        async def interaction_check(self,i):
+            if i.user.id!=ns['REVIEW_OWNER_ID']:
+                await i.response.send_message('Only ginaria can sort this private list.',ephemeral=True);return False
+            return await super().interaction_check(i)
+        async def rerun(self,i):
+            async with lock:count=reopen_morning_day(i.user.id,self.day)
+            await w.present(i,MorningBatch(self.owner,self.day,guild=i.guild),f'Reloaded {count} currently due chore'+('s.' if count!=1 else '.'))
 
     async def publish_morning_summary():
         now=timing.now();key=now.date().isoformat();row=db.execute('SELECT completed_at,shared_status FROM morning_triage_days WHERE day=?',(key,)).fetchone()
@@ -748,4 +874,4 @@ def install(ns, ui, w, lock):
             text='Create **'+w.clean(name,100)+'** as a new unassigned chore.\n'+(f'{source[2]} points · '+timing.compact_label(source[1]) if source else 'Source unavailable')+'\nCopies instructions, room, difficulty, estimate, checklist, and missed-work policy. No claims, assignments, sign-ups, completion history, checked steps, help notes, or one-off date moves are copied.'
             await w.present(i,w.Confirm(self.owner,'Create this chore copy?',text,save,lambda:w.Card(self.owner,self.qid,guild=i.guild)))
 
-    return SimpleNamespace(help_record=help_record,help_snapshot=help_snapshot,help_summary=help_summary,report_help=report_help,resolve_help=resolve_help,HelpNote=HelpNote,HelpStatus=HelpStatus,HelpHistory=HelpHistory,NeedsHelp=NeedsHelp,duplicate_snapshot=duplicate_snapshot,duplicate=duplicate,DuplicateModal=DuplicateModal,plan=plan,steps=steps,cycle=cycle,checked=checked,complete=complete,summary=summary,history_state=history_state,save_plan=save_plan,PlanModal=PlanModal,Checklist=Checklist,settings=settings,save_reminders=save_reminders,Reminders=Reminders,ReminderTimes=ReminderTimes,send_due_reminders=send_due_reminders,send_morning_triage=send_morning_triage,publish_morning_summary=publish_morning_summary,register_morning_view=register_morning_view,morning_due_records=morning_due_records,morning_item=morning_item,finish_morning_item=finish_morning_item,assign_morning_occurrence=assign_morning_occurrence,MorningTriage=MorningTriage,MorningAssign=MorningAssign,MorningMove=MorningMove,Calendar=Calendar,Day=Day,project=project,owner_on=owner_on)
+    return SimpleNamespace(help_record=help_record,help_snapshot=help_snapshot,help_summary=help_summary,report_help=report_help,resolve_help=resolve_help,HelpNote=HelpNote,HelpStatus=HelpStatus,HelpHistory=HelpHistory,NeedsHelp=NeedsHelp,duplicate_snapshot=duplicate_snapshot,duplicate=duplicate,DuplicateModal=DuplicateModal,plan=plan,steps=steps,cycle=cycle,checked=checked,complete=complete,summary=summary,history_state=history_state,save_plan=save_plan,PlanModal=PlanModal,Checklist=Checklist,settings=settings,save_reminders=save_reminders,Reminders=Reminders,ReminderTimes=ReminderTimes,send_due_reminders=send_due_reminders,send_morning_triage=send_morning_triage,publish_morning_summary=publish_morning_summary,register_morning_view=register_morning_view,ensure_morning_day=ensure_morning_day,morning_due_records=morning_due_records,morning_item=morning_item,finish_morning_item=finish_morning_item,reopen_morning_day=reopen_morning_day,morning_pending=morning_pending,apply_morning_batch=apply_morning_batch,assign_morning_occurrence=assign_morning_occurrence,MorningTriage=MorningTriage,MorningAssign=MorningAssign,MorningMove=MorningMove,MorningBatch=MorningBatch,MorningBatchAssign=MorningBatchAssign,Calendar=Calendar,Day=Day,project=project,owner_on=owner_on)

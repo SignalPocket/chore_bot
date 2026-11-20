@@ -4,6 +4,10 @@
 
 Quick Claim and Quick Done are separate unfinished-only lists with eight chores per page and one Claim/Done accessory per row. Keep date tabs, history, Skip and filters in the full browser. Quick actions refresh the same page, preserving ownership, attendance, checklist, stale-action and Undo guards.
 
+## Owner morning batch
+
+The owner-only Dashboard button **Run morning sort** reopens today's live due work without changing the duplicate-safe morning DM or household-post delivery records. Its batch page lists up to ten chores with one multi-select, **Assign selected**, **Skip selected**, **Keep selected**, fixed paging, Refresh, Dashboard, and **One at a time** for Claim, Done, and Reschedule. Batch assignment uses one saved household person for all selected chores and creates today-only occurrence ownership. Every selected chore is snapshot-checked under the shared mutation lock before the batch begins; a stale selection changes nothing and refreshes for review.
+
 ## Button controls and repeating weekday signups
 
 Each chore row has a **chore-name button**, **Claim / Done**, and **Skip**. Click the name to open instructions, checklist, estimate, responsibility, and actions. The colored day/period marker, AM/PM slot where relevant, and points appear on the name button. Taken work shows the responsible person; future rows offer Choose date for their one-time actions, while completed occurrences have disabled completion buttons. Previous and Next keep their fixed positions, and pages stay at five chores by default.

@@ -16,9 +16,9 @@ ACTION_ACK_SECONDS = 1.0
 REVIEW_OWNER_ID = 301104023405199361
 
 
-APP_VERSION = '2.8.4'
+APP_VERSION = '2.9.0'
 # Keep this to one short sentence describing changes since the previous release.
-RELEASE_SUMMARY = 'Due chores become available for household pickup while their saved owner is away.'
+RELEASE_SUMMARY = 'Run the morning chore sort from the Dashboard and process selected chores in batches.'
 UPDATE_NOTICE = f'Sprig has been updated to version {APP_VERSION}. Open /chores for fresh controls.'
 
 
